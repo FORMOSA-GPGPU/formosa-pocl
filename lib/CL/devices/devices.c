@@ -87,6 +87,10 @@
 #include "cuda/pocl-cuda.h"
 #endif
 
+#ifdef BUILD_FORMOSA
+#include "formosa/pocl-formosa.h"
+#endif
+
 #if defined(BUILD_ALMAIF)
 #include "almaif/almaif.h"
 #endif
@@ -174,6 +178,9 @@ static init_device_ops pocl_devices_init_ops[] = {
 #ifdef BUILD_CUDA
   INIT_DEV (cuda),
 #endif
+#ifdef BUILD_FORMOSA
+  INIT_DEV (formosa),
+#endif
 #ifdef BUILD_ALMAIF
   INIT_DEV (almaif),
 #endif
@@ -211,6 +218,9 @@ char pocl_device_types[POCL_NUM_DEVICE_TYPES][33] = {
 #endif
 #ifdef BUILD_CUDA
   "cuda",
+#endif
+#ifdef BUILD_FORMOSA
+  "formosa",
 #endif
 #ifdef BUILD_ALMAIF
   "almaif",

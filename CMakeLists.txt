@@ -220,6 +220,8 @@ option(ENABLE_HSA "Enable the HSA base profile runtime device driver" OFF)
 
 option(ENABLE_CUDA "Enable the CUDA device driver for NVIDIA devices" OFF)
 
+option(ENABLE_FORMOSA "Enable the Formosa device driver for the Formosa GPGPU" OFF)
+
 option(ENABLE_CUDNN "Enable the CUDNN for the CUDA device driver, requires CUDA" OFF)
 
 option(ENABLE_VULKAN "Experimental and incomplete driver that uses the Vulkan API for controlling the device. Please refer to the user manual for the status and open tasks" OFF)
@@ -1791,6 +1793,22 @@ if (ENABLE_LEVEL0)
   endif()
 
 endif()
+##########################################################
+
+if(ENABLE_FORMOSA)
+
+  set(OCL_DRIVERS "${OCL_DRIVERS} formosa")
+  set(OCL_TARGETS "${OCL_TARGETS} formosa")
+  # this is for config.h
+  # TODO unify with autotools
+  set(BUILD_FORMOSA 1)
+
+  set(FORMOSA_DEVICE_CL_VERSION_MAJOR 3)
+  set(FORMOSA_DEVICE_CL_VERSION_MINOR 0)
+  set(FORMOSA_DEVICE_CL_VERSION "300")
+  set(FORMOSA_DEVICE_CL_STD "3.0")
+
+endif()
 
 ##########################################################
 
@@ -2368,6 +2386,7 @@ MESSAGE(STATUS "ENABLE_TCEMC: ${ENABLE_TCEMC}")
 MESSAGE(STATUS "ENABLE_HSA: ${ENABLE_HSA}")
 MESSAGE(STATUS "ENABLE_ALMAIF_DEVICE: ${ENABLE_ALMAIF_DEVICE}")
 MESSAGE(STATUS "ENABLE_CUDA: ${ENABLE_CUDA}")
+MESSAGE(STATUS "ENABLE_FORMOSA: ${ENABLE_FORMOSA}")
 MESSAGE(STATUS "ENABLE_CUDNN: ${ENABLE_CUDNN}")
 MESSAGE(STATUS "ENABLE_HOST_CPU_DEVICES: ${ENABLE_HOST_CPU_DEVICES}")
 MESSAGE(STATUS "ENABLE_VULKAN: ${ENABLE_VULKAN}")

@@ -1,0 +1,12 @@
+size_t _CL_OVERLOADABLE get_group_id(uint dim) {
+    switch(dim) {
+        case 0:
+            return __builtin_riscv_fsa_global_id_x();
+        case 1:
+            return __builtin_riscv_fsa_global_id_y();
+        case 2:
+            return __builtin_riscv_fsa_global_id_z();
+        default:
+            return 1;
+    }
+}
