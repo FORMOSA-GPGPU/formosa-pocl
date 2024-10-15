@@ -26,7 +26,8 @@
 if(MSVC)
   set_source_files_properties( pocl-formosa.cc pocl-formosa.h PROPERTIES LANGUAGE CXX )
 endif(MSVC)
-add_pocl_device_library(pocl-devices-formosa pocl-formosa.cc pocl-formosa.h)
+add_pocl_device_library(pocl-devices-formosa pocl-formosa.c pocl-formosa.h)
 if(ENABLE_LOADABLE_DRIVERS)
+  # Add runtime library
   target_link_libraries(pocl-devices-formosa PRIVATE ${PTHREAD_LIBRARY})
 endif()
