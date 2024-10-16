@@ -14,7 +14,8 @@ typedef struct {
   /* Lock for command list related operations */
   pocl_lock_t cq_lock;
 
-  cl_bool available;
+  /* The number of contexts that are currently using this device */
+  size_t context_ref_count;
 } pocl_formosa_data_t;
 
 typedef struct _pocl_basic_usm_allocation_t {
@@ -25,6 +26,16 @@ typedef struct _pocl_basic_usm_allocation_t {
 
   struct _pocl_basic_usm_allocation_t *next, *prev;
 } pocl_formosa_usm_allocation_t;
+
+typedef struct {
+  int num_kernels;
+  char *kernel_names;
+} formosa_program_data_t;
+
+typedef struct {
+  size_t refcount;
+  int kernel_id;
+} formosa_kernel_data_t;
 
 void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
   ops->device_name = "formosa";
@@ -99,7 +110,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {}
 
 /**************************
  * Program                *
- * ************************/
+ **************************/
 
 char *pocl_formosa_init_build(void *data) {}
 
@@ -110,22 +121,90 @@ int pocl_formosa_free_program(cl_device_id device, cl_program program,
 
 /**************************
  * Kernel                 *
- * ************************/
+ **************************/
 
 cl_int pocl_formosa_create_kernel(cl_device_id device, cl_program program,
                                   cl_kernel kernel, unsigned program_device_i) {
+  int result = CL_SUCCESS;
+  pocl_kernel_metadata_t *meta = kernel->meta;
+  assert(meta->data != NULL);
+  // device-specific kernel metadata
+  formosa_kernel_data_t *kdata =
+      (formosa_kernel_data_t *)meta->data[program_device_i];
+  if (kdata != NULL) {
+    ++kdata->refcount;
+    return CL_SUCCESS;
+  }
+
+  do {
+    // device-specific program data
+    formosa_program_data_t *pdata =
+        (formosa_program_data_t *)program->data[program_device_i];
+    assert(pdata != NULL);
+
+    const char *current = pdata->kernel_names;
+    int i = 0;
+    int found = 0;
+    for (; i < pdata->num_kernels; ++i) {
+      if (strcmp(current, kernel->name) == 0) {
+        found = 1;
+        break;
+      }
+      current += strlen(current) + 1;
+    }
+    assert(found);
+    kdata = (void *)calloc(1, sizeof(formosa_kernel_data_t));
+    kdata->kernel_id = i;
+    ++kdata->refcount;
+
+  } while (0);
+
+  meta->data[program_device_i] = kdata;
+
+  return result;
 }
 
 cl_int pocl_formosa_free_kernel(cl_device_id device, cl_program program,
-                                cl_kernel kernel, unsigned program_device_i) {}
+                                cl_kernel kernel, unsigned program_device_i) {
+  pocl_kernel_metadata_t *meta = kernel->meta;
+  assert(meta->data != NULL);
+  formosa_kernel_data_t *kdata =
+      (formosa_kernel_data_t *)meta->data[program_device_i];
+  if (kdata == NULL) return CL_SUCCESS;
+
+  --kdata->refcount;
+  if (kdata->refcount == 0) {
+    POCL_MEM_FREE(kdata);
+    meta->data[program_device_i] = NULL;
+  }
+
+  return CL_SUCCESS;
+}
 
 /**************************
  * Context                *
- * ************************/
+ **************************/
 
-cl_int pocl_formosa_init_context(cl_device_id device, cl_context context) {}
+cl_int pocl_formosa_init_context(cl_device_id device, cl_context context) {
+  pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
+  if (NULL == dd) return CL_SUCCESS;
 
-cl_int pocl_formosa_free_context(cl_device_id device, cl_context context) {}
+  dd->context_ref_count++;
+
+  return CL_SUCCESS;
+}
+
+cl_int pocl_formosa_free_context(cl_device_id device, cl_context context) {
+  pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
+  if (NULL == dd) return CL_SUCCESS;
+
+  dd->context_ref_count--;
+  if (dd->context_ref_count == 0) {
+    pocl_formosa_uninit(0, device);
+  }
+
+  return CL_SUCCESS;
+}
 
 /**************************
  * Memory Allocation      *
