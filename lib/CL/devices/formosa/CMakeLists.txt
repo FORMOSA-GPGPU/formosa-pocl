@@ -31,3 +31,7 @@ if(ENABLE_LOADABLE_DRIVERS)
   # Add runtime library
   target_link_libraries(pocl-devices-formosa PRIVATE ${PTHREAD_LIBRARY})
 endif()
+
+execute_process(COMMAND ${CASVP_DIR}/build/bin/casvp ${CASVP_DIR}/configs/simtix/config_header_gen.lua)
+
+target_include_directories(pocl-devices-formosa PRIVATE ${CASVP_DIR}/build/include)
