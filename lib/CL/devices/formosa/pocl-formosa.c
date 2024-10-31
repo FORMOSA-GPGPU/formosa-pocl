@@ -382,7 +382,9 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
  * Program                *
  **************************/
 
-char *pocl_formosa_init_build(void *data) {}
+char *pocl_formosa_init_build(void *data) {
+  return strdup("-mcpu=formosa-gpgpu -O3 -fsa-pdom-level ");
+}
 
 int pocl_formosa_post_build_program(cl_program program, cl_uint device_i) {}
 
