@@ -2100,6 +2100,8 @@ add_subdirectory("lib")
 
 add_subdirectory("poclu")
 
+add_subdirectory("ext")
+
 # these are set in lib/cmakelists.txt
 message(STATUS "OPENCL_LIBS: ${OPENCL_LIBS}")
 message(STATUS "OPENCL_CFLAGS: ${OPENCL_CFLAGS}")

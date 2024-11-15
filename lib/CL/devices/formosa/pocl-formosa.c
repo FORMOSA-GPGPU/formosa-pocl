@@ -1,5 +1,8 @@
 #include "pocl-formosa.h"
 
+#include <libcomm/comm.h>
+#include <libcomm/msg.h>
+
 #include "casvp_config.h"
 #include "common.h"
 #include "common_driver.h"
@@ -38,7 +41,7 @@ typedef struct {
 } formosa_program_data_t;
 
 typedef struct {
-  size_t refcount;
+  size_t ref_count;
   int kernel_id;
 } formosa_kernel_data_t;
 
@@ -122,7 +125,7 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   }
 
   device->vendor = "CASLab";
-  device->long_name = "FORMOSA GPGPU";
+  device->long_name = "Formosa Open RISC-V ML-Oriented SIMT Architecture";
   device->short_name = "FORMOSA";
   device->vendor_id = 0;
   device->type = CL_DEVICE_TYPE_GPU;
@@ -209,7 +212,7 @@ cl_int pocl_formosa_create_kernel(cl_device_id device, cl_program program,
   formosa_kernel_data_t *kdata =
       (formosa_kernel_data_t *)meta->data[program_device_i];
   if (kdata != NULL) {
-    ++kdata->refcount;
+    ++kdata->ref_count;
     return CL_SUCCESS;
   }
 
@@ -232,7 +235,7 @@ cl_int pocl_formosa_create_kernel(cl_device_id device, cl_program program,
     assert(found);
     kdata = (void *)calloc(1, sizeof(formosa_kernel_data_t));
     kdata->kernel_id = i;
-    ++kdata->refcount;
+    ++kdata->ref_count;
 
   } while (0);
 
@@ -249,8 +252,8 @@ cl_int pocl_formosa_free_kernel(cl_device_id device, cl_program program,
       (formosa_kernel_data_t *)meta->data[program_device_i];
   if (kdata == NULL) return CL_SUCCESS;
 
-  --kdata->refcount;
-  if (kdata->refcount == 0) {
+  --kdata->ref_count;
+  if (kdata->ref_count == 0) {
     POCL_MEM_FREE(kdata);
     meta->data[program_device_i] = NULL;
   }
