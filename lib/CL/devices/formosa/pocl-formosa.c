@@ -103,7 +103,7 @@ unsigned int pocl_formosa_probe(struct pocl_device_ops *ops) {
 }
 
 char *pocl_formosa_build_hash(cl_device_id device) {
-  char *res = (char *)calloc(1, strlen(formosa_build_hash) + 1);
+  char *res = (char *)calloc(strlen(formosa_build_hash) + 1, sizeof(char));
   strncpy(res, formosa_build_hash, strlen(formosa_build_hash));
   return res;
 }
