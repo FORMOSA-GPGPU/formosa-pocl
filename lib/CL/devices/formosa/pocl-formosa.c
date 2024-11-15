@@ -2,6 +2,8 @@
 
 #include <libcomm/comm.h>
 #include <libcomm/msg.h>
+#include <stdlib.h>
+#include <unistd.h>
 
 #include "casvp_config.h"
 #include "common.h"
@@ -97,9 +99,16 @@ void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
 
 static cl_bool formosa_available = CL_TRUE;
 static char *formosa_build_hash = "formosa-riscv64-unknown-unknwon-elf";
+static int client_fd = -1;
 
 unsigned int pocl_formosa_probe(struct pocl_device_ops *ops) {
-  return strcmp(ops->device_name, "formosa") == 0;
+  int client_socket = client_connect(getenv("AGENT_SOCKET_PATH"));
+  if (client_socket == -1) {
+    formosa_available = CL_FALSE;
+    return 0;
+  }
+  close(client_socket);
+  return strncmp(ops->device_name, "formosa", 7) == 0;
 }
 
 char *pocl_formosa_build_hash(cl_device_id device) {
@@ -172,6 +181,14 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   device->data = dd;
   device->available = &formosa_available;
 
+  // Connect to virtual platform
+  client_fd = client_connect(getenv("AGENT_SOCKET_PATH"));
+  if (client_fd == -1) {
+    formosa_available = CL_FALSE;
+    return CL_DEVICE_NOT_FOUND;
+  }
+  formosa_available = CL_TRUE;
+
   return CL_SUCCESS;
 }
 
@@ -183,6 +200,7 @@ cl_int pocl_formosa_uninit(unsigned j, cl_device_id device) {
   POCL_DESTROY_LOCK(dd->cq_lock);
   POCL_MEM_FREE(device->data);
   device->data = NULL;
+  close(client_fd);
   return CL_SUCCESS;
 }
 

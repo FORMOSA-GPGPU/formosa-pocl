@@ -41,6 +41,12 @@ sudo cmake --build build --target install
 ```
 
 ## Examine the installation
+1. Start the casvp server
+2. Export the socket path
+```bash
+export AGENT_SOCKET_PATH=/tmp/casvp-ipc
+```
+3. Run clinfo to check if the FORMOSA device is available
 ```bash
 clinfo -l
 ```
