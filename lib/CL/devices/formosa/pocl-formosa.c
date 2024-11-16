@@ -1,4 +1,5 @@
 #include "pocl-formosa.h"
+#include "pocl-formosa-util.h"
 
 #include <libcomm/comm.h>
 #include <libcomm/msg.h>
@@ -411,7 +412,7 @@ int pocl_formosa_post_build_program(cl_program program, cl_uint device_i) {
     strcpy(fsa_program_bin, program_bc);
     strncat(fsa_program_bin, ".fsa.bin", POCL_MAX_PATHNAME_LENGTH - 1);
 
-    result = compile_vortex_program(&pdata->kernel_names, &pdata->num_kernels,
+    result = compile_formosa_program(&pdata->kernel_names, &pdata->num_kernels,
         fsa_program_bin, program->llvm_irs[device_i]);
     if (result != CL_SUCCESS)
       break;
