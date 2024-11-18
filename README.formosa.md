@@ -32,6 +32,7 @@ cmake -B build -G Ninja \
       -D ENABLE_VULKAN=OFF \
       -D ENABLE_LEVEL0=OFF \
       -D CMAKE_INSTALL_PREFIX=/usr \
+      -D ENABLE_LATEST_CXX_STD=ON \
       -D CASVP_INSTALL_DIR=${FORMOSA_CASVP}
 ```
 

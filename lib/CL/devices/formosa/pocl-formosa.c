@@ -13,6 +13,8 @@
 #include "pocl_cache.h"
 #include "pocl_llvm.h"
 #include "pocl_util.h"
+#include "pocl_llvm.h"
+#include "pocl_cache.h"
 
 void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
   ops->device_name = "formosa";
@@ -384,7 +386,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
  **************************/
 
 char *pocl_formosa_init_build(void *data) {
-  return strdup("-mcpu=formosa-gpgpu -O3 -fsa-pdom-level ");
+  return strdup("-mcpu=formosa-gpgpu -O1 -fsa-pdom-level ");
 }
 
 int pocl_formosa_post_build_program(cl_program program, cl_uint device_i) {
@@ -407,7 +409,10 @@ int pocl_formosa_post_build_program(cl_program program, cl_uint device_i) {
     char fsa_program_bin[POCL_MAX_PATHNAME_LENGTH];
 
     pocl_cache_program_bc_path(program_bc, program, device_i);
-    remove_extension(program_bc);
+
+    // remove extension name
+    char *last_dot = strrchr(program_bc, '.');
+    if(last_dot != NULL) *last_dot = '\0';
 
     strcpy(fsa_program_bin, program_bc);
     strncat(fsa_program_bin, ".fsa.bin", POCL_MAX_PATHNAME_LENGTH - 1);
@@ -429,16 +434,16 @@ int pocl_formosa_post_build_program(cl_program program, cl_uint device_i) {
 int pocl_formosa_free_program(cl_device_id device, cl_program program,
                               unsigned program_device_i) {
 
-  pocl_formosa_data_t *dd = (pocl_formosa_data_t *)dev->data;
-  pocl_formosa_program_data_t *pdata = (pocl_formosa_program_data_t *)program->data[device_i];
+  pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
+  pocl_formosa_program_data_t *pdata = (pocl_formosa_program_data_t *)program->data[program_device_i];
   if (pdata == NULL)
     return CL_SUCCESS;
 
-  pocl_driver_free_program (dev, program, device_i);
+  pocl_driver_free_program (device, program, program_device_i);
 
   POCL_MEM_FREE (pdata->kernel_names);
   POCL_MEM_FREE (pdata);
-  program->data[device_i] = NULL;
+  program->data[program_device_i] = NULL;
 
   return CL_SUCCESS;
 }

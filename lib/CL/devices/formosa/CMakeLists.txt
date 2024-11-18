@@ -32,6 +32,10 @@ endif(MSVC)
 add_pocl_device_library(pocl-devices-formosa
                         pocl-formosa.c pocl-formosa.h
                         pocl-formosa-util.cc pocl-formosa-util.h)
+
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../../../llvmopencl)
+include_directories($ENV{FORMOSA_LLVM}/include)
+
 if(ENABLE_LOADABLE_DRIVERS)
   # Add runtime library
   target_link_libraries(pocl-devices-formosa PRIVATE ${PTHREAD_LIBRARY})
