@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-#include "casvp_config.h"
+#include "casvp-config/casvp-config.h"
 #include "common.h"
 #include "common_driver.h"
 #include "pocl_llvm.h"
@@ -157,16 +157,16 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
 
   device->image_support = CL_FALSE;
 
-  size_t num_warps = CASVP_WARPS_PER_CORE;
-  size_t num_threads = CASVP_THREADS_PER_WARP;
+  size_t num_warps = CASVP_FORMOSA_WARPS_PER_CORE;
+  size_t num_threads = CASVP_FORMOSA_THREADS_PER_WARP;
   uint64_t max_work_group_size = num_warps * num_threads;
 
   device->global_mem_cache_type = CL_READ_WRITE_CACHE;
-  device->global_mem_cacheline_size = CASVP_CACHE_BLOCK_SIZE;
-  device->global_mem_cache_size = CASVP_CACHE_SIZE;
-  device->global_mem_size = CASVP_GLOBAL_MEM_SIZE;
-  device->max_mem_alloc_size = CASVP_GLOBAL_MEM_SIZE;
-  device->local_mem_size = CASVP_LOCAL_MEM_SIZE;
+  device->global_mem_cacheline_size = CASVP_FORMOSA_CACHE_BLOCK_SIZE;
+  device->global_mem_cache_size = CASVP_FORMOSA_CACHE_SIZE;
+  device->global_mem_size = CASVP_FORMOSA_GLOBAL_MEM_SIZE;
+  device->max_mem_alloc_size = CASVP_FORMOSA_GLOBAL_MEM_SIZE;
+  device->local_mem_size = CASVP_FORMOSA_LOCAL_MEM_SIZE;
   device->max_work_group_size = max_work_group_size;
   device->max_work_item_sizes[0] = max_work_group_size;
   device->max_work_item_sizes[1] = max_work_group_size;
