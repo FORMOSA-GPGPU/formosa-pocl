@@ -1,7 +1,14 @@
 #include "pocl-formosa.h"
 
+#include <libcomm/comm.h>
+#include <libcomm/msg.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+#include "casvp-config/casvp-config.h"
 #include "common.h"
 #include "common_driver.h"
+#include "pocl_llvm.h"
 #include "pocl_util.h"
 
 typedef struct {
@@ -14,7 +21,11 @@ typedef struct {
   /* Lock for command list related operations */
   pocl_lock_t cq_lock;
 
-  cl_bool available;
+  /* Lock for compile operations */
+  pocl_lock_t compile_lock;
+
+  /* The number of contexts that are currently using this device */
+  size_t context_ref_count;
 } pocl_formosa_data_t;
 
 typedef struct _pocl_basic_usm_allocation_t {
@@ -26,13 +37,22 @@ typedef struct _pocl_basic_usm_allocation_t {
   struct _pocl_basic_usm_allocation_t *next, *prev;
 } pocl_formosa_usm_allocation_t;
 
+typedef struct {
+  int num_kernels;
+  char *kernel_names;
+} formosa_program_data_t;
+
+typedef struct {
+  size_t ref_count;
+  int kernel_id;
+} formosa_kernel_data_t;
+
 void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
   ops->device_name = "formosa";
   ops->build_hash = pocl_formosa_build_hash;
   ops->probe = pocl_formosa_probe;
-  ops->uninit = pocl_formosa_uninit;
   ops->init = pocl_formosa_init;
-  ops->reinit = pocl_formosa_reinit;
+  ops->uninit = pocl_formosa_uninit;
 
   ops->init_context = pocl_formosa_init_context;
   ops->free_context = pocl_formosa_free_context;
@@ -77,29 +97,118 @@ void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
  * Probe & Initialization *
  **************************/
 
+static cl_bool formosa_available = CL_TRUE;
+static char *formosa_build_hash = "formosa-riscv64-unknown-unknwon-elf";
+static int client_fd = -1;
+
 unsigned int pocl_formosa_probe(struct pocl_device_ops *ops) {
-  return strcmp(ops->device_name, "formosa") == 0;
+  int client_socket = client_connect(getenv("AGENT_SOCKET_PATH"));
+  if (client_socket == -1) {
+    formosa_available = CL_FALSE;
+    return 0;
+  }
+  close(client_socket);
+  return strncmp(ops->device_name, "formosa", 7) == 0;
 }
 
 char *pocl_formosa_build_hash(cl_device_id device) {
-  char *res = (char *)calloc(1000, sizeof(char));
-  snprintf(res, 1000, "formosa-riscv64-unknown-unknwon-elf");
+  char *res = (char *)calloc(strlen(formosa_build_hash) + 1, sizeof(char));
+  strncpy(res, formosa_build_hash, strlen(formosa_build_hash));
   return res;
 }
 
 cl_int pocl_formosa_init(unsigned j, cl_device_id device,
-                         const char *parameters) {}
+                         const char *parameters) {
+  pocl_formosa_data_t *dd;
 
-cl_int pocl_formosa_uninit(unsigned j, cl_device_id device) {}
+  assert(device->data == NULL);
 
-cl_int pocl_formosa_reinit(unsigned j, cl_device_id device,
-                           const char *parameters) {}
+  pocl_init_default_device_infos(device, FORMOSA_DEVICE_EXTENSIONS);
+
+  SETUP_DEVICE_CL_VERSION(device, FORMOSA_DEVICE_CL_VERSION_MAJOR,
+                          FORMOSA_DEVICE_CL_VERSION_MINOR);
+
+  dd = (pocl_formosa_data_t *)calloc(1, sizeof(pocl_formosa_data_t));
+  if (dd == NULL) {
+    return CL_OUT_OF_HOST_MEMORY;
+  }
+
+  device->vendor = "CASLab";
+  device->long_name = "Formosa Open RISC-V ML-Oriented SIMT Architecture";
+  device->short_name = "FORMOSA";
+  device->vendor_id = 0;
+  device->type = CL_DEVICE_TYPE_GPU;
+
+  device->spmd = CL_TRUE;
+  device->run_workgroup_pass = CL_FALSE;
+  device->execution_capabilities = CL_EXEC_KERNEL;
+  device->autolocals_to_args = POCL_AUTOLOCALS_TO_ARGS_ALWAYS;
+  device->device_alloca_locals = CL_FALSE;
+  device->device_side_printf = 0;
+  device->has_64bit_long = CL_TRUE;
+
+  device->address_bits = 64;
+  device->llvm_target_triplet = "riscv64-unknown-unknown-elf";
+  device->llvm_abi = "lp64";
+  device->llvm_cpu = "generic-rv64";
+  device->kernellib_fallback_name = NULL;
+  device->kernellib_subdir = "formosa";
+  device->device_aux_functions = NULL;
+
+  device->image_support = CL_FALSE;
+
+  size_t num_warps = CASVP_FORMOSA_WARPS_PER_CORE;
+  size_t num_threads = CASVP_FORMOSA_THREADS_PER_WARP;
+  uint64_t max_work_group_size = num_warps * num_threads;
+
+  device->global_mem_cache_type = CL_READ_WRITE_CACHE;
+  device->global_mem_cacheline_size = CASVP_FORMOSA_CACHE_BLOCK_SIZE;
+  device->global_mem_cache_size = CASVP_FORMOSA_CACHE_SIZE;
+  device->global_mem_size = CASVP_FORMOSA_GLOBAL_MEM_SIZE;
+  device->max_mem_alloc_size = CASVP_FORMOSA_GLOBAL_MEM_SIZE;
+  device->local_mem_size = CASVP_FORMOSA_LOCAL_MEM_SIZE;
+  device->max_work_group_size = max_work_group_size;
+  device->max_work_item_sizes[0] = max_work_group_size;
+  device->max_work_item_sizes[1] = max_work_group_size;
+  device->max_work_item_sizes[2] = max_work_group_size;
+  device->max_compute_units = 1;
+
+  dd->context_ref_count = 0;
+
+  POCL_INIT_LOCK(dd->compile_lock);
+  POCL_INIT_LOCK(dd->cq_lock);
+
+  device->data = dd;
+  device->available = &formosa_available;
+
+  // Connect to virtual platform
+  client_fd = client_connect(getenv("AGENT_SOCKET_PATH"));
+  if (client_fd == -1) {
+    formosa_available = CL_FALSE;
+    return CL_DEVICE_NOT_FOUND;
+  }
+  formosa_available = CL_TRUE;
+
+  return CL_SUCCESS;
+}
+
+cl_int pocl_formosa_uninit(unsigned j, cl_device_id device) {
+  pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
+  if (dd == NULL) return CL_SUCCESS;
+
+  POCL_DESTROY_LOCK(dd->compile_lock);
+  POCL_DESTROY_LOCK(dd->cq_lock);
+  POCL_MEM_FREE(device->data);
+  device->data = NULL;
+  close(client_fd);
+  return CL_SUCCESS;
+}
 
 void pocl_formosa_run(void *data, _cl_command_node *cmd) {}
 
 /**************************
  * Program                *
- * ************************/
+ **************************/
 
 char *pocl_formosa_init_build(void *data) {}
 
@@ -110,22 +219,90 @@ int pocl_formosa_free_program(cl_device_id device, cl_program program,
 
 /**************************
  * Kernel                 *
- * ************************/
+ **************************/
 
 cl_int pocl_formosa_create_kernel(cl_device_id device, cl_program program,
                                   cl_kernel kernel, unsigned program_device_i) {
+  int result = CL_SUCCESS;
+  pocl_kernel_metadata_t *meta = kernel->meta;
+  assert(meta->data != NULL);
+  // device-specific kernel metadata
+  formosa_kernel_data_t *kdata =
+      (formosa_kernel_data_t *)meta->data[program_device_i];
+  if (kdata != NULL) {
+    ++kdata->ref_count;
+    return CL_SUCCESS;
+  }
+
+  do {
+    // device-specific program data
+    formosa_program_data_t *pdata =
+        (formosa_program_data_t *)program->data[program_device_i];
+    assert(pdata != NULL);
+
+    const char *current = pdata->kernel_names;
+    int i = 0;
+    int found = 0;
+    for (; i < pdata->num_kernels; ++i) {
+      if (strcmp(current, kernel->name) == 0) {
+        found = 1;
+        break;
+      }
+      current += strlen(current) + 1;
+    }
+    assert(found);
+    kdata = (void *)calloc(1, sizeof(formosa_kernel_data_t));
+    kdata->kernel_id = i;
+    ++kdata->ref_count;
+
+  } while (0);
+
+  meta->data[program_device_i] = kdata;
+
+  return result;
 }
 
 cl_int pocl_formosa_free_kernel(cl_device_id device, cl_program program,
-                                cl_kernel kernel, unsigned program_device_i) {}
+                                cl_kernel kernel, unsigned program_device_i) {
+  pocl_kernel_metadata_t *meta = kernel->meta;
+  assert(meta->data != NULL);
+  formosa_kernel_data_t *kdata =
+      (formosa_kernel_data_t *)meta->data[program_device_i];
+  if (kdata == NULL) return CL_SUCCESS;
+
+  --kdata->ref_count;
+  if (kdata->ref_count == 0) {
+    POCL_MEM_FREE(kdata);
+    meta->data[program_device_i] = NULL;
+  }
+
+  return CL_SUCCESS;
+}
 
 /**************************
  * Context                *
- * ************************/
+ **************************/
 
-cl_int pocl_formosa_init_context(cl_device_id device, cl_context context) {}
+cl_int pocl_formosa_init_context(cl_device_id device, cl_context context) {
+  pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
+  if (NULL == dd) return CL_SUCCESS;
 
-cl_int pocl_formosa_free_context(cl_device_id device, cl_context context) {}
+  dd->context_ref_count++;
+
+  return CL_SUCCESS;
+}
+
+cl_int pocl_formosa_free_context(cl_device_id device, cl_context context) {
+  pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
+  if (NULL == dd) return CL_SUCCESS;
+
+  dd->context_ref_count--;
+  if (dd->context_ref_count == 0) {
+    pocl_formosa_uninit(0, device);
+  }
+
+  return CL_SUCCESS;
+}
 
 /**************************
  * Memory Allocation      *
@@ -146,7 +323,6 @@ static void formosa_command_scheduler(pocl_formosa_data_t *d) {
   /* execute commands from ready list */
   while ((node = d->ready_list)) {
     assert(pocl_command_is_ready(node->sync.event.event));
-    assert(node->sync.event.event->status == CL_SUBMITTED);
     CDL_DELETE(d->ready_list, node);
     POCL_UNLOCK(d->cq_lock);
     pocl_exec_command(node);
@@ -155,7 +331,7 @@ static void formosa_command_scheduler(pocl_formosa_data_t *d) {
 }
 
 void pocl_formosa_submit(_cl_command_node *node, cl_command_queue cq) {
-  pocl_formosa_data_t *d = node->device->data;
+  pocl_formosa_data_t *dd = node->device->data;
 
   if (node != NULL && node->type == CL_COMMAND_NDRANGE_KERNEL) {
     cl_kernel kernel = node->command.run.kernel;
@@ -167,33 +343,33 @@ void pocl_formosa_submit(_cl_command_node *node, cl_command_queue cq) {
   }
 
   node->ready = 1;
-  POCL_LOCK(d->cq_lock);
-  pocl_command_push(node, &d->ready_list, &d->command_list);
+  POCL_LOCK(dd->cq_lock);
+  pocl_command_push(node, &dd->ready_list, &dd->command_list);
 
   POCL_UNLOCK_OBJ(node->sync.event.event);
-  formosa_command_scheduler(d);
-  POCL_UNLOCK(d->cq_lock);
+  formosa_command_scheduler(dd);
+  POCL_UNLOCK(dd->cq_lock);
 }
 
 void pocl_formosa_join(cl_device_id device, cl_command_queue cq) {
-  pocl_formosa_data_t *d = (pocl_formosa_data_t *)device->data;
+  pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
 
-  POCL_LOCK(d->cq_lock);
-  formosa_command_scheduler(d);
-  POCL_UNLOCK(d->cq_lock);
+  POCL_LOCK(dd->cq_lock);
+  formosa_command_scheduler(dd);
+  POCL_UNLOCK(dd->cq_lock);
 }
 
 void pocl_formosa_flush(cl_device_id device, cl_command_queue cq) {
-  pocl_formosa_data_t *d = (pocl_formosa_data_t *)device->data;
+  pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
 
-  POCL_LOCK(d->cq_lock);
-  formosa_command_scheduler(d);
-  POCL_UNLOCK(d->cq_lock);
+  POCL_LOCK(dd->cq_lock);
+  formosa_command_scheduler(dd);
+  POCL_UNLOCK(dd->cq_lock);
 }
 
 void pocl_formosa_notify(cl_device_id device, cl_event event,
                          cl_event finished) {
-  pocl_formosa_data_t *d = (pocl_formosa_data_t *)device->data;
+  pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
   _cl_command_node *volatile node = event->command;
 
   if (finished->status < CL_COMPLETE) {
@@ -206,13 +382,13 @@ void pocl_formosa_notify(cl_device_id device, cl_event event,
   if (pocl_command_is_ready(event)) {
     if (event->status == CL_QUEUED) {
       pocl_update_event_submitted(event);
-      POCL_LOCK(d->cq_lock);
-      CDL_DELETE(d->command_list, node);
-      CDL_PREPEND(d->ready_list, node);
+      POCL_LOCK(dd->cq_lock);
+      CDL_DELETE(dd->command_list, node);
+      CDL_PREPEND(dd->ready_list, node);
       POCL_UNLOCK_OBJ(event);
-      formosa_command_scheduler(d);
+      formosa_command_scheduler(dd);
       POCL_LOCK_OBJ(event);
-      POCL_UNLOCK(d->cq_lock);
+      POCL_UNLOCK(dd->cq_lock);
     }
   }
 }

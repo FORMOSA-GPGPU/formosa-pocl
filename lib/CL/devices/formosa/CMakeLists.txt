@@ -31,3 +31,7 @@ if(ENABLE_LOADABLE_DRIVERS)
   # Add runtime library
   target_link_libraries(pocl-devices-formosa PRIVATE ${PTHREAD_LIBRARY})
 endif()
+
+target_include_directories(pocl-devices-formosa PRIVATE ${CASVP_DIR}/build/include)
+
+target_link_libraries(pocl-devices-formosa PRIVATE comm)

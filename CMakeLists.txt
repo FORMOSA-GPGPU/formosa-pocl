@@ -1803,10 +1803,11 @@ if(ENABLE_FORMOSA)
   # TODO unify with autotools
   set(BUILD_FORMOSA 1)
 
-  set(FORMOSA_DEVICE_CL_VERSION_MAJOR 3)
-  set(FORMOSA_DEVICE_CL_VERSION_MINOR 0)
-  set(FORMOSA_DEVICE_CL_VERSION "300")
-  set(FORMOSA_DEVICE_CL_STD "3.0")
+  set(FORMOSA_DEVICE_EXTENSIONS "")
+  set(FORMOSA_DEVICE_CL_VERSION_MAJOR 1)
+  set(FORMOSA_DEVICE_CL_VERSION_MINOR 2)
+  set(FORMOSA_DEVICE_CL_VERSION "120")
+  set(FORMOSA_DEVICE_CL_STD "1.2")
 
 endif()
 
@@ -2098,6 +2099,8 @@ add_subdirectory("include")
 add_subdirectory("lib")
 
 add_subdirectory("poclu")
+
+add_subdirectory("ext")
 
 # these are set in lib/cmakelists.txt
 message(STATUS "OPENCL_LIBS: ${OPENCL_LIBS}")
