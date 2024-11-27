@@ -8,44 +8,9 @@
 #include "casvp-config/casvp-config.h"
 #include "common.h"
 #include "common_driver.h"
+#include "pocl_cache.h"
 #include "pocl_llvm.h"
 #include "pocl_util.h"
-
-typedef struct {
-  /* List of commands ready to be executed */
-  _cl_command_node *ready_list;
-
-  /* List of commands not yet ready to be executed */
-  _cl_command_node *command_list;
-
-  /* Lock for command list related operations */
-  pocl_lock_t cq_lock;
-
-  /* Lock for compile operations */
-  pocl_lock_t compile_lock;
-
-  /* The number of contexts that are currently using this device */
-  size_t context_ref_count;
-} pocl_formosa_data_t;
-
-typedef struct _pocl_basic_usm_allocation_t {
-  void *ptr;
-  size_t size;
-  cl_mem_alloc_flags_intel flags;
-  unsigned alloc_type;
-
-  struct _pocl_basic_usm_allocation_t *next, *prev;
-} pocl_formosa_usm_allocation_t;
-
-typedef struct {
-  int num_kernels;
-  char *kernel_names;
-} formosa_program_data_t;
-
-typedef struct {
-  size_t ref_count;
-  int kernel_id;
-} formosa_kernel_data_t;
 
 void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
   ops->device_name = "formosa";
@@ -87,7 +52,7 @@ void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
 
   ops->read = pocl_formosa_read;
   ops->write = pocl_formosa_write;
-  ops->copy = pocl_formosa_copy;
+  ops->copy = pocl_driver_copy;
 
   ops->get_mapping_ptr = pocl_driver_get_mapping_ptr;
   ops->free_mapping_ptr = pocl_driver_free_mapping_ptr;
@@ -99,7 +64,6 @@ void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
 
 static cl_bool formosa_available = CL_TRUE;
 static char *formosa_build_hash = "formosa-riscv64-unknown-unknwon-elf";
-static int client_fd = -1;
 
 unsigned int pocl_formosa_probe(struct pocl_device_ops *ops) {
   int client_socket = client_connect(getenv("AGENT_SOCKET_PATH"));
@@ -182,11 +146,12 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   device->available = &formosa_available;
 
   // Connect to virtual platform
-  client_fd = client_connect(getenv("AGENT_SOCKET_PATH"));
-  if (client_fd == -1) {
+  dd->client_fd = client_connect(getenv("AGENT_SOCKET_PATH"));
+  if (dd->client_fd == -1) {
     formosa_available = CL_FALSE;
     return CL_DEVICE_NOT_FOUND;
   }
+  dd->kernel_buffer = NULL;
   formosa_available = CL_TRUE;
 
   return CL_SUCCESS;
@@ -198,13 +163,298 @@ cl_int pocl_formosa_uninit(unsigned j, cl_device_id device) {
 
   POCL_DESTROY_LOCK(dd->compile_lock);
   POCL_DESTROY_LOCK(dd->cq_lock);
+  if (dd->client_fd != -1) {
+    close(dd->client_fd);
+  }
+  if (dd->kernel_buffer != NULL) {
+    free(dd->kernel_buffer);
+  }
   POCL_MEM_FREE(device->data);
   device->data = NULL;
-  close(client_fd);
   return CL_SUCCESS;
 }
 
-void pocl_formosa_run(void *data, _cl_command_node *cmd) {}
+int check_occupancy(uint32_t group_size, uint32_t *max_local_mem) {
+  // check group size
+  uint64_t warps_per_core, threads_per_warp;
+  uint32_t threads_per_core = warps_per_core * threads_per_warp;
+  if (group_size > threads_per_core) {
+    printf(
+        "Error: cannot schedule kernel with group_size > threads_per_core "
+        "(%d,%d)\n",
+        group_size, threads_per_core);
+    return -1;
+  }
+
+  // calculate groups occupancy
+  int warps_per_group = (group_size + threads_per_warp - 1) / threads_per_warp;
+  int groups_per_core = warps_per_core / warps_per_group;
+
+  // check local memory capacity
+  if (max_local_mem) {
+    uint64_t local_mem_size;
+    *max_local_mem = local_mem_size / groups_per_core;
+  }
+
+  return 0;
+}
+
+int fsa_copy_to_dev(formosa_buffer_data_t *buffer_data, const void *host_ptr,
+                    uint64_t dst_offset, size_t size) {
+  if (buffer_data == NULL || host_ptr == NULL) return -1;
+  if ((dst_offset + size) > buffer_data->buf_size) return -1;
+  msg_t *msg =
+      msg_create(0, WRITE, size, buffer_data->buf_address + dst_offset);
+  if (msg == NULL) return -1;
+  msg->payload = (uint8_t *)host_ptr;
+  int status = ipc_send_write_msg(buffer_data->client_fd, msg);
+  msg_destroy(msg);
+  return status;
+}
+
+int fsa_copy_from_dev(formosa_buffer_data_t *buffer_data, void *host_ptr,
+                      uint64_t src_offset, size_t size) {
+  if (buffer_data == NULL || host_ptr == NULL) return -1;
+  if ((src_offset + size) > buffer_data->buf_size) return -1;
+  msg_t *msg = msg_create(0, READ, size, buffer_data->buf_address + src_offset);
+  if (msg == NULL) return -1;
+  msg->payload = (uint8_t *)host_ptr;
+  int status = ipc_send_read_msg(buffer_data->client_fd, msg);
+  msg_destroy(msg);
+  return status;
+}
+
+// TODO: implement this function
+int fsa_upload_kernel_bytes(const void *data, uint64_t size,
+                            formosa_buffer_data_t *buffer_data) {
+  if (data == NULL || size == 0) return -1;
+  // TODO: memory allocation on device
+  int status = fsa_copy_to_dev(buffer_data, data, 0, size);
+}
+
+// TODO: implement this function
+int fsa_upload_kernel_file(const char *filename,
+                           formosa_buffer_data_t *buffer_data) {}
+
+// TODO: implement this function
+int fsa_ready_wait(pocl_formosa_data_t *dd) {}
+
+int fsa_write_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t value) {
+  if (dd == NULL) return -1;
+  msg_t *msg = msg_create(0, WRITE, 8, addr);
+  if (msg == NULL) return -1;
+  msg->payload = (uint8_t *)&value;
+  int status = ipc_send_write_msg(dd->client_fd, msg);
+  msg_destroy(msg);
+  return status;
+}
+
+int fsa_read_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t *value) {
+  if (dd == NULL) return -1;
+  msg_t *msg = msg_create(0, READ, 8, addr);
+  if (msg == NULL) return -1;
+  msg->payload = (uint8_t *)value;
+  int status = ipc_send_read_msg(dd->client_fd, msg);
+  msg_destroy(msg);
+  return status;
+}
+
+void pocl_formosa_run(void *data, _cl_command_node *cmd) {
+  pocl_formosa_data_t *dd;
+  struct pocl_argument *al;
+  cl_uint device_i = cmd->program_device_i;
+  cl_kernel kernel = cmd->command.run.kernel;
+  cl_program program = kernel->program;
+  pocl_kernel_metadata_t *meta = kernel->meta;
+  formosa_program_data_t *pdata =
+      (formosa_program_data_t *)program->data[device_i];
+  formosa_kernel_data_t *kdata = (formosa_kernel_data_t *)meta->data[device_i];
+  struct pocl_context *pc = &cmd->command.run.pc;
+  int err;
+
+  uint32_t num_groups = 1;
+  uint32_t group_size = 1;
+  for (uint32_t i = 0; i < pc->work_dim; ++i) {
+    num_groups *= pc->num_groups[i];
+    group_size *= pc->local_size[i];
+  }
+  if (num_groups == 0 || group_size == 0) return;
+
+  assert(data != NULL);
+  dd = (pocl_formosa_data_t *)data;
+
+  uint32_t ptr_size = 8;
+
+  uint32_t aligned_kernel_args_size =
+      align_offset(sizeof(kernel_args_t), ptr_size);
+
+  // calculate kernel arguments buffer size
+  uint32_t local_mem_size = 0;
+  size_t abuf_size = 0;
+
+  for (int i = 0; i < meta->num_args; ++i) {
+    struct pocl_argument *al = &(cmd->command.run.arguments[i]);
+    if (ARG_IS_LOCAL(meta->arg_info[i])) {
+      local_mem_size += al->size;
+      abuf_size = align_offset(abuf_size + 4, ptr_size);
+    } else if ((meta->arg_info[i].type == POCL_ARG_TYPE_POINTER) ||
+               (meta->arg_info[i].type == POCL_ARG_TYPE_IMAGE) ||
+               (meta->arg_info[i].type == POCL_ARG_TYPE_SAMPLER)) {
+      abuf_size = align_offset(abuf_size + ptr_size, ptr_size);
+    } else {
+      // scalar argument
+      abuf_size = align_offset(abuf_size + al->size, ptr_size);
+    }
+  }
+
+  // local buffers
+  for (int i = 0; i < meta->num_locals; ++i) {
+    local_mem_size += meta->local_sizes[i];
+    abuf_size = align_offset(abuf_size + 4, ptr_size);
+  }
+
+  // add local size
+  if (local_mem_size != 0) {
+    abuf_size = align_offset(abuf_size + 4, ptr_size);
+  }
+
+  // check occupancy
+  if (group_size != 1) {
+    uint32_t available_local_mem;
+    err = check_occupancy(group_size, &available_local_mem);
+    if (err != 0) {
+      POCL_ABORT("POCL_FORMOSA_RUN\n");
+    }
+    if (local_mem_size > available_local_mem) {
+      POCL_ABORT("out of local memory: needed=%d bytes, available=%d bytes\n",
+                 local_mem_size, available_local_mem);
+    }
+  }
+
+  // allocate arguments host buffer
+  size_t kargs_buffer_size = aligned_kernel_args_size + abuf_size;
+  uint8_t *const host_kargs_base_ptr = malloc(kargs_buffer_size);
+  assert(host_kargs_base_ptr);
+
+  // allocate kernel arguments buffer
+  formosa_buffer_data_t fsa_kargs_buffer;
+  fsa_kargs_buffer.client_fd = dd->client_fd;
+  // TODO: memory allocation on device
+  if (err != 0) {
+    POCL_ABORT("POCL_FORMOSA_RUN\n");
+  }
+
+  // write context data
+  kernel_args_t *const kargs = (kernel_args_t *)host_kargs_base_ptr;
+  kargs->work_dim = pc->work_dim;
+  for (int i = 0; i < 3; ++i) {
+    kargs->local_size[i] = pc->local_size[i];
+    kargs->num_groups[i] = pc->num_groups[i];
+  }
+  kargs->kernel_id = kdata->kernel_id;
+
+  // write arguments
+  uint8_t *const host_args_ptr = host_kargs_base_ptr + aligned_kernel_args_size;
+  uint32_t host_args_offset = 0;
+  uint32_t local_mem_offset = 0;
+
+  for (int i = 0; i < meta->num_args; ++i) {
+    struct pocl_argument *al = &(cmd->command.run.arguments[i]);
+    if (ARG_IS_LOCAL(meta->arg_info[i])) {
+      if (local_mem_offset == 0) {
+        memcpy(host_args_ptr + host_args_offset, &local_mem_size,
+               4);  // local_size
+        host_args_offset = align_offset(host_args_offset + 4, ptr_size);
+      }
+      memcpy(host_args_ptr + host_args_offset, &local_mem_offset,
+             4);  // arg offset
+      host_args_offset = align_offset(host_args_offset + 4, ptr_size);
+      local_mem_offset += al->size;
+    } else if (meta->arg_info[i].type == POCL_ARG_TYPE_POINTER) {
+      if (al->value == NULL) {
+        memset(host_args_ptr + host_args_offset, 0,
+               ptr_size);  // NULL pointer value
+        host_args_offset = align_offset(host_args_offset + ptr_size, ptr_size);
+      } else {
+        cl_mem m = (*(cl_mem *)(al->value));
+        formosa_buffer_data_t *buf_data =
+            (formosa_buffer_data_t *)m->device_ptrs[cmd->device->global_mem_id]
+                .mem_ptr;
+        uint64_t dev_mem_addr = buf_data->buf_address + al->offset;
+        memcpy(host_args_ptr + host_args_offset, &buf_data->buf_address,
+               ptr_size);  // pointer value
+        host_args_offset = align_offset(host_args_offset + ptr_size, ptr_size);
+      }
+    } else if (meta->arg_info[i].type == POCL_ARG_TYPE_IMAGE) {
+      POCL_ABORT("POCL_FORMOSA_RUN\n");
+    } else if (meta->arg_info[i].type == POCL_ARG_TYPE_SAMPLER) {
+      POCL_ABORT("POCL_FORMOSA_RUN\n");
+    } else {
+      // scalar argument
+      memcpy(host_args_ptr + host_args_offset, al->value,
+             al->size);  // scalar value
+      host_args_offset = align_offset(host_args_offset + al->size, ptr_size);
+    }
+  }
+
+  // write local arguments
+  for (int i = 0; i < meta->num_locals; ++i) {
+    if (local_mem_offset == 0) {
+      memcpy(host_args_ptr + host_args_offset, &local_mem_size,
+             4);  // local_size
+      host_args_offset = align_offset(host_args_offset + 4, ptr_size);
+    }
+    memcpy(host_args_ptr + host_args_offset, &local_mem_offset,
+           4);  // arg offset
+    host_args_offset = align_offset(host_args_offset + 4, ptr_size);
+    local_mem_offset += meta->local_sizes[i];
+  }
+
+  // upload kernel arguments buffer
+  err = fsa_copy_to_dev(&fsa_kargs_buffer, host_kargs_base_ptr, 0,
+                        kargs_buffer_size);
+  if (err != 0) {
+    POCL_ABORT("POCL_FORMOSA_RUN\n");
+  }
+
+  // release argument host buffer
+  free(host_kargs_base_ptr);
+
+  // upload kernel to device
+  if (dd->kernel_buffer == NULL) {
+    char sz_program_bc[POCL_MAX_PATHNAME_LENGTH];
+    char sz_program_fsabin[POCL_MAX_PATHNAME_LENGTH];
+
+    pocl_cache_program_bc_path(sz_program_bc, program, device_i);
+    char *last_dot = strrchr(sz_program_bc, '.');
+    if (last_dot != NULL) {
+      *last_dot = '\0';
+    }
+
+    strcpy(sz_program_fsabin, sz_program_bc);
+    strncat(sz_program_fsabin, ".fsabin", POCL_MAX_PATHNAME_LENGTH - 1);
+
+    err = fsa_upload_kernel_file(sz_program_fsabin, dd->kernel_buffer);
+    if (err != 0) {
+      POCL_ABORT("POCL_FORMOSA_RUN\n");
+    }
+  }
+
+  // launch kernel execution
+  // err = fsa_write_csr(dd, CASVP_FORMOSA_CSR_START, 1);
+  if (err != 0) {
+    POCL_ABORT("POCL_FORMOSA_RUN\n");
+  }
+
+  // wait for the execution to complete
+  err = fsa_ready_wait(dd);
+  if (err != 0) {
+    POCL_ABORT("POCL_FORMOSA_RUN\n");
+  }
+
+  // release arguments device buffer
+  // TODO: memory deallocation on device
+}
 
 /**************************
  * Program                *
@@ -399,13 +649,22 @@ void pocl_formosa_notify(cl_device_id device, cl_event event,
 
 void pocl_formosa_read(void *data, void *__restrict__ host_ptr,
                        pocl_mem_identifier *src_mem_id, cl_mem src_buf,
-                       size_t offset, size_t size) {}
+                       size_t offset, size_t size) {
+  formosa_buffer_data_t *buffer_data =
+      (formosa_buffer_data_t *)src_mem_id->mem_ptr;
+  int status = fsa_copy_from_dev(buffer_data, host_ptr, offset, size);
+  if (status != 0) {
+    POCL_ABORT("POCL_FORMOSA_READ\n");
+  }
+}
 
 void pocl_formosa_write(void *data, const void *__restrict__ host_ptr,
                         pocl_mem_identifier *dst_mem_id, cl_mem dst_buf,
-                        size_t offset, size_t size) {}
-
-void pocl_formosa_copy(void *data, pocl_mem_identifier *dst_mem_id,
-                       cl_mem dst_buf, pocl_mem_identifier *src_mem_id,
-                       cl_mem src_buf, size_t dst_offset, size_t src_offset,
-                       size_t size) {}
+                        size_t offset, size_t size) {
+  formosa_buffer_data_t *buffer_data =
+      (formosa_buffer_data_t *)dst_mem_id->mem_ptr;
+  int status = fsa_copy_to_dev(buffer_data, host_ptr, offset, size);
+  if (status != 0) {
+    POCL_ABORT("POCL_FORMOSA_WRITE\n");
+  }
+}

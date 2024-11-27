@@ -31,7 +31,7 @@ cmake -B build -G Ninja \
       -D ENABLE_HSA=OFF \
       -D ENABLE_VULKAN=OFF \
       -D ENABLE_LEVEL0=OFF \
-      -D CMAKE_INSTALL_PREFIX=/opt/formosa-pocl \
+      -D CMAKE_INSTALL_PREFIX=/usr \
       -D CASVP_INSTALL_DIR=${FORMOSA_CASVP}
 ```
 
