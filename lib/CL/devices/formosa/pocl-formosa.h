@@ -21,13 +21,6 @@ typedef struct {
 } formosa_buffer_data_t;
 
 typedef struct {
-  uint32_t kernel_id;
-  uint32_t work_dim;
-  uint32_t local_size[3];
-  uint32_t num_groups[3];
-} kernel_args_t;
-
-typedef struct {
   /* List of commands ready to be executed */
   _cl_command_node *ready_list;
 
@@ -73,17 +66,24 @@ int fsa_copy_to_dev(formosa_buffer_data_t *buffer_data, const void *host_ptr,
 int fsa_copy_from_dev(formosa_buffer_data_t *buffer_data, void *host_ptr,
                       uint64_t src_offset, size_t size);
 
+int fsa_upload_kernel_file(const char *filename,
+                           formosa_buffer_data_t *buffer_data);
+
 int fsa_write_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t value);
 
 int fsa_read_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t *value);
 
-int fsa_upload_kernel_file(const char *filename,
-                           formosa_buffer_data_t *buffer_data);
+int fsa_wait_ack(pocl_formosa_data_t *dd);
 
-int fsa_upload_kernel_bytes(const void *data, uint64_t size,
-                            formosa_buffer_data_t *buffer_data);
-
-int fsa_ready_wait(pocl_formosa_data_t *dd);
+#define FSA_WRITE_GROUPED_CSR(dd, addr, value)             \
+  do {                                                     \
+    int err = fsa_write_csr((dd), (addr##_X), (value[0])); \
+    err |= fsa_write_csr((dd), (addr##_Y), (value[1]));    \
+    err |= fsa_write_csr((dd), (addr##_Z), (value[2]));    \
+    if (err == -1) {                                       \
+      POCL_ABORT("FSA_WRITE_GROUPED_CSR");                 \
+    }                                                      \
+  } while (0);
 
 GEN_PROTOTYPES(formosa)
 
