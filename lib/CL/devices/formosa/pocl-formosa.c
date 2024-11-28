@@ -240,22 +240,32 @@ int fsa_upload_kernel_file(const char *filename, pocl_formosa_data_t *dd) {
   fread(data, 1, size, fp);
   fclose(fp);
 
-  // TODO: memory allocation on device
-
+  int status = 0;
   dd->kernel_buffer =
       (formosa_buffer_data_t *)malloc(sizeof(formosa_buffer_data_t));
   if (dd->kernel_buffer == NULL) {
-    free(data);
-    return -1;
+    status = -1;
+    goto UPLOAD_KERNEL_FILE_ERROR;
   }
+
+  uint64_t addr;
+  status = fsaMalloc((void *)&addr, size);
+  if (status != 0) {
+    goto UPLOAD_KERNEL_FILE_ERROR;
+  }
+
   dd->kernel_buffer->client_fd = dd->client_fd;
   dd->kernel_buffer->buf_size = size;
-  // TODO: set buffer address
+  dd->kernel_buffer->buf_address = addr;
 
-  int status = fsa_copy_to_dev(dd->kernel_buffer, data, 0, size);
+  status = fsa_copy_to_dev(dd->kernel_buffer, data, 0, size);
+  if (status != 0) {
+    fsaFree((void *)dd->kernel_buffer->buf_address);
+  UPLOAD_KERNEL_FILE_ERROR:
+    free(dd->kernel_buffer);
+    dd->kernel_buffer = NULL;
+  }
   free(data);
-  free(dd->kernel_buffer);
-  dd->kernel_buffer = NULL;
   return status;
 }
 
@@ -367,11 +377,14 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
 
   // allocate kernel arguments buffer
   formosa_buffer_data_t fsa_kargs_buffer;
-  fsa_kargs_buffer.client_fd = dd->client_fd;
-  // TODO: memory allocation on device
+  uintptr_t addr;
+  err = fsaMalloc((void *)&addr, kargs_buffer_size);
   if (err != 0) {
     POCL_ABORT("POCL_FORMOSA_RUN\n");
   }
+  fsa_kargs_buffer.buf_address = addr;
+  fsa_kargs_buffer.buf_size = kargs_buffer_size;
+  fsa_kargs_buffer.client_fd = dd->client_fd;
 
   // write context data
   fsa_write_csr(dd, CASVP_FORMOSA_CSR_DIM, pc->work_dim);
@@ -478,7 +491,17 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   }
 
   // release arguments device buffer
-  // TODO: memory deallocation on device
+  err = fsaFree((void *)fsa_kargs_buffer.buf_address);
+  if (err != 0) {
+    POCL_ABORT("POCL_FORMOSA_RUN\n");
+  }
+
+  // release kernel buffer
+  err = fsaFree((void *)dd->kernel_buffer->buf_address);
+  dd->kernel_buffer = NULL;
+  if (err != 0) {
+    POCL_ABORT("POCL_FORMOSA_RUN\n");
+  }
 }
 
 /**************************
