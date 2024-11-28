@@ -8,6 +8,7 @@
 #include "casvp-config/casvp-config.h"
 #include "common.h"
 #include "common_driver.h"
+#include "falloc/fsa_mem_allocator.h"
 #include "pocl_cache.h"
 #include "pocl_llvm.h"
 #include "pocl_util.h"
@@ -241,7 +242,8 @@ int fsa_upload_kernel_file(const char *filename, pocl_formosa_data_t *dd) {
 
   // TODO: memory allocation on device
 
-  dd->kernel_buffer = (formosa_buffer_data_t *)malloc(sizeof(formosa_buffer_data_t));
+  dd->kernel_buffer =
+      (formosa_buffer_data_t *)malloc(sizeof(formosa_buffer_data_t));
   if (dd->kernel_buffer == NULL) {
     free(data);
     return -1;
@@ -249,7 +251,7 @@ int fsa_upload_kernel_file(const char *filename, pocl_formosa_data_t *dd) {
   dd->kernel_buffer->client_fd = dd->client_fd;
   dd->kernel_buffer->buf_size = size;
   // TODO: set buffer address
-  
+
   int status = fsa_copy_to_dev(dd->kernel_buffer, data, 0, size);
   free(data);
   free(dd->kernel_buffer);
@@ -582,9 +584,47 @@ cl_int pocl_formosa_free_context(cl_device_id device, cl_context context) {
  **************************/
 
 cl_int pocl_formosa_alloc_mem_obj(cl_device_id device, cl_mem mem_obj,
-                                  void *host_ptr) {}
+                                  void *host_ptr) {
+  pocl_mem_identifier *p = &mem_obj->device_ptrs[device->global_mem_id];
 
-void pocl_formosa_free(cl_device_id device, cl_mem mem_obj) {}
+  cl_mem_flags flags = mem_obj->flags;
+
+  uintptr_t addr;
+  int err = fsaMalloc((void *)&addr, mem_obj->size);
+  if (err) {
+    return CL_MEM_OBJECT_ALLOCATION_FAILURE;
+  }
+
+  formosa_buffer_data_t *temp = NULL;
+  if (host_ptr && (flags & CL_MEM_COPY_HOST_PTR)) {
+    temp = malloc(sizeof(formosa_buffer_data_t));
+    temp->buf_address = addr;
+    temp->buf_size = mem_obj->size;
+    pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
+    temp->client_fd = dd->client_fd;
+    fsa_copy_to_dev(temp, host_ptr, 0, mem_obj->size);
+  }
+  if (!temp) {
+    POCL_ABORT("FORMOSA: Memory flag not supported");
+  }
+  p->mem_ptr = temp;
+  return CL_SUCCESS;
+}
+
+void pocl_formosa_free(cl_device_id device, cl_mem mem_obj) {
+  pocl_mem_identifier *p = &mem_obj->device_ptrs[device->global_mem_id];
+  cl_mem_flags flags = mem_obj->flags;
+  formosa_buffer_data_t *fb = (formosa_buffer_data_t *)p->mem_ptr;
+  if (fb) {
+    POCL_ABORT("FORMOSA: Memory flag not supported");
+  }
+  if (flags & CL_MEM_ALLOC_HOST_PTR) {
+    pocl_release_mem_host_ptr(mem_obj);
+  }
+  fsaFree((void *)fb->buf_address);
+  free(fb);
+  p->mem_ptr = NULL;
+}
 
 /**************************
  * Event Handling         *
