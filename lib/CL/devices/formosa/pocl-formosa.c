@@ -303,7 +303,8 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   assert(data != NULL);
   dd = (pocl_formosa_data_t *)data;
 
-  uint32_t ptr_size = 8;
+  const uint32_t ptr_size = 8;
+  const uint32_t word_size = 8;
 
   // calculate kernel arguments buffer size
   uint32_t local_mem_size = 0;   // total local memory size
@@ -313,26 +314,26 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     struct pocl_argument *al = &(cmd->command.run.arguments[i]);
     if (ARG_IS_LOCAL(meta->arg_info[i])) {
       local_mem_size += al->size;
-      kargs_buffer_size = align_offset(kargs_buffer_size + 4, ptr_size);
+      kargs_buffer_size += word_size;
     } else if ((meta->arg_info[i].type == POCL_ARG_TYPE_POINTER) ||
                (meta->arg_info[i].type == POCL_ARG_TYPE_IMAGE) ||
                (meta->arg_info[i].type == POCL_ARG_TYPE_SAMPLER)) {
-      kargs_buffer_size = align_offset(kargs_buffer_size + ptr_size, ptr_size);
+      kargs_buffer_size += ptr_size;
     } else {
       // scalar argument
-      kargs_buffer_size = align_offset(kargs_buffer_size + al->size, ptr_size);
+      kargs_buffer_size += al->size;
     }
   }
 
   // local buffers
   for (int i = 0; i < meta->num_locals; ++i) {
     local_mem_size += meta->local_sizes[i];
-    kargs_buffer_size = align_offset(kargs_buffer_size + 4, ptr_size);
+    kargs_buffer_size += word_size;
   }
 
   // add local size
   if (local_mem_size != 0) {
-    kargs_buffer_size = align_offset(kargs_buffer_size + 4, ptr_size);
+    kargs_buffer_size += word_size;
   }
 
   // check occupancy
@@ -375,18 +376,18 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     if (ARG_IS_LOCAL(meta->arg_info[i])) {
       if (local_mem_offset == 0) {
         memcpy(host_kargs_base_ptr + host_args_offset, &local_mem_size,
-               4);  // local_size
-        host_args_offset = align_offset(host_args_offset + 4, ptr_size);
+               4);  // total local memory size
+        host_args_offset += word_size;
       }
       memcpy(host_kargs_base_ptr + host_args_offset, &local_mem_offset,
-             4);  // arg offset
-      host_args_offset = align_offset(host_args_offset + 4, ptr_size);
+             4);  // local memory offset
+      host_args_offset += word_size;
       local_mem_offset += al->size;
     } else if (meta->arg_info[i].type == POCL_ARG_TYPE_POINTER) {
       if (al->value == NULL) {
         memset(host_kargs_base_ptr + host_args_offset, 0,
                ptr_size);  // NULL pointer value
-        host_args_offset = align_offset(host_args_offset + ptr_size, ptr_size);
+        host_args_offset += ptr_size;
       } else {
         cl_mem m = (*(cl_mem *)(al->value));
         formosa_buffer_data_t *buf_data =
@@ -395,7 +396,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
         uint64_t dev_mem_addr = buf_data->buf_address + al->offset;
         memcpy(host_kargs_base_ptr + host_args_offset, &buf_data->buf_address,
                ptr_size);  // pointer value
-        host_args_offset = align_offset(host_args_offset + ptr_size, ptr_size);
+        host_args_offset += ptr_size;
       }
     } else if (meta->arg_info[i].type == POCL_ARG_TYPE_IMAGE) {
       POCL_ABORT("POCL_FORMOSA_RUN\n");
@@ -405,20 +406,20 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
       // scalar argument
       memcpy(host_kargs_base_ptr + host_args_offset, al->value,
              al->size);  // scalar value
-      host_args_offset = align_offset(host_args_offset + al->size, ptr_size);
+      host_args_offset += al->size;
     }
   }
 
-  // write local arguments
+  // write local memory size
   for (int i = 0; i < meta->num_locals; ++i) {
     if (local_mem_offset == 0) {
       memcpy(host_kargs_base_ptr + host_args_offset, &local_mem_size,
              4);  // local_size
-      host_args_offset = align_offset(host_args_offset + 4, ptr_size);
+      host_args_offset += word_size;
     }
     memcpy(host_kargs_base_ptr + host_args_offset, &local_mem_offset,
            4);  // arg offset
-    host_args_offset = align_offset(host_args_offset + 4, ptr_size);
+    host_args_offset += word_size;
     local_mem_offset += meta->local_sizes[i];
   }
 

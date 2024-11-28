@@ -52,11 +52,6 @@ typedef struct _pocl_basic_usm_allocation_t {
   struct _pocl_basic_usm_allocation_t *next, *prev;
 } pocl_formosa_usm_allocation_t;
 
-// align the offset to the alignment
-uint32_t align_offset(uint32_t offset, uint32_t alignment) {
-  return (offset + alignment - 1) & ~(alignment - 1);
-}
-
 // check if the kernel can be scheduled on the device
 int check_occupancy(uint32_t group_size, uint32_t *max_local_mem);
 
