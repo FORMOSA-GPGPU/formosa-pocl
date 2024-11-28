@@ -224,8 +224,7 @@ int fsa_copy_from_dev(formosa_buffer_data_t *buffer_data, void *host_ptr,
   return status;
 }
 
-int fsa_upload_kernel_file(const char *filename,
-                           formosa_buffer_data_t *buffer_data) {
+int fsa_upload_kernel_file(const char *filename, pocl_formosa_data_t *dd) {
   if (filename == NULL) return -1;
   FILE *fp = fopen(filename, "rb");
   if (fp == NULL) return -1;
@@ -242,8 +241,19 @@ int fsa_upload_kernel_file(const char *filename,
 
   // TODO: memory allocation on device
 
-  int status = fsa_copy_to_dev(buffer_data, data, 0, size);
+  dd->kernel_buffer = (formosa_buffer_data_t *)malloc(sizeof(formosa_buffer_data_t));
+  if (dd->kernel_buffer == NULL) {
+    free(data);
+    return -1;
+  }
+  dd->kernel_buffer->client_fd = dd->client_fd;
+  dd->kernel_buffer->buf_size = size;
+  // TODO: set buffer address
+  
+  int status = fsa_copy_to_dev(dd->kernel_buffer, data, 0, size);
   free(data);
+  free(dd->kernel_buffer);
+  dd->kernel_buffer = NULL;
   return status;
 }
 
@@ -447,7 +457,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     strcpy(sz_program_fsabin, sz_program_bc);
     strncat(sz_program_fsabin, ".fsabin", POCL_MAX_PATHNAME_LENGTH - 1);
 
-    err = fsa_upload_kernel_file(sz_program_fsabin, dd->kernel_buffer);
+    err = fsa_upload_kernel_file(sz_program_fsabin, dd);
     if (err != 0) {
       POCL_ABORT("POCL_FORMOSA_RUN\n");
     }

@@ -62,7 +62,7 @@ int fsa_copy_from_dev(formosa_buffer_data_t *buffer_data, void *host_ptr,
                       uint64_t src_offset, size_t size);
 
 int fsa_upload_kernel_file(const char *filename,
-                           formosa_buffer_data_t *buffer_data);
+                           pocl_formosa_data_t *formosa_data);
 
 int fsa_write_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t value);
 
