@@ -175,132 +175,6 @@ cl_int pocl_formosa_uninit(unsigned j, cl_device_id device) {
   return CL_SUCCESS;
 }
 
-int check_occupancy(uint32_t group_size, uint32_t *max_local_mem) {
-  // check group size
-  uint64_t warps_per_core, threads_per_warp;
-  uint32_t threads_per_core = warps_per_core * threads_per_warp;
-  if (group_size > threads_per_core) {
-    printf(
-        "Error: cannot schedule kernel with group_size > threads_per_core "
-        "(%d,%d)\n",
-        group_size, threads_per_core);
-    return -1;
-  }
-
-  // calculate groups occupancy
-  int warps_per_group = (group_size + threads_per_warp - 1) / threads_per_warp;
-  int groups_per_core = warps_per_core / warps_per_group;
-
-  // check local memory capacity
-  if (max_local_mem) {
-    uint64_t local_mem_size;
-    *max_local_mem = local_mem_size / groups_per_core;
-  }
-
-  return 0;
-}
-
-int fsa_copy_to_dev(formosa_buffer_data_t *buffer_data, const void *host_ptr,
-                    uint64_t dst_offset, size_t size) {
-  if (buffer_data == NULL || host_ptr == NULL) return -1;
-  if ((dst_offset + size) > buffer_data->buf_size) return -1;
-  msg_t *msg =
-      msg_create(0, WRITE, size, buffer_data->buf_address + dst_offset);
-  if (msg == NULL) return -1;
-  msg->payload = (uint8_t *)host_ptr;
-  int status = ipc_send_write_msg(buffer_data->client_fd, msg);
-  msg_destroy(msg);
-  return status;
-}
-
-int fsa_copy_from_dev(formosa_buffer_data_t *buffer_data, void *host_ptr,
-                      uint64_t src_offset, size_t size) {
-  if (buffer_data == NULL || host_ptr == NULL) return -1;
-  if ((src_offset + size) > buffer_data->buf_size) return -1;
-  msg_t *msg = msg_create(0, READ, size, buffer_data->buf_address + src_offset);
-  if (msg == NULL) return -1;
-  msg->payload = (uint8_t *)host_ptr;
-  int status = ipc_send_read_msg(buffer_data->client_fd, msg);
-  msg_destroy(msg);
-  return status;
-}
-
-int fsa_upload_kernel_file(const char *filename, pocl_formosa_data_t *dd) {
-  if (filename == NULL) return -1;
-  FILE *fp = fopen(filename, "rb");
-  if (fp == NULL) return -1;
-  fseek(fp, 0, SEEK_END);
-  uint64_t size = ftell(fp);
-  fseek(fp, 0, SEEK_SET);
-  void *data = malloc(size);
-  if (data == NULL) {
-    fclose(fp);
-    return -1;
-  }
-  fread(data, 1, size, fp);
-  fclose(fp);
-
-  int status = 0;
-  dd->kernel_buffer =
-      (formosa_buffer_data_t *)malloc(sizeof(formosa_buffer_data_t));
-  if (dd->kernel_buffer == NULL) {
-    status = -1;
-    goto UPLOAD_KERNEL_FILE_ERROR;
-  }
-
-  uint64_t addr;
-  status = fsaMalloc((void *)&addr, size);
-  if (status != 0) {
-    goto UPLOAD_KERNEL_FILE_ERROR;
-  }
-
-  dd->kernel_buffer->client_fd = dd->client_fd;
-  dd->kernel_buffer->buf_size = size;
-  dd->kernel_buffer->buf_address = addr;
-
-  status = fsa_copy_to_dev(dd->kernel_buffer, data, 0, size);
-  if (status != 0) {
-    fsaFree((void *)dd->kernel_buffer->buf_address);
-  UPLOAD_KERNEL_FILE_ERROR:
-    free(dd->kernel_buffer);
-    dd->kernel_buffer = NULL;
-  }
-  free(data);
-  return status;
-}
-
-int fsa_wait_ack(pocl_formosa_data_t *dd) {
-  if (dd == NULL) return -1;
-  uint64_t ack;  // acknowledge from device
-  int status;
-  do {
-    status = fsa_read_csr(dd, CASVP_FORMOSA_CSR_ACK, &ack);
-    if (status != 0) return -1;
-    nanosleep((const struct timespec[]){{0, 10000000}}, NULL);  // 10ms
-  } while (ack == 0);
-  return 0;
-}
-
-int fsa_write_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t value) {
-  if (dd == NULL) return -1;
-  msg_t *msg = msg_create(0, WRITE, 8, addr);
-  if (msg == NULL) return -1;
-  msg->payload = (uint8_t *)&value;
-  int status = ipc_send_write_msg(dd->client_fd, msg);
-  msg_destroy(msg);
-  return status;
-}
-
-int fsa_read_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t *value) {
-  if (dd == NULL) return -1;
-  msg_t *msg = msg_create(0, READ, 8, addr);
-  if (msg == NULL) return -1;
-  msg->payload = (uint8_t *)value;
-  int status = ipc_send_read_msg(dd->client_fd, msg);
-  msg_destroy(msg);
-  return status;
-}
-
 void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   pocl_formosa_data_t *dd;
   struct pocl_argument *al;
@@ -361,7 +235,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   // check occupancy
   if (group_size != 1) {
     uint32_t available_local_mem;
-    err = check_occupancy(group_size, &available_local_mem);
+    err = fsa_check_occupancy(group_size, &available_local_mem);
     if (err != 0) {
       POCL_ABORT("POCL_FORMOSA_RUN\n");
     }
@@ -377,12 +251,12 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
 
   // allocate kernel arguments buffer
   formosa_buffer_data_t fsa_kargs_buffer;
-  uintptr_t addr;
-  err = fsaMalloc((void *)&addr, kargs_buffer_size);
+  void *addr;
+  err = fsaMalloc(&addr, kargs_buffer_size);
   if (err != 0) {
     POCL_ABORT("POCL_FORMOSA_RUN\n");
   }
-  fsa_kargs_buffer.buf_address = addr;
+  fsa_kargs_buffer.buf_address = (uint64_t)addr;
   fsa_kargs_buffer.buf_size = kargs_buffer_size;
   fsa_kargs_buffer.client_fd = dd->client_fd;
 
@@ -612,8 +486,8 @@ cl_int pocl_formosa_alloc_mem_obj(cl_device_id device, cl_mem mem_obj,
 
   cl_mem_flags flags = mem_obj->flags;
 
-  uintptr_t addr;
-  int err = fsaMalloc((void *)&addr, mem_obj->size);
+  void *addr;
+  int err = fsaMalloc(&addr, mem_obj->size);
   if (err) {
     return CL_MEM_OBJECT_ALLOCATION_FAILURE;
   }
@@ -621,7 +495,7 @@ cl_int pocl_formosa_alloc_mem_obj(cl_device_id device, cl_mem mem_obj,
   formosa_buffer_data_t *temp = NULL;
   if (host_ptr && (flags & CL_MEM_COPY_HOST_PTR)) {
     temp = malloc(sizeof(formosa_buffer_data_t));
-    temp->buf_address = addr;
+    temp->buf_address = (uint64_t)addr;
     temp->buf_size = mem_obj->size;
     pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
     temp->client_fd = dd->client_fd;
@@ -653,16 +527,17 @@ void pocl_formosa_free(cl_device_id device, cl_mem mem_obj) {
  * Event Handling         *
  **************************/
 
-static void formosa_command_scheduler(pocl_formosa_data_t *d) {
+static void formosa_command_scheduler(pocl_formosa_data_t *dd) {
   _cl_command_node *node;
 
   /* execute commands from ready list */
-  while ((node = d->ready_list)) {
+  while ((node = dd->ready_list)) {
     assert(pocl_command_is_ready(node->sync.event.event));
-    CDL_DELETE(d->ready_list, node);
-    POCL_UNLOCK(d->cq_lock);
+    assert(node->sync.event.event->status == CL_SUBMITTED);
+    CDL_DELETE(dd->ready_list, node);
+    POCL_UNLOCK(dd->cq_lock);
     pocl_exec_command(node);
-    POCL_LOCK(d->cq_lock);
+    POCL_LOCK(dd->cq_lock);
   }
 }
 

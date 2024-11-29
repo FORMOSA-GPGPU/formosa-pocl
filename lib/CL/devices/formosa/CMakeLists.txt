@@ -24,15 +24,21 @@
 #=============================================================================
 
 if(MSVC)
-  set_source_files_properties( pocl-formosa.cc pocl-formosa.h PROPERTIES LANGUAGE CXX )
+  set_source_files_properties( pocl-formosa.c pocl-formosa.h 
+                               PROPERTIES LANGUAGE C )
+  set_source_files_properties( pocl-formosa-util.cc
+                               pocl-formosa-util.h PROPERTIES LANGUAGE CXX )
 endif(MSVC)
-add_pocl_device_library(pocl-devices-formosa pocl-formosa.c pocl-formosa.h)
+add_pocl_device_library(pocl-devices-formosa
+                        pocl-formosa.c pocl-formosa.h
+                        pocl-formosa-util.cc pocl-formosa-util.h)
 if(ENABLE_LOADABLE_DRIVERS)
   # Add runtime library
   target_link_libraries(pocl-devices-formosa PRIVATE ${PTHREAD_LIBRARY})
 endif()
 
 message(STATUS "CASVP_INSTALL_DIR: ${CASVP_INSTALL_DIR}")
-target_include_directories(pocl-devices-formosa PRIVATE ${CASVP_INSTALL_DIR}/include)
+target_include_directories(pocl-devices-formosa PRIVATE
+                           ${CASVP_INSTALL_DIR}/include)
 
 target_link_libraries(pocl-devices-formosa PRIVATE comm)
