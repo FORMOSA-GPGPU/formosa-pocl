@@ -76,6 +76,9 @@ int fsa_read_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t *value);
 
 int fsa_wait_ack(pocl_formosa_data_t *dd);
 
+int compile_formosa_program(char **kernel_names, int *num_kernels,
+                            char *str_program_fsa_bin, void *llvm_module);
+
 #define FSA_WRITE_GROUPED_CSR(dd, addr, value)             \
   do {                                                     \
     int err = fsa_write_csr((dd), (addr##_X), (value[0])); \

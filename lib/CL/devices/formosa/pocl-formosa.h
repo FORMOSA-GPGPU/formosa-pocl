@@ -1,9 +1,9 @@
 #ifndef POCL_FORMOSA_H
 #define POCL_FORMOSA_H
 
+#include "pocl-formosa-util.h"
 #include "pocl_cl.h"
 #include "prototypes.inc"
-#include "pocl-formosa-util.h"
 
 GEN_PROTOTYPES(formosa)
 
