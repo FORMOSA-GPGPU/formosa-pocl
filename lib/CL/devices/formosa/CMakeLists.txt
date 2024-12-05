@@ -34,7 +34,7 @@ add_pocl_device_library(pocl-devices-formosa
                         pocl-formosa-util.cc pocl-formosa-util.h)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../../../llvmopencl)
-include_directories($ENV{FORMOSA_LLVM}/include)
+include_directories(${LLVM_INCLUDEDIR})
 
 if(ENABLE_LOADABLE_DRIVERS)
   # Add runtime library

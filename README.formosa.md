@@ -24,7 +24,6 @@ cmake -B build -G Ninja \
       -D WITH_LLVM_CONFIG=${FORMOSA_LLVM}/bin/llvm-config \
       -D LLC_TRIPLE="x86_64-unknown-linux-gnu" \
       -D ENABLE_ICD=ON \
-      -D STATIC_LLVM=ON \
       -D ENABLE_FORMOSA=ON \
       -D ENABLE_CUDA=OFF \
       -D ENABLE_TCE=OFF \

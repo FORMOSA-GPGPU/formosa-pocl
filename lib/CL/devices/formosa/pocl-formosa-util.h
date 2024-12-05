@@ -3,9 +3,6 @@
 
 #include "pocl.h"
 #include "pocl_threads.h"
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 #include <stddef.h>
 #include <stdint.h>
@@ -76,7 +73,7 @@ int fsa_read_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t *value);
 
 int fsa_wait_ack(pocl_formosa_data_t *dd);
 
-int compile_formosa_program(char **kernel_names, int *num_kernels,
+int fsa_compile_program(char **kernel_names, int *num_kernels,
                             char *str_program_fsa_bin, void *llvm_module);
 
 #define FSA_WRITE_GROUPED_CSR(dd, addr, value)             \
@@ -88,9 +85,5 @@ int compile_formosa_program(char **kernel_names, int *num_kernels,
       POCL_ABORT("FSA_WRITE_GROUPED_CSR");                 \
     }                                                      \
   } while (0);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif

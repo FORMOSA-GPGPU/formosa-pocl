@@ -282,7 +282,7 @@ static bool createArgumentsBuffer(
   return true;
 }
 
-static void processKernels(llvm::SmallVector<std::string, 8> &funcNames,
+static void generateArgumentBufferForKernels(llvm::SmallVector<std::string, 8> &funcNames,
                            llvm::Module *module) {
   llvm::SmallVector<llvm::Function *, 8> functionsToErase;
   for (auto &function : module->functions()) {
@@ -322,7 +322,7 @@ static char *convertToCharArray(
   return buffer;
 }
 
-int compile_formosa_program(char **kernel_names, int *num_kernels,
+int fsa_compile_program(char **kernel_names, int *num_kernels,
                             char *str_program_fsa_bin, void *llvm_module) {
   int err;
   std::string llvm_path = getenv("FORMOSA_LLVM");
@@ -353,7 +353,7 @@ int compile_formosa_program(char **kernel_names, int *num_kernels,
 
   auto module = (llvm::Module *)llvm_module;
   llvm::SmallVector<std::string, 8> kernelNames;
-  processKernels(kernelNames, module);
+  generateArgumentBufferForKernels(kernelNames, module);
 
   *num_kernels = kernelNames.size();
   *kernel_names = convertToCharArray(kernelNames);

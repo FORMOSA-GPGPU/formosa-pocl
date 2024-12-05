@@ -415,7 +415,7 @@ int pocl_formosa_post_build_program(cl_program program, cl_uint device_i) {
     strncat(fsa_program_bin, ".fsa.bin", POCL_MAX_PATHNAME_LENGTH - 1);
 
     result =
-        compile_formosa_program(&pdata->kernel_names, &pdata->num_kernels,
+        fsa_compile_program(&pdata->kernel_names, &pdata->num_kernels,
                                 fsa_program_bin, program->llvm_irs[device_i]);
     if (result != CL_SUCCESS) break;
 
