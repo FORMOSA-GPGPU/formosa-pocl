@@ -31,7 +31,8 @@ if(MSVC)
 endif(MSVC)
 add_pocl_device_library(pocl-devices-formosa
                         pocl-formosa.c pocl-formosa.h
-                        pocl-formosa-util.cc pocl-formosa-util.h)
+                        pocl-formosa-util.cc pocl-formosa-util.h
+                        falloc/fsa_mem_allocator.c falloc/fsa_mem_allocator.c)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../../../llvmopencl)
 include_directories(${LLVM_INCLUDEDIR})

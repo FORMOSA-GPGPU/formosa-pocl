@@ -48,7 +48,7 @@ set(KERNEL_CL_FLAGS "-Xclang"
 
 set(DEVICE_CL_FLAGS "-D__OPENCL_VERSION__=${FORMOSA_DEVICE_CL_VERSION} -Dcl_khr_int64")
 
-make_kernel_bc(KERNEL_BC "riscv64-unknown-elf" "formosa" 0 0 0 ${KERNEL_SOURCES})
+make_kernel_bc(KERNEL_BC "riscv64-formosa" "formosa" 0 0 0 ${KERNEL_SOURCES})
 
 # just debug
 message(STATUS "FORMOSA Kernel BC: ${KERNEL_BC}")

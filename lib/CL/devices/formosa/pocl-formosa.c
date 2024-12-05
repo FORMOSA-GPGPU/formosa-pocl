@@ -117,6 +117,7 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   device->llvm_target_triplet = "riscv64-unknown-unknown-elf";
   device->llvm_abi = "lp64";
   device->llvm_cpu = "generic-rv64";
+  device->kernellib_name = "kernel-riscv64-formosa";
   device->kernellib_fallback_name = NULL;
   device->kernellib_subdir = "formosa";
   device->device_aux_functions = NULL;
