@@ -53,15 +53,6 @@ if(BUILD_BASIC)
     "$<TARGET_OBJECTS:pocl-devices-basic>")
 endif()
 
-if(BUILD_FORMOSA)
-  add_subdirectory("formosa")
-  set(POCL_DEVICES_OBJS "${POCL_DEVICES_OBJS}"
-    "$<TARGET_OBJECTS:pocl-devices-fsa>")
-  if(NOT ENABLE_LOADABLE_DRIVERS)
-    list(APPEND POCL_DEVICES_LINK_LIST ${FORMOSA_LIBS})
-  endif()
-endif()
-
 if(BUILD_PTHREAD)
   add_subdirectory("pthread")
   set(POCL_DEVICES_OBJS "${POCL_DEVICES_OBJS}"
@@ -162,6 +153,17 @@ if(ENABLE_CUDA)
 
   if(NOT ENABLE_LOADABLE_DRIVERS)
     list(APPEND POCL_DEVICES_LINK_LIST cuda)
+  endif()
+endif()
+
+if(ENABLE_FORMOSA)
+  message(STATUS "Building Formosa device driver")
+  add_subdirectory("formosa")
+  set(POCL_DEVICES_OBJS "${POCL_DEVICES_OBJS}"
+    "$<TARGET_OBJECTS:pocl-devices-formosa>")
+
+  if(NOT ENABLE_LOADABLE_DRIVERS)
+    list(APPEND POCL_DEVICES_LINK_LIST ${FORMOSA_LIBS})
   endif()
 endif()
 
