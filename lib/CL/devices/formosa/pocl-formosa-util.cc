@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 
 #include "casvp-config/casvp-config.h"
 #include "falloc/fsa_mem_allocator.h"

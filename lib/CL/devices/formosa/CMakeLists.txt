@@ -25,17 +25,28 @@
 
 if(MSVC)
   set_source_files_properties( pocl-formosa.c pocl-formosa.h 
+                               falloc/fsa_mem_allocator.c falloc/fsa_mem_allocator.h
                                PROPERTIES LANGUAGE C )
   set_source_files_properties( pocl-formosa-util.cc
                                pocl-formosa-util.h PROPERTIES LANGUAGE CXX )
 endif(MSVC)
+
+# this is required, because we're compiling the C++ files of this directory
+# with LLVM-provided flags, which usually contain their own setting of
+# C++ standard, which may be in conflict with pocl's default C++ standard.
+unset(CMAKE_CXX_STANDARD)
+unset(CMAKE_CXX_STANDARD_REQUIRED)
+set_source_files_properties(pocl-formosa-util.cc pocl-formosa-util.h
+                            PROPERTIES COMPILE_FLAGS "${LLVM_CXXFLAGS}")
+include_directories(${LLVM_INCLUDE_DIRS}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../../../llvmopencl)
+set(CMAKE_CXX_STANDARD ${POCL_CMAKE_CXX_STANDARD})
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 add_pocl_device_library(pocl-devices-formosa
                         pocl-formosa.c pocl-formosa.h
                         pocl-formosa-util.cc pocl-formosa-util.h
-                        falloc/fsa_mem_allocator.c falloc/fsa_mem_allocator.c)
-
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../../../llvmopencl)
-include_directories(${LLVM_INCLUDEDIR})
+                        falloc/fsa_mem_allocator.c falloc/fsa_mem_allocator.h)
 
 if(ENABLE_LOADABLE_DRIVERS)
   # Add runtime library

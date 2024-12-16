@@ -4,6 +4,10 @@
 #include "pocl.h"
 #include "pocl_threads.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -85,5 +89,9 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
       POCL_ABORT("FSA_WRITE_GROUPED_CSR");                 \
     }                                                      \
   } while (0);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
