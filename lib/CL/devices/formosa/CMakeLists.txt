@@ -32,6 +32,6 @@ if(ENABLE_LOADABLE_DRIVERS)
   target_link_libraries(pocl-devices-formosa PRIVATE ${PTHREAD_LIBRARY})
 endif()
 
-target_include_directories(pocl-devices-formosa PRIVATE ${CASVP_DIR}/build/include)
+target_include_directories(pocl-devices-formosa PRIVATE ${CASVP_INSTALL_DIR}/include)
 
 target_link_libraries(pocl-devices-formosa PRIVATE comm)
