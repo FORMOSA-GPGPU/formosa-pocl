@@ -25,7 +25,8 @@
 
 if(MSVC)
   set_source_files_properties( pocl-formosa.c pocl-formosa.h 
-                               falloc/fsa_mem_allocator.c falloc/fsa_mem_allocator.h
+                               falloc/fsa_mem_allocator.c
+                               falloc/fsa_mem_allocator.h
                                PROPERTIES LANGUAGE C )
   set_source_files_properties( pocl-formosa-util.cc
                                pocl-formosa-util.h PROPERTIES LANGUAGE CXX )
@@ -58,3 +59,7 @@ target_include_directories(pocl-devices-formosa PRIVATE
                            ${CASVP_INSTALL_DIR}/include)
 
 target_link_libraries(pocl-devices-formosa PRIVATE comm)
+
+install(FILES "kernel_main.cl"
+        DESTINATION "${POCL_INSTALL_PRIVATE_DATADIR}/formosa"
+        COMPONENT "lib")

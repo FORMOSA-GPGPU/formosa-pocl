@@ -38,7 +38,7 @@ foreach(FILE get_local_id.cl get_local_size.cl get_group_id.cl get_global_size.c
   list(APPEND KERNEL_SOURCES "formosa/${FILE}")
 endforeach()
 
-set(CLANG_FLAGS "-emit-llvm" "-target" "riscv64-unknown-elf" "-mcpu=formosa-gpgpu")
+set(CLANG_FLAGS "-emit-llvm" "-target" "riscv64-unknown-unknown-elf" "-mcpu=formosa-gpgpu")
 set(LLC_FLAGS "")
 
 set(KERNEL_CL_FLAGS "-Xclang"
@@ -57,9 +57,9 @@ list(APPEND KERNEL_BC_LIST "${KERNEL_BC}")
 set(KERNEL_BC_LIST "${KERNEL_BC_LIST}" PARENT_SCOPE)
 
 # a target is needed...
-add_custom_target("kernel_formosa" DEPENDS ${KERNEL_BC})
+add_custom_target("kernel_riscv64-formosa" DEPENDS ${KERNEL_BC})
 
-list(APPEND KERNEL_TARGET_LIST "kernel_formosa")
+list(APPEND KERNEL_TARGET_LIST "kernel_riscv64-formosa")
 set(KERNEL_TARGET_LIST "${KERNEL_TARGET_LIST}" PARENT_SCOPE)
 
 install(FILES "${KERNEL_BC}"

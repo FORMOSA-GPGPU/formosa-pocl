@@ -116,11 +116,12 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   device->address_bits = 64;
   device->llvm_target_triplet = "riscv64-unknown-unknown-elf";
   device->llvm_abi = "lp64";
-  device->llvm_cpu = "generic-rv64";
+  device->llvm_cpu = "formosa-gpgpu";
   device->kernellib_name = "kernel-riscv64-formosa";
   device->kernellib_fallback_name = NULL;
   device->kernellib_subdir = "formosa";
   device->device_aux_functions = NULL;
+  device->extensions = "cl_khr_int64 cl_khr_byte_addressable_store";
 
   device->image_support = CL_FALSE;
 
@@ -139,6 +140,7 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   device->max_work_item_sizes[1] = max_work_group_size;
   device->max_work_item_sizes[2] = max_work_group_size;
   device->max_compute_units = 1;
+  device->mem_base_addr_align = 128;  // TODO: determine this
 
   dd->context_ref_count = 0;
 
@@ -385,7 +387,8 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
  **************************/
 
 char *pocl_formosa_init_build(void *data) {
-  return strdup("-mcpu=formosa-gpgpu -O1 -mllvm -fsa-pdom-level");
+  // clang -cc1 options
+  return strdup("");
 }
 
 int pocl_formosa_post_build_program(cl_program program, cl_uint device_i) {
@@ -415,9 +418,8 @@ int pocl_formosa_post_build_program(cl_program program, cl_uint device_i) {
     strcpy(fsa_program_bin, program_bc);
     strncat(fsa_program_bin, ".fsa.bin", POCL_MAX_PATHNAME_LENGTH - 1);
 
-    result =
-        fsa_compile_program(&pdata->kernel_names, &pdata->num_kernels,
-                                fsa_program_bin, program->llvm_irs[device_i]);
+    result = fsa_compile_program(&pdata->kernel_names, &pdata->num_kernels,
+                                 fsa_program_bin, program->llvm_irs[device_i]);
     if (result != CL_SUCCESS) break;
 
   } while (0);

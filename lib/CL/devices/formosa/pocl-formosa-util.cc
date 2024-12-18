@@ -283,8 +283,8 @@ static bool createArgumentsBuffer(
   return true;
 }
 
-static void generateArgumentBufferForKernels(llvm::SmallVector<std::string, 8> &funcNames,
-                           llvm::Module *module) {
+static void generateArgumentBufferForKernels(
+    llvm::SmallVector<std::string, 8> &funcNames, llvm::Module *module) {
   llvm::SmallVector<llvm::Function *, 8> functionsToErase;
   for (auto &function : module->functions()) {
     if (!pocl::isKernelToProcess(function)) continue;
@@ -324,7 +324,7 @@ static char *convertToCharArray(
 }
 
 int fsa_compile_program(char **kernel_names, int *num_kernels,
-                            char *str_program_fsa_bin, void *llvm_module) {
+                        char *str_program_fsa_bin, void *llvm_module) {
   int err;
   std::string llvm_path = getenv("FORMOSA_LLVM");
   std::string llvm_objdump_path = llvm_path + "/bin/llvm-objdump";
@@ -373,12 +373,12 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
 
   std::string clang_path(CLANG);
   if (!llvm_path.empty()) {
-    clang_path = llvm_path;
+    clang_path = llvm_path + "/bin/clang";
   }
 
   char kernel_main_path[POCL_MAX_PATHNAME_LENGTH];
   pocl_get_srcdir_or_datadir(kernel_main_path, "/lib/CL/devices", "",
-                             "/formosa/kernel_main.c");
+                             "/formosa/kernel_main.cl");
 
   std::stringstream ss_cmd, ss_out;
   ss_cmd << clang_path.c_str() << " " << build_cflags << " " << bitcode_path
