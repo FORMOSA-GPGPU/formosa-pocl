@@ -1919,6 +1919,9 @@ if(ALIGNOF_DOUBLE16 LESS 128)
 endif()
 
 math(EXPR ALIGNOF_DOUBLE16 "${ALIGNOF_DOUBLE16} + 0")
+if(ALIGNOF_DOUBLE16 EQUAL 0)
+  set(ALIGNOF_DOUBLE16 128)
+endif()
 set(MAX_EXTENDED_ALIGNMENT "${ALIGNOF_DOUBLE16}")
 
 ##########################################################

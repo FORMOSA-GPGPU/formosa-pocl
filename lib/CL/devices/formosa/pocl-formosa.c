@@ -159,6 +159,9 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   dd->kernel_buffer = NULL;
   formosa_available = CL_TRUE;
 
+  // TODO: configure the base address of the global memory
+  fsaMemAllocInit(1024, CASVP_FORMOSA_GLOBAL_MEM_SIZE, 0);
+
   return CL_SUCCESS;
 }
 
@@ -544,6 +547,8 @@ cl_int pocl_formosa_alloc_mem_obj(cl_device_id device, cl_mem mem_obj,
   pocl_mem_identifier *p = &mem_obj->device_ptrs[device->global_mem_id];
 
   cl_mem_flags flags = mem_obj->flags;
+  assert((flags & (CL_MEM_READ_WRITE | CL_MEM_WRITE_ONLY | CL_MEM_READ_ONLY)) !=
+         0);
 
   void *addr;
   int err = fsaMalloc(&addr, mem_obj->size);
@@ -551,18 +556,28 @@ cl_int pocl_formosa_alloc_mem_obj(cl_device_id device, cl_mem mem_obj,
     return CL_MEM_OBJECT_ALLOCATION_FAILURE;
   }
 
-  formosa_buffer_data_t *temp = NULL;
-  if (host_ptr && (flags & CL_MEM_COPY_HOST_PTR)) {
-    temp = malloc(sizeof(formosa_buffer_data_t));
+  formosa_buffer_data_t *temp = malloc(sizeof(formosa_buffer_data_t));
+  if (temp == NULL) {
+    fsaFree((void *)addr);
+    return CL_OUT_OF_HOST_MEMORY;
+  }
+  pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
+  if (host_ptr) {  // READ_WRITE, WRITE_ONLY
     temp->buf_address = (uint64_t)addr;
     temp->buf_size = mem_obj->size;
-    pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
     temp->client_fd = dd->client_fd;
-    fsa_copy_to_dev(temp, host_ptr, 0, mem_obj->size);
+    err = fsa_copy_to_dev(temp, host_ptr, 0, mem_obj->size);
+    if (err != 0) {
+      fsaFree((void *)temp->buf_address);
+      POCL_MEM_FREE(temp);
+      return CL_OUT_OF_RESOURCES;
+    }
+  } else {  // READ_ONLY
+    temp->buf_address = (uint64_t)addr;
+    temp->buf_size = mem_obj->size;
+    temp->client_fd = dd->client_fd;
   }
-  if (!temp) {
-    POCL_ABORT("FORMOSA: Memory flag not supported");
-  }
+
   p->mem_ptr = temp;
   return CL_SUCCESS;
 }
