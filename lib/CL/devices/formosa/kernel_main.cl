@@ -1,2 +1,2 @@
-int foo() {
+void start() {
 }

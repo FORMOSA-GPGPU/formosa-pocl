@@ -44,6 +44,7 @@ include_directories(${LLVM_INCLUDE_DIRS}
 set(CMAKE_CXX_STANDARD ${POCL_CMAKE_CXX_STANDARD})
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+add_compile_definitions(FORMOSA_LLVM="${LLVM_PREFIX}")
 add_pocl_device_library(pocl-devices-formosa
                         pocl-formosa.c pocl-formosa.h
                         pocl-formosa-util.cc pocl-formosa-util.h

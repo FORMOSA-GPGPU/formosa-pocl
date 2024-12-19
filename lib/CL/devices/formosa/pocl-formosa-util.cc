@@ -326,14 +326,14 @@ static char *convertToCharArray(
 int fsa_compile_program(char **kernel_names, int *num_kernels,
                         char *str_program_fsa_bin, void *llvm_module) {
   int err;
-  std::string llvm_path = getenv("FORMOSA_LLVM");
+  std::string llvm_path = FORMOSA_LLVM;
   std::string llvm_objdump_path = llvm_path + "/bin/llvm-objdump";
   std::string build_cflags = pocl_get_string_option("POCL_FORMOSA_CFLAGS", "");
   if (build_cflags == "") {
     POCL_MSG_WARN(
         "Environment variable 'POCL_FORMOSA_CFLAGS' is not set, default to "
-        "-mcpu=formosa-gpgpu -O1 -mllvm -fsa-pdom-level\n");
-    build_cflags = "-mcpu=formosa-gpgpu -O1 -mllvm -fsa-pdom-level";
+        "-mcpu=formosa-gpgpu -O1 -mllvm -fsa-pdom-level -nostdlib\n");
+    build_cflags = "-mcpu=formosa-gpgpu -O1 -mllvm -fsa-pdom-level -nostdlib";
   }
 
   std::string build_ldflags =

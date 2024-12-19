@@ -163,19 +163,20 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
 }
 
 cl_int pocl_formosa_uninit(unsigned j, cl_device_id device) {
-  pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
-  if (dd == NULL) return CL_SUCCESS;
-
-  POCL_DESTROY_LOCK(dd->compile_lock);
-  POCL_DESTROY_LOCK(dd->cq_lock);
-  if (dd->client_fd != -1) {
-    close(dd->client_fd);
-  }
-  if (dd->kernel_buffer != NULL) {
-    free(dd->kernel_buffer);
-  }
-  POCL_MEM_FREE(device->data);
-  device->data = NULL;
+  // pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
+  // if (dd == NULL) return CL_SUCCESS;
+  //
+  // POCL_DESTROY_LOCK(dd->compile_lock);
+  // POCL_DESTROY_LOCK(dd->cq_lock);
+  // if (dd->client_fd != -1) {
+  //   close(dd->client_fd);
+  //   dd->client_fd = -1;
+  // }
+  // if (dd->kernel_buffer != NULL) {
+  //   free(dd->kernel_buffer);
+  // }
+  // POCL_MEM_FREE(device->data);
+  // device->data = NULL;
   return CL_SUCCESS;
 }
 
