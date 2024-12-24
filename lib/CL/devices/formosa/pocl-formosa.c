@@ -120,7 +120,6 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   device->kernellib_name = "kernel-riscv64-formosa";
   device->kernellib_fallback_name = NULL;
   device->kernellib_subdir = "formosa";
-  device->device_aux_functions = NULL;
   device->extensions = "cl_khr_int64 cl_khr_byte_addressable_store";
 
   device->image_support = CL_FALSE;
@@ -259,6 +258,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
 
   // allocate kernel arguments buffer
   formosa_buffer_data_t fsa_kargs_buffer;
+  memset(&fsa_kargs_buffer, 0, sizeof(formosa_buffer_data_t));
   void *addr;
   err = fsaMalloc(&addr, kargs_buffer_size);
   if (err != 0) {
@@ -352,7 +352,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     }
 
     strcpy(sz_program_fsabin, sz_program_bc);
-    strncat(sz_program_fsabin, ".fsabin", POCL_MAX_PATHNAME_LENGTH - 1);
+    strncat(sz_program_fsabin, ".fsa.bin", POCL_MAX_PATHNAME_LENGTH - 1);
 
     err = fsa_upload_kernel_file(sz_program_fsabin, dd);
     if (err != 0) {
@@ -561,6 +561,7 @@ cl_int pocl_formosa_alloc_mem_obj(cl_device_id device, cl_mem mem_obj,
     fsaFree((void *)addr);
     return CL_OUT_OF_HOST_MEMORY;
   }
+  memset(temp, 0, sizeof(formosa_buffer_data_t));
   pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
   if (host_ptr) {  // READ_WRITE, WRITE_ONLY
     temp->buf_address = (uint64_t)addr;
@@ -617,15 +618,6 @@ static void formosa_command_scheduler(pocl_formosa_data_t *dd) {
 
 void pocl_formosa_submit(_cl_command_node *node, cl_command_queue cq) {
   pocl_formosa_data_t *dd = node->device->data;
-
-  if (node != NULL && node->type == CL_COMMAND_NDRANGE_KERNEL) {
-    cl_kernel kernel = node->command.run.kernel;
-    cl_program program = kernel->program;
-    if (!program->builtin_kernel_attributes) {
-      node->command.run.device_data =
-          pocl_check_kernel_dlhandle_cache(node, CL_TRUE, CL_TRUE);
-    }
-  }
 
   node->ready = 1;
   POCL_LOCK(dd->cq_lock);

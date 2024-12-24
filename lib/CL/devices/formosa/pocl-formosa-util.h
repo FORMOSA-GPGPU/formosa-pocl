@@ -25,6 +25,7 @@ typedef struct {
   int client_fd;
   uint64_t buf_address;
   uint64_t buf_size;
+  uint64_t msg_id;
 } formosa_buffer_data_t;
 
 // device specific data
@@ -49,6 +50,9 @@ typedef struct {
 
   /* The kernel data buffer */
   formosa_buffer_data_t *kernel_buffer;
+
+  /* Message ID */
+  uint64_t msg_id;
 } pocl_formosa_data_t;
 
 typedef struct _pocl_basic_usm_allocation_t {

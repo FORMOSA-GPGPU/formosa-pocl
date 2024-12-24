@@ -78,10 +78,11 @@ int fsa_copy_to_dev(formosa_buffer_data_t *buffer_data, const void *host_ptr,
                     uint64_t dst_offset, size_t size) {
   if (buffer_data == nullptr || host_ptr == nullptr) return -1;
   if ((dst_offset + size) > buffer_data->buf_size) return -1;
-  msg_t *msg =
-      msg_create(0, WRITE, size, buffer_data->buf_address + dst_offset);
+  msg_t *msg = msg_create(buffer_data->msg_id++, WRITE, size,
+                          buffer_data->buf_address + dst_offset);
   if (msg == nullptr) return -1;
-  msg->payload = static_cast<uint8_t *>(const_cast<void *>(host_ptr));
+  msg = msg_set_payload(msg, static_cast<const uint8_t *>(host_ptr));
+  if (msg == nullptr) return -1;
   int status = ipc_send_write_msg(buffer_data->client_fd, msg);
   msg_destroy(msg);
   return status;
@@ -91,10 +92,13 @@ int fsa_copy_from_dev(formosa_buffer_data_t *buffer_data, void *host_ptr,
                       uint64_t src_offset, size_t size) {
   if (buffer_data == nullptr || host_ptr == nullptr) return -1;
   if ((src_offset + size) > buffer_data->buf_size) return -1;
-  msg_t *msg = msg_create(0, READ, size, buffer_data->buf_address + src_offset);
+  msg_t *msg = msg_create(buffer_data->msg_id++, READ, size,
+                          buffer_data->buf_address + src_offset);
   if (msg == nullptr) return -1;
-  msg->payload = static_cast<uint8_t *>(host_ptr);
   int status = ipc_send_read_msg(buffer_data->client_fd, msg);
+  if (status != 0) goto FSA_COPY_FROM_DEV_FINALLY;
+  memcpy(host_ptr, msg->payload, size);
+FSA_COPY_FROM_DEV_FINALLY:
   msg_destroy(msg);
   return status;
 }
@@ -159,9 +163,10 @@ int fsa_wait_ack(pocl_formosa_data_t *dd) {
 
 int fsa_write_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t value) {
   if (dd == nullptr) return -1;
-  msg_t *msg = msg_create(0, WRITE, 8, addr);
+  msg_t *msg = msg_create(dd->msg_id++, WRITE, 8, addr);
   if (msg == nullptr) return -1;
-  msg->payload = reinterpret_cast<uint8_t *>(&value);
+  msg = msg_set_payload(msg, reinterpret_cast<uint8_t *>(&value));
+  if (msg == nullptr) return -1;
   int status = ipc_send_write_msg(dd->client_fd, msg);
   msg_destroy(msg);
   return status;
@@ -169,10 +174,12 @@ int fsa_write_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t value) {
 
 int fsa_read_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t *value) {
   if (dd == nullptr) return -1;
-  msg_t *msg = msg_create(0, READ, 8, addr);
+  msg_t *msg = msg_create(dd->msg_id++, READ, 8, addr);
   if (msg == nullptr) return -1;
-  msg->payload = reinterpret_cast<uint8_t *>(value);
   int status = ipc_send_read_msg(dd->client_fd, msg);
+  if (status != 0) goto FSA_READ_CSR_FINALLY;
+  *value = *reinterpret_cast<uint64_t *>(msg->payload);
+FSA_READ_CSR_FINALLY:
   msg_destroy(msg);
   return status;
 }
@@ -332,14 +339,15 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
   if (build_cflags == "") {
     POCL_MSG_WARN(
         "Environment variable 'POCL_FORMOSA_CFLAGS' is not set, default to "
-        "-mcpu=formosa-gpgpu -O1 -mllvm -fsa-pdom-level -nostdlib\n");
-    build_cflags = "-mcpu=formosa-gpgpu -O1 -mllvm -fsa-pdom-level -nostdlib";
+        "-mcpu=formosa-gpgpu -O1 -mllvm -fsa-pdom-level\n");
+    build_cflags = "-mcpu=formosa-gpgpu -O1 -mllvm -fsa-pdom-level";
   }
 
   std::string build_ldflags =
       pocl_get_string_option("POCL_FORMOSA_LDFLAGS", "");
   if (build_ldflags == "") {
     POCL_MSG_WARN("Environment variable 'POCL_FORMOSA_LDFLAGS' is not set\n");
+    build_ldflags = "-fuse-ld=lld -nostartfiles";
   }
 
   char bitcode_path[POCL_MAX_PATHNAME_LENGTH];
@@ -348,9 +356,7 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
   if (err != 0) return err;
 
   char elf_path[POCL_MAX_PATHNAME_LENGTH];
-  err =
-      pocl_mk_tempname(elf_path, "/tmp/pocl_formosa_program", ".elf", nullptr);
-  if (err != 0) return err;
+  memcpy(elf_path, str_program_fsa_bin, strlen(str_program_fsa_bin) + 1);
 
   auto module = (llvm::Module *)llvm_module;
   llvm::SmallVector<std::string, 8> kernelNames;
