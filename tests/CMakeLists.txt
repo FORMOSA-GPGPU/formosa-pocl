@@ -85,6 +85,12 @@ if(ENABLE_CUDA)
   set_property(TEST "pocl_version_check" APPEND PROPERTY DEPENDS "pocl_test_dlopen_device_cuda")
 endif()
 
+if(ENABLE_FORMOSA)
+  add_test(NAME pocl_test_dlopen_device_formosa COMMAND test_dlopen formosa)
+  set_tests_properties("pocl_test_dlopen_device_formosa" PROPERTIES LABELS "internal;dlopen;formosa")
+  set_property(TEST "pocl_version_check" APPEND PROPERTY DEPENDS "pocl_test_dlopen_device_formosa")
+endif()
+
 if(ENABLE_PROXY)
   add_test(NAME pocl_test_dlopen_device_proxy COMMAND test_dlopen proxy)
   set_tests_properties("pocl_test_dlopen_device_proxy" PROPERTIES LABELS "internal;dlopen")

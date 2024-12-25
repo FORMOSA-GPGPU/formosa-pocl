@@ -21,11 +21,11 @@
    THE SOFTWARE.
 */
 
-size_t _CL_OVERLOADABLE get_local_size(uint);
-size_t _CL_OVERLOADABLE get_group_id(uint);
-size_t _CL_OVERLOADABLE get_local_id(uint);
+uint64_t _CL_OVERLOADABLE get_local_size(uint);
+uint64_t _CL_OVERLOADABLE get_group_id(uint);
+uint64_t _CL_OVERLOADABLE get_local_id(uint);
 
-size_t _CL_OVERLOADABLE
+uint64_t _CL_OVERLOADABLE
 get_global_id(unsigned int dimindx)
 {
   switch(dimindx)

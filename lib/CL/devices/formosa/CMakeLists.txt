@@ -24,14 +24,43 @@
 #=============================================================================
 
 if(MSVC)
-  set_source_files_properties( pocl-formosa.cc pocl-formosa.h PROPERTIES LANGUAGE CXX )
+  set_source_files_properties( pocl-formosa.c pocl-formosa.h 
+                               falloc/fsa_mem_allocator.c
+                               falloc/fsa_mem_allocator.h
+                               PROPERTIES LANGUAGE C )
+  set_source_files_properties( pocl-formosa-util.cc
+                               pocl-formosa-util.h PROPERTIES LANGUAGE CXX )
 endif(MSVC)
-add_pocl_device_library(pocl-devices-formosa pocl-formosa.c pocl-formosa.h)
+
+# this is required, because we're compiling the C++ files of this directory
+# with LLVM-provided flags, which usually contain their own setting of
+# C++ standard, which may be in conflict with pocl's default C++ standard.
+unset(CMAKE_CXX_STANDARD)
+unset(CMAKE_CXX_STANDARD_REQUIRED)
+set_source_files_properties(pocl-formosa-util.cc pocl-formosa-util.h
+                            PROPERTIES COMPILE_FLAGS "${LLVM_CXXFLAGS}")
+include_directories(${LLVM_INCLUDE_DIRS}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../../../llvmopencl)
+set(CMAKE_CXX_STANDARD ${POCL_CMAKE_CXX_STANDARD})
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+add_compile_definitions(FORMOSA_LLVM="${LLVM_PREFIX}")
+add_pocl_device_library(pocl-devices-formosa
+                        pocl-formosa.c pocl-formosa.h
+                        pocl-formosa-util.cc pocl-formosa-util.h
+                        falloc/fsa_mem_allocator.c falloc/fsa_mem_allocator.h)
+
 if(ENABLE_LOADABLE_DRIVERS)
   # Add runtime library
   target_link_libraries(pocl-devices-formosa PRIVATE ${PTHREAD_LIBRARY})
 endif()
 
-target_include_directories(pocl-devices-formosa PRIVATE ${CASVP_INSTALL_DIR}/include)
+message(STATUS "CASVP_INSTALL_DIR: ${CASVP_INSTALL_DIR}")
+target_include_directories(pocl-devices-formosa PRIVATE
+                           ${CASVP_INSTALL_DIR}/include)
 
 target_link_libraries(pocl-devices-formosa PRIVATE comm)
+
+install(FILES "kernel_main.cl"
+        DESTINATION "${POCL_INSTALL_PRIVATE_DATADIR}/formosa"
+        COMPONENT "lib")

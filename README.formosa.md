@@ -24,14 +24,16 @@ cmake -B build -G Ninja \
       -D WITH_LLVM_CONFIG=${FORMOSA_LLVM}/bin/llvm-config \
       -D LLC_TRIPLE="x86_64-unknown-linux-gnu" \
       -D ENABLE_ICD=ON \
-      -D STATIC_LLVM=ON \
       -D ENABLE_FORMOSA=ON \
       -D ENABLE_CUDA=OFF \
       -D ENABLE_TCE=OFF \
       -D ENABLE_HSA=OFF \
       -D ENABLE_VULKAN=OFF \
       -D ENABLE_LEVEL0=OFF \
-      -D CMAKE_INSTALL_PREFIX=/opt/formosa-pocl \
+      -D CMAKE_INSTALL_PREFIX=/usr \
+      -D ENABLE_LATEST_CXX_STD=ON \
+      -D ENABLE_LIBLLVMOPENCL=ON \
+      -D ENABLE_HOST_CPU_DEVICES=ON \
       -D CASVP_INSTALL_DIR=${FORMOSA_CASVP}
 ```
 
