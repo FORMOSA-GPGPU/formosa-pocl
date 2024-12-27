@@ -37,6 +37,11 @@ cmake -B build -G Ninja \
       -D CASVP_INSTALL_DIR=${FORMOSA_CASVP}
 ```
 
+If you are using [Nix dev shell](https://git.caslab.ee.ncku.edu.tw/formosa-gpgpu/formosa-toolchain-nix#pocl), do
+```bash
+cmake -B build -G Ninja `echo $cmakeFlags`
+```
+
 4. Build & Install
 ```bash
 sudo cmake --build build --target install
