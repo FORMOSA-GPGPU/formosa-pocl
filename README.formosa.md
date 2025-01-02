@@ -57,3 +57,15 @@ export AGENT_SOCKET_PATH=/tmp/casvp-ipc
 ```bash
 clinfo -l
 ```
+
+## Running PoCL with FORMOSA
+1. Set the environment variable
+```bash
+export AGENT_SOCKET_PATH=<path-to-casvp-ipc>
+export POCL_FORMOSA_CFLAGS=<kernel-compiler-flags>  # default: "-O1 -mllvm -fsa-pdom-level"
+export POCL_FORMOSA_LDFLAGS=<kernel-linker-flags>  # default: "-fuse-ld=lld -nostartfiles"
+```
+2. Run the OpenCL program
+```bash
+./path/to/your/opencl/program
+```

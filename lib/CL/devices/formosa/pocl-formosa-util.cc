@@ -335,19 +335,27 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
   int err;
   std::string llvm_path = FORMOSA_LLVM;
   std::string llvm_objdump_path = llvm_path + "/bin/llvm-objdump";
-  std::string build_cflags = pocl_get_string_option("POCL_FORMOSA_CFLAGS", "");
-  if (build_cflags == "") {
+  std::string build_cflags = "-mcpu=formosa-gpgpu ";
+  std::string extra_cflags = pocl_get_string_option("POCL_FORMOSA_CFLAGS", "");
+  if (extra_cflags == "") {
     POCL_MSG_WARN(
         "Environment variable 'POCL_FORMOSA_CFLAGS' is not set, default to "
-        "-mcpu=formosa-gpgpu -O1 -mllvm -fsa-pdom-level\n");
-    build_cflags = "-mcpu=formosa-gpgpu -O1 -mllvm -fsa-pdom-level";
+        "-O1 -mllvm -fsa-pdom-level\n");
+    build_cflags += "-O1 -mllvm -fsa-pdom-level";
+  } else {
+    build_cflags += extra_cflags;
   }
 
-  std::string build_ldflags =
+  std::string build_ldflags = "";
+  std::string extra_ldflags =
       pocl_get_string_option("POCL_FORMOSA_LDFLAGS", "");
-  if (build_ldflags == "") {
-    POCL_MSG_WARN("Environment variable 'POCL_FORMOSA_LDFLAGS' is not set\n");
-    build_ldflags = "-fuse-ld=lld -nostartfiles";
+  if (extra_ldflags == "") {
+    POCL_MSG_WARN(
+        "Environment variable 'POCL_FORMOSA_LDFLAGS' is not set, default to "
+        "-fuse-ld=lld -nostartfiles\n");
+    build_ldflags += "-fuse-ld=lld -nostartfiles";
+  } else {
+    build_ldflags += extra_ldflags;
   }
 
   char bitcode_path[POCL_MAX_PATHNAME_LENGTH];
