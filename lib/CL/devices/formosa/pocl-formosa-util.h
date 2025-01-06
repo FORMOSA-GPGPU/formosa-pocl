@@ -79,6 +79,8 @@ int fsa_write_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t value);
 
 int fsa_read_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t *value);
 
+void fsa_int_handler(int sig);
+
 int fsa_wait_ack(pocl_formosa_data_t *dd);
 
 int fsa_compile_program(char **kernel_names, int *num_kernels,

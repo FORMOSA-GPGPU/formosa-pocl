@@ -2,6 +2,8 @@
 
 #include <libcomm/comm.h>
 #include <libcomm/msg.h>
+#include <semaphore.h>
+#include <signal.h>
 
 #include <cstdio>
 #include <fstream>
@@ -48,6 +50,8 @@
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+
+static sem_t sem;
 
 int fsa_check_occupancy(uint32_t group_size, uint32_t *max_local_mem) {
   // check group size
@@ -151,13 +155,14 @@ int fsa_upload_kernel_file(const char *filename, pocl_formosa_data_t *dd) {
 
 int fsa_wait_ack(pocl_formosa_data_t *dd) {
   if (dd == nullptr) return -1;
-  uint64_t ack;  // acknowledge from device
-  int status;
-  do {
-    status = fsa_read_csr(dd, CASVP_FORMOSA_CSR_ACK, &ack);
-    if (status != 0) return -1;
-    nanosleep((const struct timespec[]){{0, 10000000}}, NULL);  // 10ms
-  } while (ack == 0);
+  sem_init(&sem, 0, 0);
+  sem_wait(&sem);    // Wait until the signal handler post the sem.
+  uint64_t ack = 0;  // acknowledge from device
+  int status = -1;
+  status = fsa_read_csr(dd, CASVP_FORMOSA_CSR_ACK, &ack);
+  if (ack != 1) return -1;
+  if (status != 0) return -1;
+  sem_destroy(&sem);
   return 0;
 }
 
@@ -182,6 +187,14 @@ int fsa_read_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t *value) {
 FSA_READ_CSR_FINALLY:
   msg_destroy(msg);
   return status;
+}
+
+void fsa_int_handler(int sig) {
+  if (sig == SIGUSR1) {
+    if (sem_post(&sem) < 0) {
+      std::cerr << "Received unexpected device interrupt.";
+    };
+  }
 }
 
 static int exec(const char *cmd, std::ostream &out) {
