@@ -66,12 +66,13 @@ zero_loop_end:
 
 main_entry:
   /* set argc and argv to 0 */
+  csrr t0, CASVP_FORMOSA_CSR_KERNEL_PC
   csrr a0, CASVP_FORMOSA_CSR_KERNEL_ARG
   li a1, 0
 
   /* jump to main program entry point */
   fsa.pri.raise.f
-  jal ra, trampoline
+  jalr ra, t0, 0
   fsa.pri.lower.f
 
   /* use ecall to terminate kernel programs */

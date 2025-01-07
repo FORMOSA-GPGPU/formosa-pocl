@@ -372,6 +372,11 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     if (err != 0) {
       POCL_ABORT("POCL_FORMOSA_RUN\n");
     }
+    char *trampoline_name = malloc(strlen(kernel->name) + 12);
+    sprintf(trampoline_name, "%s_trampoline", kernel->name);
+    uint64_t entry_point = fsa_get_trampoline_pc(sz_program_fsabin, trampoline_name);
+    free(trampoline_name);
+    fsa_write_csr(dd, CASVP_FORMOSA_CSR_KERNEL_PC, entry_point);
   }
 
   // launch kernel execution

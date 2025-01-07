@@ -21,7 +21,7 @@
 #include "pocl_util.h"
 
 #if LLVM_MAJOR >= 17
-#include "llvm/Transforms/IPO/Internalize.h"
+#include <llvm/Transforms/IPO/Internalize.h>
 #endif
 
 #include <LLVMUtils.h>
@@ -37,7 +37,11 @@
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Linker/Linker.h>
+#include <llvm/Object/ELFObjectFile.h>
+#include <llvm/Object/ObjectFile.h>
+#include <llvm/Object/SymbolicFile.h>
 #include <llvm/Support/FileSystem.h>
+#include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Transforms/Utils/Cloning.h>
@@ -227,8 +231,9 @@ static void createTrampolineFunction(
       llvm::FunctionType::get(voidType, {i8PtrType}, false);
 
   // Create the trampoline function
-  auto trampolineFunction = llvm::Function::Create(
-      trampolineType, llvm::Function::ExternalLinkage, "trampoline", module);
+  auto trampolineFunction =
+      llvm::Function::Create(trampolineType, llvm::Function::ExternalLinkage,
+                             function->getName() + "_trampoline", module);
 
   // Create a basic block in the trampoline function
   auto entryBlock =
@@ -441,13 +446,45 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
       return err;
     }
   }
+  return 0;
+}
 
-  POCL_MSG_PRINT_LLVM("running \"%s\"\n", ss_cmd.str().c_str());
-  err = exec(ss_cmd.str().c_str(), ss_out);
-  if (err != 0) {
-    POCL_MSG_ERR("%s\n", ss_out.str().c_str());
-    return err;
+uint64_t fsa_get_trampoline_pc(const char *elf_path, const char *kernel_name) {
+  auto bufferOrError = llvm::MemoryBuffer::getFile(std::string(elf_path));
+  if (!bufferOrError) {
+    POCL_ABORT("Error: failed to open ELF file %s\n", elf_path);
   }
 
+  // Parse ELF file
+  auto objOrError = llvm::object::ObjectFile::createELFObjectFile(
+      bufferOrError.get()->getMemBufferRef());
+  if (!objOrError) {
+    POCL_ABORT("Error: failed to parse ELF file %s\n", elf_path);
+  }
+
+  std::unique_ptr<llvm::object::ObjectFile> obj = std::move(objOrError.get());
+  for (const llvm::object::SymbolRef &symbol : obj->symbols()) {
+    llvm::Expected<llvm::object::SymbolRef::Type> typeOrError =
+        symbol.getType();
+    if (!typeOrError) {
+      POCL_ABORT("Error: failed to get symbol type\n");
+    }
+    if (*typeOrError != llvm::object::SymbolRef::ST_Function) continue;
+
+    llvm::Expected<llvm::StringRef> nameOrError = symbol.getName();
+    if (!nameOrError) {
+      POCL_ABORT("Error: failed to get symbol name\n");
+    }
+    if (nameOrError.get().str() == kernel_name) {
+      llvm::Expected<uint64_t> addrOrError = symbol.getAddress();
+      if (!addrOrError) {
+        POCL_ABORT("Error: failed to get symbol address\n");
+      }
+      POCL_MSG_PRINT_LLVM("Found symbol %s at 0x%lx\n", kernel_name,
+                          addrOrError.get());
+      return addrOrError.get();
+    }
+  }
+  POCL_ABORT("Error: failed to find symbol %s\n", kernel_name);
   return 0;
 }
