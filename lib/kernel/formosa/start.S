@@ -50,8 +50,8 @@ _start:
   fsa.pri.raise.t
   bnez a0, zero_loop_end  /* thread 0 is designated to clear BSS */
 
-  # la a0, _bss_start
-  # la a1, _bss_end
+  la a0, _bss_start
+  la a1, _bss_end
 
   bge a0, a1, zero_loop_end
 

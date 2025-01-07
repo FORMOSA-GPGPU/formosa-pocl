@@ -416,10 +416,13 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
   char kernel_util_path[POCL_MAX_PATHNAME_LENGTH];
   char start_file_path[POCL_MAX_PATHNAME_LENGTH];
   char include_path[POCL_MAX_PATHNAME_LENGTH];
+  char linker_script_path[POCL_MAX_PATHNAME_LENGTH];
   pocl_get_srcdir_or_datadir(kernel_util_path, "/lib/CL/devices", "",
                              "/formosa/kernel_util.cl");
   pocl_get_srcdir_or_datadir(start_file_path, "/lib/CL/devices", "",
                              "/formosa/start.S");
+  pocl_get_srcdir_or_datadir(linker_script_path, "/lib/CL/devices", "",
+                             "/formosa/link.ld");
   pocl_get_srcdir_or_datadir(include_path, "/lib/CL/devices", "",
                              "/formosa/include");
 
@@ -430,6 +433,8 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
                                    kernel_util_path,
                                    start_file_path,
                                    build_ldflags,
+                                   "-T",
+                                   linker_script_path,
                                    "-I",
                                    include_path,
                                    "-o",
