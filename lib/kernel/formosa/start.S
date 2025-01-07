@@ -1,4 +1,3 @@
-#include "casvp-config/casvp-config.h"
 .section .text
 
 .org 0x0
@@ -66,8 +65,8 @@ zero_loop_end:
 
 main_entry:
   /* set argc and argv to 0 */
-  csrr t0, CASVP_FORMOSA_CSR_KERNEL_PC
-  csrr a0, CASVP_FORMOSA_CSR_KERNEL_ARG
+  # csrr t0, xkernelpc
+  # csrr a0, xkernelarg
   li a1, 0
 
   /* jump to main program entry point */

@@ -60,7 +60,3 @@ target_include_directories(pocl-devices-formosa PRIVATE
                            ${CASVP_INSTALL_DIR}/include)
 
 target_link_libraries(pocl-devices-formosa PRIVATE comm)
-
-install(DIRECTORY "${CASVP_INSTALL_DIR}/include"
-        DESTINATION "${POCL_INSTALL_PRIVATE_DATADIR}/formosa"
-        COMPONENT "lib")

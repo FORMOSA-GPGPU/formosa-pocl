@@ -165,8 +165,7 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   dd->kernel_buffer = NULL;
   formosa_available = CL_TRUE;
 
-  // TODO: configure the base address of the global memory
-  fsaMemAllocInit(1024, CASVP_FORMOSA_GLOBAL_MEM_SIZE, 0);
+  fsaMemAllocInit(0x80000000, CASVP_FORMOSA_GLOBAL_MEM_SIZE, 0);
 
   return CL_SUCCESS;
 }
@@ -281,6 +280,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   // write context data
   fsa_write_csr(dd, CASVP_FORMOSA_CSR_DIM, pc->work_dim);
   fsa_write_csr(dd, CASVP_FORMOSA_CSR_LAUNCH_KERNEL_ID, kdata->kernel_id);
+  fsa_write_csr(dd, CASVP_FORMOSA_CSR_KERNEL_PC, 0x10000000);
   fsa_write_csr(dd, CASVP_FORMOSA_CSR_KERNEL_ARG, (uint64_t)addr);
   FSA_WRITE_GROUPED_CSR(dd, CASVP_FORMOSA_CSR_LOCAL_SIZE, pc->local_size);
   FSA_WRITE_GROUPED_CSR(dd, CASVP_FORMOSA_CSR_NUM_GROUPS, pc->num_groups);
@@ -376,7 +376,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     sprintf(trampoline_name, "%s_trampoline", kernel->name);
     uint64_t entry_point = fsa_get_trampoline_pc(sz_program_fsabin, trampoline_name);
     free(trampoline_name);
-    fsa_write_csr(dd, CASVP_FORMOSA_CSR_KERNEL_PC, entry_point);
+    // TODO: set kernel entry point
   }
 
   // launch kernel execution
