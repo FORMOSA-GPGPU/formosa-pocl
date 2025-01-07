@@ -415,15 +415,25 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
 
   char kernel_util_path[POCL_MAX_PATHNAME_LENGTH];
   char start_file_path[POCL_MAX_PATHNAME_LENGTH];
+  char include_path[POCL_MAX_PATHNAME_LENGTH];
   pocl_get_srcdir_or_datadir(kernel_util_path, "/lib/CL/devices", "",
                              "/formosa/kernel_util.cl");
   pocl_get_srcdir_or_datadir(start_file_path, "/lib/CL/devices", "",
                              "/formosa/start.S");
+  pocl_get_srcdir_or_datadir(include_path, "/lib/CL/devices", "",
+                             "/formosa/include");
 
   std::stringstream ss_cmd, ss_out;
-  std::vector<std::string> args = {
-      clang_path,      build_cflags,  bitcode_path, kernel_util_path,
-      start_file_path, build_ldflags, "-o",         elf_path};
+  std::vector<std::string> args = {clang_path,
+                                   build_cflags,
+                                   bitcode_path,
+                                   kernel_util_path,
+                                   start_file_path,
+                                   build_ldflags,
+                                   "-I",
+                                   include_path,
+                                   "-o",
+                                   elf_path};
   ss_cmd = generate_command(args);
   POCL_MSG_PRINT_LLVM("running \"%s\"\n", ss_cmd.str().c_str());
   err = exec(ss_cmd.str().c_str(), ss_out);

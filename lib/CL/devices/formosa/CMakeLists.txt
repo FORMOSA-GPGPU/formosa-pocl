@@ -62,6 +62,8 @@ target_include_directories(pocl-devices-formosa PRIVATE
 target_link_libraries(pocl-devices-formosa PRIVATE comm)
 
 install(FILES "kernel_util.cl" "start.S"
-              "${CASVP_INSTALL_DIR}/include/casvp-config/casvp-config.h"
+        DESTINATION "${POCL_INSTALL_PRIVATE_DATADIR}/formosa"
+        COMPONENT "lib")
+install(DIRECTORY "${CASVP_INSTALL_DIR}/include"
         DESTINATION "${POCL_INSTALL_PRIVATE_DATADIR}/formosa"
         COMPONENT "lib")
