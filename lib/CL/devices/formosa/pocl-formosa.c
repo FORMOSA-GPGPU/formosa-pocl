@@ -232,6 +232,9 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     } else {
       // scalar argument
       kargs_buffer_size += al->size;
+      if (al->size % word_size != 0) {
+        kargs_buffer_size += word_size - (al->size % word_size);
+      }
     }
   }
 
@@ -278,6 +281,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   // write context data
   fsa_write_csr(dd, CASVP_FORMOSA_CSR_DIM, pc->work_dim);
   fsa_write_csr(dd, CASVP_FORMOSA_CSR_LAUNCH_KERNEL_ID, kdata->kernel_id);
+  fsa_write_csr(dd, CASVP_FORMOSA_CSR_KERNEL_ARG, (uint64_t)addr);
   FSA_WRITE_GROUPED_CSR(dd, CASVP_FORMOSA_CSR_LOCAL_SIZE, pc->local_size);
   FSA_WRITE_GROUPED_CSR(dd, CASVP_FORMOSA_CSR_NUM_GROUPS, pc->num_groups);
 
@@ -321,6 +325,9 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
       memcpy(host_kargs_base_ptr + host_args_offset, al->value,
              al->size);  // scalar value
       host_args_offset += al->size;
+      if (al->size % word_size != 0) {
+        host_args_offset += word_size - (al->size % word_size);
+      }
     }
   }
 
