@@ -2,6 +2,7 @@
 
 #include <libcomm/comm.h>
 #include <libcomm/msg.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -152,6 +153,12 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   // Connect to virtual platform
   dd->client_fd = client_connect(getenv("AGENT_SOCKET_PATH"));
   if (dd->client_fd == -1) {
+    formosa_available = CL_FALSE;
+    return CL_DEVICE_NOT_FOUND;
+  }
+  // Register interrupt signal
+  signal(SIGUSR1, fsa_int_handler);
+  if (ipc_register_signal(dd->client_fd, SIGUSR1) == -1) {
     formosa_available = CL_FALSE;
     return CL_DEVICE_NOT_FOUND;
   }
