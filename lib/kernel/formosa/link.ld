@@ -21,6 +21,7 @@ SECTIONS {
 
 .text : {
   . = ALIGN(8);
+  _start = .;
   *(.text)
   *(.text.*)
   . = ALIGN(8);
