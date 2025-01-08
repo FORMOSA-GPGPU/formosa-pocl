@@ -1,0 +1,8 @@
+include:
+  - component: $CI_SERVER_FQDN/ci-registry/ai-review/ai-review@1.4.0
+    inputs:
+      review-word-limit: "200"
+      additional-prompt: "Please conduct a thorough and critical review of the code. I want you to identify potential mistakes, logical errors, poor coding practices, and areas for improvement. Do not hold back; provide direct and candid feedback."
+
+stages:
+  - review
