@@ -88,6 +88,8 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
 
 uint64_t fsa_get_trampoline_pc(const char *elf_path, const char *kernel_name);
 
+#define FSA_TASK_DISPATCHER_BASE 0x1000
+
 #define FSA_WRITE_GROUPED_CSR(dd, addr, value)             \
   do {                                                     \
     int err = fsa_write_csr((dd), (addr##_X), (value[0])); \

@@ -586,6 +586,7 @@ cl_int pocl_formosa_alloc_mem_obj(cl_device_id device, cl_mem mem_obj,
     temp->buf_address = (uint64_t)addr;
     temp->buf_size = mem_obj->size;
     temp->client_fd = dd->client_fd;
+    temp->msg_id = 0;
     err = fsa_copy_to_dev(temp, host_ptr, 0, mem_obj->size);
     if (err != 0) {
       fsaFree((void *)temp->buf_address);
@@ -596,6 +597,7 @@ cl_int pocl_formosa_alloc_mem_obj(cl_device_id device, cl_mem mem_obj,
     temp->buf_address = (uint64_t)addr;
     temp->buf_size = mem_obj->size;
     temp->client_fd = dd->client_fd;
+    temp->msg_id = 0;
   }
 
   p->mem_ptr = temp;

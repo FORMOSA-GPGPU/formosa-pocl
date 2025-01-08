@@ -140,6 +140,7 @@ int fsa_upload_kernel_file(const char *filename, pocl_formosa_data_t *dd) {
   dd->kernel_buffer->client_fd = dd->client_fd;
   dd->kernel_buffer->buf_size = size;
   dd->kernel_buffer->buf_address = (uint64_t)addr;
+  dd->kernel_buffer->msg_id = 0;
 
   status = fsa_copy_to_dev(dd->kernel_buffer, data, 0, size);
   if (status != 0) {
@@ -166,7 +167,8 @@ int fsa_wait_ack(pocl_formosa_data_t *dd) {
 
 int fsa_write_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t value) {
   if (dd == nullptr) return -1;
-  msg_t *msg = msg_create(dd->msg_id++, WRITE, 8, addr);
+  msg_t *msg =
+      msg_create(dd->msg_id++, WRITE, 8, FSA_TASK_DISPATCHER_BASE + addr);
   if (msg == nullptr) return -1;
   msg = msg_set_payload(msg, reinterpret_cast<uint8_t *>(&value));
   if (msg == nullptr) return -1;
@@ -177,7 +179,8 @@ int fsa_write_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t value) {
 
 int fsa_read_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t *value) {
   if (dd == nullptr) return -1;
-  msg_t *msg = msg_create(dd->msg_id++, READ, 8, addr);
+  msg_t *msg =
+      msg_create(dd->msg_id++, READ, 8, FSA_TASK_DISPATCHER_BASE + addr);
   if (msg == nullptr) return -1;
   int status = ipc_send_read_msg(dd->client_fd, msg);
   if (status != 0) goto FSA_READ_CSR_FINALLY;
