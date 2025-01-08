@@ -39,29 +39,35 @@ _start:
   mv x30, x0
   mv x31, x0
 
+  /*
+    calculate workitem local id
+    workgroupThreadID = warpSize * warpID + warpThreadID
+    workgroupThreadID.z = workgroupThreadID / (workgroupDim.x * workgroupDim.y)
+    remaining = workgroupThreadID % (workgroupDim.x * workgroupDim.y)
+    workgroupThreadID.y = remaining / workgroupDim.x
+    workgroupThreadID.x = remaining % workgroupDim.x
+  */
+  # csrr t0, xwid     /* get warp id */
+  # csrr t1, xnw      /* get number of warps */
+  mul  t0, t0, t1
+  csrr t1, xtid     /* get thread id in a warp */
+  add  t0, t0, t1   /* thread id */
+  csrr t1, xclsx    /* get workgroup size x */
+  csrr t2, xclsy    /* get workgroup size y */
+  mul  t2, t1, t2   /* workgroupDim.x * workgroupDim.y */
+  div  t3, t0, t2   /* thread id x */
+  csrw xcllz, t3    /* set thread id z */
+  rem  t0, t0, t2   /* remaining */
+  div  t3, t0, t1   /* thread id y */
+  csrw xclly, t3    /* set thread id y */
+  rem  t0, t0, t1   /* thread id x */
+  csrw xcllx, t0    /* set thread id x */
+  
   /* stack initilization */
-  # la sp, _stack_start
+  la sp, _stack_start
   csrr a0, mhartid  /* global thread id */
   slli a1, a0, 16   /* stack for each thread is 64 KiB */
   sub sp, sp, a1
-
-  /* clear BSS */
-  fsa.pri.raise.t
-  bnez a0, zero_loop_end  /* thread 0 is designated to clear BSS */
-
-  la a0, _bss_start
-  la a1, _bss_end
-
-  bge a0, a1, zero_loop_end
-
-zero_loop:
-  sd x0, 0(a0)
-  addi a0, a0, 8
-  ble a0, a1, zero_loop
-
-zero_loop_end:
-  fsa.pri.lower.t
-  fsa.bar 0, 0  /* wait until all warps reach here */
 
 main_entry:
   /* set argc and argv to 0 */
