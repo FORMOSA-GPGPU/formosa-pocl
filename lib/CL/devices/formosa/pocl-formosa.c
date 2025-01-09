@@ -171,20 +171,20 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
 }
 
 cl_int pocl_formosa_uninit(unsigned j, cl_device_id device) {
-  // pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
-  // if (dd == NULL) return CL_SUCCESS;
-  //
-  // POCL_DESTROY_LOCK(dd->compile_lock);
-  // POCL_DESTROY_LOCK(dd->cq_lock);
-  // if (dd->client_fd != -1) {
-  //   close(dd->client_fd);
-  //   dd->client_fd = -1;
-  // }
-  // if (dd->kernel_buffer != NULL) {
-  //   free(dd->kernel_buffer);
-  // }
-  // POCL_MEM_FREE(device->data);
-  // device->data = NULL;
+  pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
+  if (dd == NULL) return CL_SUCCESS;
+
+  POCL_DESTROY_LOCK(dd->compile_lock);
+  POCL_DESTROY_LOCK(dd->cq_lock);
+  if (dd->client_fd != -1) {
+    close(dd->client_fd);
+    dd->client_fd = -1;
+  }
+  if (dd->kernel_buffer != NULL) {
+    POCL_MEM_FREE(dd->kernel_buffer);
+  }
+  POCL_MEM_FREE(device->data);
+  device->data = NULL;
   return CL_SUCCESS;
 }
 
@@ -375,7 +375,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     char *trampoline_name = malloc(strlen(kernel->name) + 12);
     sprintf(trampoline_name, "%s_trampoline", kernel->name);
     uint64_t entry_point = fsa_get_trampoline_pc(sz_program_fsabin, trampoline_name);
-    free(trampoline_name);
+    POCL_MEM_FREE(trampoline_name);
     // TODO: set kernel entry point
   }
 
@@ -538,7 +538,7 @@ cl_int pocl_formosa_free_kernel(cl_device_id device, cl_program program,
 
 cl_int pocl_formosa_init_context(cl_device_id device, cl_context context) {
   pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
-  if (NULL == dd) return CL_SUCCESS;
+  if (dd == NULL) return CL_SUCCESS;
 
   dd->context_ref_count++;
 
@@ -547,7 +547,7 @@ cl_int pocl_formosa_init_context(cl_device_id device, cl_context context) {
 
 cl_int pocl_formosa_free_context(cl_device_id device, cl_context context) {
   pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
-  if (NULL == dd) return CL_SUCCESS;
+  if (dd == NULL) return CL_SUCCESS;
 
   dd->context_ref_count--;
   if (dd->context_ref_count == 0) {
@@ -615,7 +615,7 @@ void pocl_formosa_free(cl_device_id device, cl_mem mem_obj) {
     pocl_release_mem_host_ptr(mem_obj);
   }
   fsaFree((void *)fb->buf_address);
-  free(fb);
+  POCL_MEM_FREE(fb);
   p->mem_ptr = NULL;
 }
 
@@ -651,6 +651,7 @@ void pocl_formosa_submit(_cl_command_node *node, cl_command_queue cq) {
 
 void pocl_formosa_join(cl_device_id device, cl_command_queue cq) {
   pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
+  if (dd == NULL) return;
 
   POCL_LOCK(dd->cq_lock);
   formosa_command_scheduler(dd);
@@ -659,6 +660,7 @@ void pocl_formosa_join(cl_device_id device, cl_command_queue cq) {
 
 void pocl_formosa_flush(cl_device_id device, cl_command_queue cq) {
   pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
+  if (dd == NULL) return;
 
   POCL_LOCK(dd->cq_lock);
   formosa_command_scheduler(dd);
@@ -668,6 +670,8 @@ void pocl_formosa_flush(cl_device_id device, cl_command_queue cq) {
 void pocl_formosa_notify(cl_device_id device, cl_event event,
                          cl_event finished) {
   pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
+  if (dd == NULL) return;
+  
   _cl_command_node *volatile node = event->command;
 
   if (finished->status < CL_COMPLETE) {
