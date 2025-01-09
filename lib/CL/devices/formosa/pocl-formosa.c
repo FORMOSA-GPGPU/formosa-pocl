@@ -268,20 +268,20 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   // allocate kernel arguments buffer
   formosa_buffer_data_t fsa_kargs_buffer;
   memset(&fsa_kargs_buffer, 0, sizeof(formosa_buffer_data_t));
-  void *addr;
-  err = fsaMalloc(&addr, kargs_buffer_size);
+  void *device_args_buffer_addr;
+  err = fsaMalloc(&device_args_buffer_addr, kargs_buffer_size);
   if (err != 0) {
     POCL_ABORT("POCL_FORMOSA_RUN\n");
   }
-  fsa_kargs_buffer.buf_address = (uint64_t)addr;
+  fsa_kargs_buffer.buf_address = (uint64_t)device_args_buffer_addr;
   fsa_kargs_buffer.buf_size = kargs_buffer_size;
   fsa_kargs_buffer.client_fd = dd->client_fd;
 
   // write context data
   fsa_write_csr(dd, CASVP_FORMOSA_CSR_DIM, pc->work_dim);
   fsa_write_csr(dd, CASVP_FORMOSA_CSR_LAUNCH_KERNEL_ID, kdata->kernel_id);
-  fsa_write_csr(dd, CASVP_FORMOSA_CSR_KERNEL_PC, 0x10000000);
-  fsa_write_csr(dd, CASVP_FORMOSA_CSR_KERNEL_ARG, (uint64_t)addr);
+  fsa_write_csr(dd, CASVP_FORMOSA_CSR_KERNEL_ARG,
+                (uint64_t)device_args_buffer_addr);
   FSA_WRITE_GROUPED_CSR(dd, CASVP_FORMOSA_CSR_LOCAL_SIZE, pc->local_size);
   FSA_WRITE_GROUPED_CSR(dd, CASVP_FORMOSA_CSR_NUM_GROUPS, pc->num_groups);
 
@@ -312,7 +312,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
             (formosa_buffer_data_t *)m->device_ptrs[cmd->device->global_mem_id]
                 .mem_ptr;
         uint64_t dev_mem_addr = buf_data->buf_address + al->offset;
-        memcpy(host_kargs_base_ptr + host_args_offset, &buf_data->buf_address,
+        memcpy(host_kargs_base_ptr + host_args_offset, &dev_mem_addr,
                ptr_size);  // pointer value
         host_args_offset += ptr_size;
       }
@@ -356,27 +356,21 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
 
   // upload kernel to device
   if (dd->kernel_buffer == NULL) {
-    char sz_program_bc[POCL_MAX_PATHNAME_LENGTH];
     char sz_program_fsabin[POCL_MAX_PATHNAME_LENGTH];
-
-    pocl_cache_program_bc_path(sz_program_bc, program, device_i);
-    char *last_dot = strrchr(sz_program_bc, '.');
-    if (last_dot != NULL) {
-      *last_dot = '\0';
-    }
-
-    strcpy(sz_program_fsabin, sz_program_bc);
-    strncat(sz_program_fsabin, ".fsa.bin", POCL_MAX_PATHNAME_LENGTH - 1);
-
-    err = fsa_upload_kernel_file(sz_program_fsabin, dd);
+    err = fsa_get_elf_name(program, device_i, sz_program_fsabin);
+    err |= fsa_upload_kernel_file(sz_program_fsabin, dd);
     if (err != 0) {
       POCL_ABORT("POCL_FORMOSA_RUN\n");
     }
     char *trampoline_name = malloc(strlen(kernel->name) + 12);
     sprintf(trampoline_name, "%s_trampoline", kernel->name);
-    uint64_t entry_point = fsa_get_trampoline_pc(sz_program_fsabin, trampoline_name);
+    uint64_t entry_point =
+        fsa_get_trampoline_pc(sz_program_fsabin, trampoline_name);
     POCL_MEM_FREE(trampoline_name);
-    // TODO: set kernel entry point
+    err = fsa_write_csr(dd, CASVP_FORMOSA_CSR_KERNEL_PC, entry_point);
+    if (err != 0) {
+      POCL_ABORT("POCL_FORMOSA_RUN\n");
+    }
   }
 
   // launch kernel execution
@@ -429,22 +423,11 @@ int pocl_formosa_post_build_program(cl_program program, cl_uint device_i) {
     pdata = (formosa_program_data_t *)calloc(1, sizeof(formosa_program_data_t));
     pdata->kernel_names = NULL;
 
-    char program_bc[POCL_MAX_PATHNAME_LENGTH];
     char fsa_program_bin[POCL_MAX_PATHNAME_LENGTH];
-
-    pocl_cache_program_bc_path(program_bc, program, device_i);
-
-    // remove extension name
-    char *last_dot = strrchr(program_bc, '.');
-    if (last_dot != NULL) *last_dot = '\0';
-
-    strcpy(fsa_program_bin, program_bc);
-    strncat(fsa_program_bin, ".fsa.bin", POCL_MAX_PATHNAME_LENGTH - 1);
-
+    result = fsa_get_elf_name(program, device_i, fsa_program_bin);
+    if (result != 0) break;
     result = fsa_compile_program(&pdata->kernel_names, &pdata->num_kernels,
                                  fsa_program_bin, program->llvm_irs[device_i]);
-    if (result != CL_SUCCESS) break;
-
   } while (0);
 
   program->data[device_i] = pdata;
@@ -487,28 +470,25 @@ cl_int pocl_formosa_create_kernel(cl_device_id device, cl_program program,
     return CL_SUCCESS;
   }
 
-  do {
-    // device-specific program data
-    formosa_program_data_t *pdata =
-        (formosa_program_data_t *)program->data[program_device_i];
-    assert(pdata != NULL);
+  // device-specific program data
+  formosa_program_data_t *pdata =
+      (formosa_program_data_t *)program->data[program_device_i];
+  assert(pdata != NULL);
 
-    const char *current = pdata->kernel_names;
-    int i = 0;
-    int found = 0;
-    for (; i < pdata->num_kernels; ++i) {
-      if (strcmp(current, kernel->name) == 0) {
-        found = 1;
-        break;
-      }
-      current += strlen(current) + 1;
+  const char *current = pdata->kernel_names;
+  int i = 0;
+  int found = 0;
+  for (; i < pdata->num_kernels; ++i) {
+    if (strcmp(current, kernel->name) == 0) {
+      found = 1;
+      break;
     }
-    assert(found);
-    kdata = (void *)calloc(1, sizeof(formosa_kernel_data_t));
-    kdata->kernel_id = i;
-    ++kdata->ref_count;
-
-  } while (0);
+    current += strlen(current) + 1;
+  }
+  assert(found);
+  kdata = (void *)calloc(1, sizeof(formosa_kernel_data_t));
+  kdata->kernel_id = i;
+  ++kdata->ref_count;
 
   meta->data[program_device_i] = kdata;
 
@@ -671,7 +651,7 @@ void pocl_formosa_notify(cl_device_id device, cl_event event,
                          cl_event finished) {
   pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
   if (dd == NULL) return;
-  
+
   _cl_command_node *volatile node = event->command;
 
   if (finished->status < CL_COMPLETE) {

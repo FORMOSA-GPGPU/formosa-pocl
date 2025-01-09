@@ -14,6 +14,7 @@
 #include "falloc/fsa_mem_allocator.h"
 #include "pocl-formosa-util.h"
 #include "pocl.h"
+#include "pocl_cache.h"
 #include "pocl_cl.h"
 #include "pocl_debug.h"
 #include "pocl_file_util.h"
@@ -103,6 +104,21 @@ int fsa_copy_from_dev(formosa_buffer_data_t *buffer_data, void *host_ptr,
 FSA_COPY_FROM_DEV_FINALLY:
   msg_destroy(msg);
   return status;
+}
+
+int fsa_get_elf_name(cl_program program, cl_uint device_i, char *elf_name) {
+  if (program == nullptr || elf_name == nullptr) return -1;
+
+  char program_bc[POCL_MAX_PATHNAME_LENGTH];
+  pocl_cache_program_bc_path(program_bc, program, device_i);
+
+  // remove extension name
+  char *last_dot = strrchr(program_bc, '.');
+  if (last_dot != NULL) *last_dot = '\0';
+
+  strcpy(elf_name, program_bc);
+  strncat(elf_name, ".fsa.bin", POCL_MAX_PATHNAME_LENGTH - 1);
+  return 0;
 }
 
 int fsa_upload_kernel_file(const char *filename, pocl_formosa_data_t *dd) {
