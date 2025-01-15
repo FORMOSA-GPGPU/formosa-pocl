@@ -47,8 +47,8 @@ _start:
     workgroupThreadID.y = remaining / workgroupDim.x
     workgroupThreadID.x = remaining % workgroupDim.x
   */
-  # csrr t0, xwid     /* get warp id */
-  # csrr t1, xnw      /* get number of warps */
+  csrr t0, xwid     /* get warp id */
+  csrr t1, xnw      /* get number of warps */
   mul  t0, t0, t1
   csrr t1, xtid     /* get thread id in a warp */
   add  t0, t0, t1   /* thread id */
@@ -71,8 +71,8 @@ _start:
 
 main_entry:
   /* set argc and argv to 0 */
-  # csrr t0, xkernelpc
-  # csrr a0, xkernelarg
+  csrr t0, xkernelpc
+  csrr a0, xkernelarg
   li a1, 0
 
   /* jump to main program entry point */
