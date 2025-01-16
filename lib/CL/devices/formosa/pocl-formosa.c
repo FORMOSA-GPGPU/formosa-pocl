@@ -199,7 +199,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
       (formosa_program_data_t *)program->data[device_i];
   formosa_kernel_data_t *kdata = (formosa_kernel_data_t *)meta->data[device_i];
   struct pocl_context *pc = &cmd->command.run.pc;
-  int err;
+  int err = 0;
 
   uint32_t num_groups = 1;
   uint32_t group_size = 1;
@@ -381,22 +381,22 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
 
   // wait for the execution to complete
   err = fsa_wait_ack(dd);
-  if (err != 0) {
-    POCL_ABORT("POCL_FORMOSA_RUN\n");
-  }
+  // if (err != 0) {
+  //   POCL_ABORT("POCL_FORMOSA_RUN\n");
+  // }
 
   // release arguments device buffer
-  err = fsaFree((void *)fsa_kargs_buffer.buf_address);
-  if (err != 0) {
-    POCL_ABORT("POCL_FORMOSA_RUN\n");
-  }
+  // err = fsaFree((void *)fsa_kargs_buffer.buf_address);
+  // if (err != 0) {
+  //   POCL_ABORT("POCL_FORMOSA_RUN\n");
+  // }
 
-  // release kernel buffer
-  err = fsaFree((void *)dd->kernel_buffer->buf_address);
-  dd->kernel_buffer = NULL;
-  if (err != 0) {
-    POCL_ABORT("POCL_FORMOSA_RUN\n");
-  }
+  // // release kernel buffer
+  // err = fsaFree((void *)dd->kernel_buffer->buf_address);
+  // dd->kernel_buffer = NULL;
+  // if (err != 0) {
+  //   POCL_ABORT("POCL_FORMOSA_RUN\n");
+  // }
 }
 
 /**************************
@@ -588,7 +588,7 @@ void pocl_formosa_free(cl_device_id device, cl_mem mem_obj) {
   pocl_mem_identifier *p = &mem_obj->device_ptrs[device->global_mem_id];
   cl_mem_flags flags = mem_obj->flags;
   formosa_buffer_data_t *fb = (formosa_buffer_data_t *)p->mem_ptr;
-  if (fb) {
+  if (!fb) {
     POCL_ABORT("FORMOSA: Memory flag not supported");
   }
   if (flags & CL_MEM_ALLOC_HOST_PTR) {
