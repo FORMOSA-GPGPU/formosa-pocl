@@ -358,7 +358,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   if (dd->kernel_buffer == NULL) {
     char sz_program_fsabin[POCL_MAX_PATHNAME_LENGTH];
     err = fsa_get_elf_name(program, device_i, sz_program_fsabin);
-    err |= fsa_upload_kernel_file(sz_program_fsabin, dd);
+    err |= fsa_upload_kernel_sections(sz_program_fsabin, dd);
     if (err != 0) {
       POCL_ABORT("POCL_FORMOSA_RUN\n");
     }

@@ -38,6 +38,7 @@
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Linker/Linker.h>
+#include <llvm/Object/ELF.h>
 #include <llvm/Object/ELFObjectFile.h>
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Object/SymbolicFile.h>
@@ -121,51 +122,56 @@ int fsa_get_elf_name(cl_program program, cl_uint device_i, char *elf_name) {
   return 0;
 }
 
-int fsa_upload_kernel_file(const char *filename, pocl_formosa_data_t *dd) {
-  if (filename == nullptr || dd == nullptr) return -1;
-  std::ifstream file(filename);
-  if (!file) {
-    std::cerr << "Error: failed to open kernel file " << filename << std::endl;
-    return -1;
+int fsa_upload_kernel_sections(const char *elf_file, pocl_formosa_data_t *dd) {
+  if (elf_file == nullptr || dd == nullptr) return -1;
+  auto bufferOrError = llvm::MemoryBuffer::getFile(std::string(elf_file));
+  if (!bufferOrError) {
+    POCL_ABORT("Error: failed to open ELF file %s\n", elf_file);
   }
-  file.seekg(0, file.end);
-  uint64_t size = file.tellg();
-  file.seekg(0, file.beg);
-  char *data = new char[size];
-  if (data == NULL) {
-    std::cerr << "Error: failed to allocate memory for kernel" << std::endl;
-    file.close();
-    return -1;
-  }
-  file.read(data, size);
-  file.close();
+  auto buffer = std::move(bufferOrError.get());
 
-  int status = 0;
-  dd->kernel_buffer = new formosa_buffer_data_t;
-  if (dd->kernel_buffer == nullptr) {
-    status = -1;
-    goto UPLOAD_KERNEL_FILE_ERROR;
+  // Parse ELF file
+  auto elfOrError =
+      llvm::object::ELF64LEObjectFile::create(buffer->getMemBufferRef());
+  if (!elfOrError) {
+    POCL_ABORT("Error: failed to parse ELF file %s\n", elf_file);
   }
 
-  void *addr;
-  status = fsaMalloc(&addr, size);
-  if (status != 0) {
-    goto UPLOAD_KERNEL_FILE_ERROR;
-  }
+  for (const llvm::object::SectionRef &section : (*elfOrError).sections()) {
+    llvm::StringRef name;
+    if (auto nameOrError = section.getName()) {
+      name = nameOrError.get();
+    } else {
+      POCL_ABORT("Error: failed to get section name\n");
+    }
 
-  dd->kernel_buffer->client_fd = dd->client_fd;
-  dd->kernel_buffer->buf_size = size;
-  dd->kernel_buffer->buf_address = (uint64_t)addr;
-  dd->kernel_buffer->msg_id = 0;
+    if (name.starts_with(".text") || name.starts_with(".rodata") ||
+        name.starts_with(".data") || name.starts_with(".bss")) {
+      llvm::StringRef data;
+      if (auto dataOrError = section.getContents()) {
+        data = dataOrError.get();
+      } else {
+        POCL_ABORT("Error: failed to get section contents\n");
+      }
 
-  status = fsa_copy_to_dev(dd->kernel_buffer, data, 0, size);
-  if (status != 0) {
-    fsaFree(static_cast<void *>(addr));
-  UPLOAD_KERNEL_FILE_ERROR:
-    POCL_MEM_FREE(dd->kernel_buffer);
+      if (data.empty()) continue;
+
+      // upload to corresponding address
+      uint64_t addr = section.getAddress();
+
+      formosa_buffer_data_t buffer_data;
+      buffer_data.client_fd = dd->client_fd;
+      buffer_data.buf_size = data.size();
+      buffer_data.buf_address = addr;
+      buffer_data.msg_id = 0;
+
+      int status = fsa_copy_to_dev(&buffer_data, data.data(), 0, data.size());
+      if (status != 0) {
+        POCL_ABORT("Error: failed to upload section %s\n", name.str().c_str());
+      }
+    }
   }
-  delete[] data;
-  return status;
+  return 0;
 }
 
 int fsa_wait_ack(pocl_formosa_data_t *dd) {
