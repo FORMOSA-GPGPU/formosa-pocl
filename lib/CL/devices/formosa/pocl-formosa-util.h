@@ -72,8 +72,10 @@ int fsa_copy_to_dev(formosa_buffer_data_t *buffer_data, const void *host_ptr,
 int fsa_copy_from_dev(formosa_buffer_data_t *buffer_data, void *host_ptr,
                       uint64_t src_offset, size_t size);
 
-int fsa_upload_kernel_file(const char *filename,
-                           pocl_formosa_data_t *formosa_data);
+int fsa_get_elf_name(cl_program program, cl_uint device_i, char *elf_name);
+
+int fsa_upload_kernel_sections(const char *filename,
+                               pocl_formosa_data_t *formosa_data);
 
 int fsa_write_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t value);
 
@@ -84,7 +86,11 @@ void fsa_int_handler(int sig);
 int fsa_wait_ack(pocl_formosa_data_t *dd);
 
 int fsa_compile_program(char **kernel_names, int *num_kernels,
-                            char *str_program_fsa_bin, void *llvm_module);
+                        char *str_program_fsa_bin, void *llvm_module);
+
+uint64_t fsa_get_symbol_pc(const char *elf_path, const char *symbol_name);
+
+#define FSA_TASK_DISPATCHER_BASE 0x1000
 
 #define FSA_WRITE_GROUPED_CSR(dd, addr, value)             \
   do {                                                     \
