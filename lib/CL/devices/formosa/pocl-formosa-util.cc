@@ -181,8 +181,17 @@ int fsa_wait_ack(pocl_formosa_data_t *dd) {
   uint64_t ack = 0;  // acknowledge from device
   int status = -1;
   status = fsa_read_csr(dd, CASVP_FORMOSA_CSR_ACK, &ack);
-  if (ack != 1) return -1;
-  if (status != 0) return -1;
+  if (ack != 0) {
+    POCL_MSG_ERR("Error: unexpected acknowledge from device (%d)\n", ack);
+    return -1;
+  }
+  // TODO: check status.
+
+  status = fsa_write_csr(dd, CASVP_FORMOSA_CSR_ACK, 1);
+  if (status != 0) {
+    POCL_MSG_ERR("Error: failed to read acknowledge from device (%d)\n", status);
+    return -1;
+  }
   sem_destroy(&sem);
   return 0;
 }
@@ -489,7 +498,7 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
   return 0;
 }
 
-uint64_t fsa_get_trampoline_pc(const char *elf_path, const char *kernel_name) {
+uint64_t fsa_get_symbol_pc(const char *elf_path, const char *symbol_name) {
   auto bufferOrError = llvm::MemoryBuffer::getFile(std::string(elf_path));
   if (!bufferOrError) {
     POCL_ABORT("Error: failed to open ELF file %s\n", elf_path);
@@ -509,22 +518,21 @@ uint64_t fsa_get_trampoline_pc(const char *elf_path, const char *kernel_name) {
     if (!typeOrError) {
       POCL_ABORT("Error: failed to get symbol type\n");
     }
-    if (*typeOrError != llvm::object::SymbolRef::ST_Function) continue;
 
     llvm::Expected<llvm::StringRef> nameOrError = symbol.getName();
     if (!nameOrError) {
       POCL_ABORT("Error: failed to get symbol name\n");
     }
-    if (nameOrError.get().str() == kernel_name) {
+    if (nameOrError.get().str() == symbol_name) {
       llvm::Expected<uint64_t> addrOrError = symbol.getAddress();
       if (!addrOrError) {
         POCL_ABORT("Error: failed to get symbol address\n");
       }
-      POCL_MSG_PRINT_LLVM("Found symbol %s at 0x%lx\n", kernel_name,
+      POCL_MSG_PRINT_LLVM("Found symbol %s at 0x%lx\n", symbol_name,
                           addrOrError.get());
       return addrOrError.get();
     }
   }
-  POCL_ABORT("Error: failed to find symbol %s\n", kernel_name);
+  POCL_ABORT("Error: failed to find symbol %s\n", symbol_name);
   return 0;
 }

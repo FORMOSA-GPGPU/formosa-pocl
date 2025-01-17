@@ -88,7 +88,7 @@ int fsa_wait_ack(pocl_formosa_data_t *dd);
 int fsa_compile_program(char **kernel_names, int *num_kernels,
                         char *str_program_fsa_bin, void *llvm_module);
 
-uint64_t fsa_get_trampoline_pc(const char *elf_path, const char *kernel_name);
+uint64_t fsa_get_symbol_pc(const char *elf_path, const char *symbol_name);
 
 #define FSA_TASK_DISPATCHER_BASE 0x1000
 

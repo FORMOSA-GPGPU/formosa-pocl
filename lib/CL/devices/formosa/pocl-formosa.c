@@ -364,10 +364,11 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     }
     char *trampoline_name = malloc(strlen(kernel->name) + 12);
     sprintf(trampoline_name, "%s_trampoline", kernel->name);
-    uint64_t entry_point =
-        fsa_get_trampoline_pc(sz_program_fsabin, trampoline_name);
+    uint64_t kernel_pc = fsa_get_symbol_pc(sz_program_fsabin, trampoline_name);
     POCL_MEM_FREE(trampoline_name);
-    err = fsa_write_csr(dd, CASVP_FORMOSA_CSR_KERNEL_PC, entry_point);
+    uint64_t entry_pc = fsa_get_symbol_pc(sz_program_fsabin, "_start");
+    err = fsa_write_csr(dd, CASVP_FORMOSA_CSR_KERNEL_PC, kernel_pc);
+    err |= fsa_write_csr(dd, CASVP_FORMOSA_CSR_ENTRY_PC, entry_pc);
     if (err != 0) {
       POCL_ABORT("POCL_FORMOSA_RUN\n");
     }
@@ -381,9 +382,9 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
 
   // wait for the execution to complete
   err = fsa_wait_ack(dd);
-  // if (err != 0) {
-  //   POCL_ABORT("POCL_FORMOSA_RUN\n");
-  // }
+  if (err != 0) {
+    POCL_ABORT("POCL_FORMOSA_RUN\n");
+  }
 
   // release arguments device buffer
   // err = fsaFree((void *)fsa_kargs_buffer.buf_address);
