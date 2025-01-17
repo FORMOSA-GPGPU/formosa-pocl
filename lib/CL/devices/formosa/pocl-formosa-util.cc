@@ -55,12 +55,13 @@ static sem_t sem;
 
 int fsa_check_occupancy(uint32_t group_size, uint32_t *max_local_mem) {
   // check group size
-  uint64_t warps_per_core, threads_per_warp;
+  uint32_t warps_per_core = CASVP_FORMOSA_WARPS_PER_CORE;
+  uint32_t threads_per_warp = CASVP_FORMOSA_THREADS_PER_WARP;
   uint32_t threads_per_core = warps_per_core * threads_per_warp;
   if (group_size > threads_per_core) {
-    printf(
-        "Error: cannot schedule kernel with group_size > threads_per_core "
-        "(%d,%d)\n",
+    POCL_MSG_ERR(
+        "Error: cannot schedule kernel with group_size (%d) > threads_per_core "
+        "(%d)\n",
         group_size, threads_per_core);
     return -1;
   }
@@ -182,14 +183,15 @@ int fsa_wait_ack(pocl_formosa_data_t *dd) {
   int status = -1;
   status = fsa_read_csr(dd, CASVP_FORMOSA_CSR_ACK, &ack);
   if (ack != 0) {
-    POCL_MSG_ERR("Error: unexpected acknowledge from device (%d)\n", ack);
+    POCL_MSG_ERR("Error: unexpected acknowledge from device (%ld)\n", ack);
     return -1;
   }
   // TODO: check status.
 
   status = fsa_write_csr(dd, CASVP_FORMOSA_CSR_ACK, 1);
   if (status != 0) {
-    POCL_MSG_ERR("Error: failed to read acknowledge from device (%d)\n", status);
+    POCL_MSG_ERR("Error: failed to read acknowledge from device (%d)\n",
+                 status);
     return -1;
   }
   sem_destroy(&sem);
