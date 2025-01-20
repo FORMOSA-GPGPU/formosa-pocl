@@ -41,27 +41,23 @@ _start:
 
   /*
     calculate workitem local id
-    workgroupThreadID = warpSize * warpID + warpThreadID
-    workgroupThreadID.z = workgroupThreadID / (workgroupDim.x * workgroupDim.y)
-    remaining = workgroupThreadID % (workgroupDim.x * workgroupDim.y)
-    workgroupThreadID.y = remaining / workgroupDim.x
-    workgroupThreadID.x = remaining % workgroupDim.x
+    linear thread id = mhartid
+    local id z (xcllz) = linear thread id / (group size x * group size y)
+    remaining = linear thread id % (group size x * group size y)
+    local id y (xclly) = remaining / group size x
+    local id x (xcllx) = remaining % group size x
   */
-  csrr t0, xwid     /* get warp id */
-  csrr t1, xnw      /* get number of warps */
-  mul  t0, t0, t1
-  csrr t1, xtid     /* get thread id in a warp */
-  add  t0, t0, t1   /* thread id */
+  csrr t0, mhartid  /* linear thread id */
   csrr t1, xclsx    /* get workgroup size x */
   csrr t2, xclsy    /* get workgroup size y */
-  mul  t2, t1, t2   /* workgroupDim.x * workgroupDim.y */
-  div  t3, t0, t2   /* thread id x */
-  csrw xcllz, t3    /* set thread id z */
+  mul  t2, t1, t2   /* group size x * group size y */
+  div  t3, t0, t2   /* local id x */
+  csrw xcllz, t3    /* set local id z */
   rem  t0, t0, t2   /* remaining */
-  div  t3, t0, t1   /* thread id y */
-  csrw xclly, t3    /* set thread id y */
-  rem  t0, t0, t1   /* thread id x */
-  csrw xcllx, t0    /* set thread id x */
+  div  t3, t0, t1   /* local id y */
+  csrw xclly, t3    /* set local id y */
+  rem  t0, t0, t1   /* local id x */
+  csrw xcllx, t0    /* set local id x */
   
   /* stack initilization */
   la sp, _stack_start
@@ -80,6 +76,9 @@ main_entry:
   jalr ra, t0, 0
   fsa.pri.lower.f
 
+  /* flush all caches */
+  // fence  // TODO: uncomment this line when fence instruction is supported
+ 
   /* use ecall to terminate kernel programs */
   ecall
 
