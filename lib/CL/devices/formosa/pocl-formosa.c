@@ -11,7 +11,6 @@
 #include "common_driver.h"
 #include "falloc/fsa_mem_allocator.h"
 #include "pocl-formosa-util.h"
-#include "pocl_cache.h"
 #include "pocl_llvm.h"
 #include "pocl_util.h"
 
@@ -121,7 +120,6 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   device->kernellib_name = "kernel-riscv64-formosa";
   device->kernellib_fallback_name = NULL;
   device->kernellib_subdir = "formosa";
-  device->extensions = "cl_khr_int64 cl_khr_byte_addressable_store";
 
   device->image_support = CL_FALSE;
 
@@ -165,7 +163,7 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   dd->kernel_buffer = NULL;
   formosa_available = CL_TRUE;
 
-  fsaMemAllocInit(0x80000000, CASVP_FORMOSA_GLOBAL_MEM_SIZE, 0);
+  fsaMemAllocInit(FSA_GLOBAL_MEM_BASE, CASVP_FORMOSA_GLOBAL_MEM_SIZE, 0);
 
   return CL_SUCCESS;
 }

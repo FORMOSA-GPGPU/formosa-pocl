@@ -6,7 +6,6 @@
 #include <signal.h>
 
 #include <cstdio>
-#include <fstream>
 #include <iostream>
 #include <sstream>
 
@@ -15,7 +14,6 @@
 #include "pocl-formosa-util.h"
 #include "pocl.h"
 #include "pocl_cache.h"
-#include "pocl_cl.h"
 #include "pocl_debug.h"
 #include "pocl_file_util.h"
 #include "pocl_runtime_config.h"
@@ -159,6 +157,14 @@ int fsa_upload_kernel_sections(const char *elf_file, pocl_formosa_data_t *dd) {
 
       // upload to corresponding address
       uint64_t addr = section.getAddress();
+      if (addr > FSA_GLOBAL_MEM_BASE &&
+          addr <= FSA_GLOBAL_MEM_BASE + CASVP_FORMOSA_GLOBAL_MEM_SIZE) {
+        int status = fsaAddrMalloc(addr, data.size());
+        if (status != 0) {
+          POCL_ABORT("Error: failed to allocate section %s\n",
+                     name.str().c_str());
+        }
+      }
 
       formosa_buffer_data_t buffer_data;
       buffer_data.client_fd = dd->client_fd;
@@ -451,7 +457,6 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
 
   char kernel_util_path[POCL_MAX_PATHNAME_LENGTH];
   char start_file_path[POCL_MAX_PATHNAME_LENGTH];
-  char include_path[POCL_MAX_PATHNAME_LENGTH];
   char linker_script_path[POCL_MAX_PATHNAME_LENGTH];
   pocl_get_srcdir_or_datadir(kernel_util_path, "/lib/CL/devices", "",
                              "/formosa/kernel_util.cl");
@@ -459,22 +464,13 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
                              "/formosa/start.S");
   pocl_get_srcdir_or_datadir(linker_script_path, "/lib/CL/devices", "",
                              "/formosa/link.ld");
-  pocl_get_srcdir_or_datadir(include_path, "/lib/CL/devices", "",
-                             "/formosa/include");
 
   std::stringstream ss_cmd, ss_out;
-  std::vector<std::string> args = {clang_path,
-                                   build_cflags,
-                                   start_file_path,
-                                   bitcode_path,
-                                   kernel_util_path,
-                                   build_ldflags,
-                                   "-T",
-                                   linker_script_path,
-                                   "-I",
-                                   include_path,
-                                   "-o",
-                                   elf_path};
+  std::vector<std::string> args = {
+      clang_path,   build_cflags,       start_file_path,
+      bitcode_path, kernel_util_path,   build_ldflags,
+      "-T",         linker_script_path, "-o",
+      elf_path};
   ss_cmd = generate_command(args);
   POCL_MSG_PRINT_LLVM("running \"%s\"\n", ss_cmd.str().c_str());
   err = exec(ss_cmd.str().c_str(), ss_out);
@@ -487,7 +483,7 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
     std::string objdump_path(llvm_objdump_path);
 
     std::stringstream ss_cmd, ss_out;
-    std::vector<std::string> args = {objdump_path, "-D", elf_path, ">",
+    std::vector<std::string> args = {objdump_path, "-d", elf_path, ">",
                                      "program.dump"};
     ss_cmd = generate_command(args);
     POCL_MSG_PRINT_LLVM("running \"%s\"\n", ss_cmd.str().c_str());

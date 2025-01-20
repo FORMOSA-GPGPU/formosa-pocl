@@ -102,6 +102,54 @@ int fsaMalloc(void** devPtr, size_t size) {
   return 0;
 }
 
+int fsaAddrMalloc(uintptr_t addr, size_t size) {
+  /* Align to word size */
+  size_t org = size;
+  size = align(size);
+  struct Block *free = free_list.next, *prev = &free_list;
+  while (free) {
+    if (free->dptr <= addr && addr < free->dptr + free->size &&
+        addr + size <= free->dptr + free->size) {
+      break;
+    }
+    prev = free;
+    free = free->next;
+  }
+  if (!free) {
+    /* OOM error */
+    return 1;
+  }
+  /* Split if possible (right) */
+  if (addr + size < free->dptr + free->size) {
+    struct Block* temp = malloc(sizeof(*temp));
+    temp->size = free->dptr + free->size - (addr + size);
+    temp->next = free->next;
+    temp->dptr = addr + size;
+    free->next = temp;
+    free->size = size;
+  }
+  /* Split if possible (left) */
+  if (free->dptr < addr) {
+    struct Block* temp = malloc(sizeof(*temp));
+    temp->size = addr - free->dptr;
+    prev->next = temp;
+    temp->next = free;
+    temp->dptr = free->dptr;
+    free->dptr = addr;
+    free->size = size;
+    prev = temp;
+  }
+  /* Remove from free list and insert to allocated list head */
+  prev->next = free->next;
+  free->next = allocated_list.next;
+  allocated_list.next = free;
+  if (logf) {
+    fsaMemLog(1, org);
+  }
+
+  return 0;
+}
+
 int fsaFree(void* devPtr) {
   uintptr_t ptr = (uintptr_t)devPtr;
   /* Search for allocated block */
