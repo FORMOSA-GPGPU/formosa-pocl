@@ -70,7 +70,7 @@ int fsa_check_occupancy(uint32_t group_size, uint32_t *max_local_mem) {
 
   // check local memory capacity
   if (max_local_mem) {
-    uint64_t local_mem_size;
+    uint64_t local_mem_size = CASVP_FORMOSA_LOCAL_MEM_SIZE;
     *max_local_mem = local_mem_size / groups_per_core;
   }
 
