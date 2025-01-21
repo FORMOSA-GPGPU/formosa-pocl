@@ -126,7 +126,6 @@ int fsaAddrMalloc(uintptr_t addr, size_t size) {
     temp->next = free->next;
     temp->dptr = addr + size;
     free->next = temp;
-    free->size = size;
   }
   /* Split if possible (left) */
   if (free->dptr < addr) {
@@ -136,9 +135,9 @@ int fsaAddrMalloc(uintptr_t addr, size_t size) {
     temp->next = free;
     temp->dptr = free->dptr;
     free->dptr = addr;
-    free->size = size;
     prev = temp;
   }
+  free->size = size;
   /* Remove from free list and insert to allocated list head */
   prev->next = free->next;
   free->next = allocated_list.next;
