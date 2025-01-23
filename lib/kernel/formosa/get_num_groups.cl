@@ -1,25 +1,20 @@
 size_t _CL_OVERLOADABLE get_num_groups(uint dim) {
-    size_t base, rest;
-    switch (dim) {
-    case 0:
-        base = __builtin_riscv_fsa_global_size_x()
-            / __builtin_riscv_fsa_local_size_x();
-        rest = __builtin_riscv_fsa_global_size_x()
-            % __builtin_riscv_fsa_local_size_x() ? 0: 1;
-        return base + rest;
-    case 1:
-        base = __builtin_riscv_fsa_global_size_y()
-            / __builtin_riscv_fsa_local_size_y();
-        rest = __builtin_riscv_fsa_global_size_y()
-            % __builtin_riscv_fsa_local_size_y() ? 0: 1;
-        return base + rest;
-    case 2:
-        base = __builtin_riscv_fsa_global_size_z()
-            / __builtin_riscv_fsa_local_size_z();
-        rest = __builtin_riscv_fsa_global_size_z()
-            % __builtin_riscv_fsa_local_size_z() ? 0: 1;
-        return base + rest;
-    default:
-        return 1;
+  size_t global_size, local_size;
+  switch (dim) {
+  case 0:
+    global_size = __builtin_riscv_fsa_global_size_x();
+    local_size = __builtin_riscv_fsa_local_size_x();
+    break;
+  case 1:
+    global_size = __builtin_riscv_fsa_global_size_y();
+    local_size = __builtin_riscv_fsa_local_size_y();
+    break;
+  case 2:
+    global_size = __builtin_riscv_fsa_global_size_z();
+    local_size = __builtin_riscv_fsa_local_size_z();
+    break;
+  default:
+    return 1;
   }
+  return (global_size + local_size - 1) / local_size;
 }
