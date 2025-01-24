@@ -43,10 +43,12 @@ set(LLC_FLAGS "")
 
 set(KERNEL_CL_FLAGS "-Xclang"
                     "-cl-std=CL${FORMOSA_DEVICE_CL_STD}"
+                    "-Xclang" 
+                    "-cl-ext=-all,+cl_khr_byte_addressable_store,+cl_khr_int64,+cl_khr_fp64"
                     "-D__OPENCL_C_VERSION__=${FORMOSA_DEVICE_CL_VERSION}"
                     ${KERNEL_CL_FLAGS})
 
-set(DEVICE_CL_FLAGS "-D__OPENCL_VERSION__=${FORMOSA_DEVICE_CL_VERSION} -Dcl_khr_int64")
+set(DEVICE_CL_FLAGS "-D__OPENCL_VERSION__=${FORMOSA_DEVICE_CL_VERSION}")
 
 make_kernel_bc(KERNEL_BC "riscv64-formosa" "formosa" 0 0 0 ${KERNEL_SOURCES})
 
