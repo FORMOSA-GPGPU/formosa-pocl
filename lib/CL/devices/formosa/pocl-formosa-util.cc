@@ -411,7 +411,7 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
     build_cflags += extra_cflags;
   }
 
-  std::string build_ldflags = "";
+  std::string build_ldflags = "-lm ";
   std::string extra_ldflags =
       pocl_get_string_option("POCL_FORMOSA_LDFLAGS", "");
   if (extra_ldflags == "") {
