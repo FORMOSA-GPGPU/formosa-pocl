@@ -68,8 +68,16 @@ static cl_bool formosa_available = CL_TRUE;
 static char *formosa_build_hash = "formosa-riscv64-unknown-unknwon-elf";
 
 unsigned int pocl_formosa_probe(struct pocl_device_ops *ops) {
-  int client_socket = client_connect(getenv("AGENT_SOCKET_PATH"));
+  struct timeval timeout;
+  timeout.tv_sec = 0;
+  timeout.tv_usec = 100000;  // 100ms
+  int client_socket = client_connect(getenv("AGENT_SOCKET_PATH"), &timeout);
   if (client_socket == -1) {
+    formosa_available = CL_FALSE;
+    return 0;
+  }
+  int err = ipc_send_probe(client_socket);
+  if (err == -1) {
     formosa_available = CL_FALSE;
     return 0;
   }
@@ -149,7 +157,7 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   device->available = &formosa_available;
 
   // Connect to virtual platform
-  dd->client_fd = client_connect(getenv("AGENT_SOCKET_PATH"));
+  dd->client_fd = client_connect(getenv("AGENT_SOCKET_PATH"), NULL);
   if (dd->client_fd == -1) {
     formosa_available = CL_FALSE;
     return CL_DEVICE_NOT_FOUND;
