@@ -58,8 +58,7 @@ int fsa_check_occupancy(uint32_t group_size, uint32_t *max_local_mem) {
   uint32_t threads_per_core = warps_per_core * threads_per_warp;
   if (group_size > threads_per_core) {
     POCL_MSG_ERR(
-        "Error: cannot schedule kernel with group_size (%d) > threads_per_core "
-        "(%d)\n",
+        "Cannot schedule kernel with group_size (%d) > threads_per_core (%d)\n",
         group_size, threads_per_core);
     return -1;
   }
@@ -125,7 +124,9 @@ int fsa_upload_kernel_sections(const char *elf_file, pocl_formosa_data_t *dd) {
   if (elf_file == nullptr || dd == nullptr) return -1;
   auto bufferOrError = llvm::MemoryBuffer::getFile(std::string(elf_file));
   if (!bufferOrError) {
-    POCL_ABORT("Error: failed to open ELF file %s\n", elf_file);
+    POCL_ABORT(
+        "ERROR (fsa_upload_kernel_sections): Failed to open ELF file %s\n",
+        elf_file);
   }
   auto buffer = std::move(bufferOrError.get());
 
@@ -133,7 +134,9 @@ int fsa_upload_kernel_sections(const char *elf_file, pocl_formosa_data_t *dd) {
   auto elfOrError =
       llvm::object::ELF64LEObjectFile::create(buffer->getMemBufferRef());
   if (!elfOrError) {
-    POCL_ABORT("Error: failed to parse ELF file %s\n", elf_file);
+    POCL_ABORT(
+        "ERROR (fsa_upload_kernel_sections): Failed to parse ELF file %s\n",
+        elf_file);
   }
 
   for (const llvm::object::SectionRef &section : (*elfOrError).sections()) {
@@ -141,7 +144,8 @@ int fsa_upload_kernel_sections(const char *elf_file, pocl_formosa_data_t *dd) {
     if (auto nameOrError = section.getName()) {
       name = nameOrError.get();
     } else {
-      POCL_ABORT("Error: failed to get section name\n");
+      POCL_ABORT(
+          "ERROR (fsa_upload_kernel_sections): Failed to get section name\n");
     }
 
     if (name.starts_with(".text") || name.starts_with(".rodata") ||
@@ -150,7 +154,9 @@ int fsa_upload_kernel_sections(const char *elf_file, pocl_formosa_data_t *dd) {
       if (auto dataOrError = section.getContents()) {
         data = dataOrError.get();
       } else {
-        POCL_ABORT("Error: failed to get section contents\n");
+        POCL_ABORT(
+            "ERROR (fsa_upload_kernel_sections): Failed to get section "
+            "contents\n");
       }
 
       if (data.empty()) continue;
@@ -161,8 +167,10 @@ int fsa_upload_kernel_sections(const char *elf_file, pocl_formosa_data_t *dd) {
           addr <= FSA_GLOBAL_MEM_BASE + CASVP_FORMOSA_GLOBAL_MEM_SIZE) {
         int status = fsaAddrMalloc(addr, data.size());
         if (status != 0) {
-          POCL_ABORT("Error: failed to allocate section %s\n",
-                     name.str().c_str());
+          POCL_ABORT(
+              "ERROR (fsa_upload_kernel_sections): Failed to allocate section "
+              "%s\n",
+              name.str().c_str());
         }
       }
 
@@ -174,7 +182,9 @@ int fsa_upload_kernel_sections(const char *elf_file, pocl_formosa_data_t *dd) {
 
       int status = fsa_copy_to_dev(&buffer_data, data.data(), 0, data.size());
       if (status != 0) {
-        POCL_ABORT("Error: failed to upload section %s\n", name.str().c_str());
+        POCL_ABORT(
+            "ERROR (fsa_upload_kernel_sections): Failed to upload section %s\n",
+            name.str().c_str());
       }
     }
   }
@@ -189,15 +199,14 @@ int fsa_wait_ack(pocl_formosa_data_t *dd) {
   int status = -1;
   status = fsa_read_csr(dd, CASVP_FORMOSA_CSR_ACK, &ack);
   if (ack != 0) {
-    POCL_MSG_ERR("Error: unexpected acknowledge from device (%ld)\n", ack);
+    POCL_MSG_ERR("Unexpected acknowledge from device (%ld)\n", ack);
     return -1;
   }
   // TODO: check status.
 
   status = fsa_write_csr(dd, CASVP_FORMOSA_CSR_ACK, 1);
   if (status != 0) {
-    POCL_MSG_ERR("Error: failed to read acknowledge from device (%d)\n",
-                 status);
+    POCL_MSG_ERR("Failed to read acknowledge from device (%d)\n", status);
     return -1;
   }
   sem_destroy(&sem);
@@ -232,8 +241,8 @@ FSA_READ_CSR_FINALLY:
 void fsa_int_handler(int sig) {
   if (sig == SIGUSR1) {
     if (sem_post(&sem) < 0) {
-      std::cerr << "Received unexpected device interrupt.";
-    };
+      POCL_MSG_ERR("Received unexpected device interrupt.\n");
+    }
   }
 }
 
@@ -241,7 +250,6 @@ static int exec(const char *cmd, std::ostream &out) {
   char buffer[128];
   auto pipe = popen(cmd, "r");
   if (!pipe) {
-    // throw std::runtime_error("popen() failed!");
     return -1;
   }
   while (!feof(pipe)) {
@@ -250,7 +258,7 @@ static int exec(const char *cmd, std::ostream &out) {
   return pclose(pipe);
 }
 
-static void createTrampolineFunction(
+static void create_trampoline_function(
     llvm::Function *function, llvm::Module *module,
     llvm::SmallVector<std::string, 8> &funcNames) {
   auto &context = module->getContext();
@@ -351,16 +359,16 @@ static void createTrampolineFunction(
   llvm::verifyFunction(*trampolineFunction);
 }
 
-static void generateTrampolineForKernels(
+static void generate_trampoline_for_kernels(
     llvm::SmallVector<std::string, 8> &funcNames, llvm::Module *module) {
   llvm::SmallVector<llvm::Function *, 8> functionsToErase;
   for (auto &function : module->functions()) {
     if (!pocl::isKernelToProcess(function)) continue;
-    createTrampolineFunction(&function, module, funcNames);
+    create_trampoline_function(&function, module, funcNames);
   }
 }
 
-static char *convertToCharArray(
+static char *convert_to_char_array(
     const llvm::SmallVector<std::string, 8> &names) {
   // Calculate the total length required for the buffer
   size_t totalLength = 0;
@@ -369,9 +377,9 @@ static char *convertToCharArray(
   }
 
   // Allocate buffer
-  char *buffer = (char *)malloc(totalLength * sizeof(char));
+  char *buffer = new char[totalLength];
   if (buffer == nullptr) {
-    std::cerr << "Memory allocation failed" << std::endl;
+    POCL_MSG_ERR("Host memory allocation failed\n");
     return nullptr;
   }
 
@@ -433,10 +441,10 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
 
   auto module = (llvm::Module *)llvm_module;
   llvm::SmallVector<std::string, 8> kernelNames;
-  generateTrampolineForKernels(kernelNames, module);
+  generate_trampoline_for_kernels(kernelNames, module);
 
   *num_kernels = kernelNames.size();
-  *kernel_names = convertToCharArray(kernelNames);
+  *kernel_names = convert_to_char_array(kernelNames);
 
   std::error_code EC;
   llvm::raw_fd_ostream file(bitcode_path, EC, llvm::sys::fs::OF_None);
@@ -472,7 +480,7 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
       "-T",         linker_script_path, "-o",
       elf_path};
   ss_cmd = generate_command(args);
-  POCL_MSG_PRINT_LLVM("running \"%s\"\n", ss_cmd.str().c_str());
+  POCL_MSG_PRINT_LLVM("Running \"%s\"\n", ss_cmd.str().c_str());
   err = exec(ss_cmd.str().c_str(), ss_out);
   if (err != 0) {
     POCL_MSG_ERR("%s\n", ss_out.str().c_str());
@@ -486,7 +494,7 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
     std::vector<std::string> args = {objdump_path, "-d", elf_path, ">",
                                      "program.dump"};
     ss_cmd = generate_command(args);
-    POCL_MSG_PRINT_LLVM("running \"%s\"\n", ss_cmd.str().c_str());
+    POCL_MSG_PRINT_LLVM("Running \"%s\"\n", ss_cmd.str().c_str());
     err = exec(ss_cmd.str().c_str(), ss_out);
     if (err != 0) {
       POCL_MSG_ERR("%s\n", ss_out.str().c_str());
@@ -499,14 +507,16 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
 uint64_t fsa_get_symbol_pc(const char *elf_path, const char *symbol_name) {
   auto bufferOrError = llvm::MemoryBuffer::getFile(std::string(elf_path));
   if (!bufferOrError) {
-    POCL_ABORT("Error: failed to open ELF file %s\n", elf_path);
+    POCL_ABORT("ERROR (fsa_get_symbol_pc): Failed to open ELF file %s\n",
+               elf_path);
   }
 
   // Parse ELF file
   auto objOrError = llvm::object::ObjectFile::createELFObjectFile(
       bufferOrError.get()->getMemBufferRef());
   if (!objOrError) {
-    POCL_ABORT("Error: failed to parse ELF file %s\n", elf_path);
+    POCL_ABORT("ERROR (fsa_get_symbol_pc): Failed to parse ELF file %s\n",
+               elf_path);
   }
 
   std::unique_ptr<llvm::object::ObjectFile> obj = std::move(objOrError.get());
@@ -514,23 +524,24 @@ uint64_t fsa_get_symbol_pc(const char *elf_path, const char *symbol_name) {
     llvm::Expected<llvm::object::SymbolRef::Type> typeOrError =
         symbol.getType();
     if (!typeOrError) {
-      POCL_ABORT("Error: failed to get symbol type\n");
+      POCL_ABORT("ERROR (fsa_get_symbol_pc): Failed to get symbol type\n");
     }
 
     llvm::Expected<llvm::StringRef> nameOrError = symbol.getName();
     if (!nameOrError) {
-      POCL_ABORT("Error: failed to get symbol name\n");
+      POCL_ABORT("ERROR (fsa_get_symbol_pc): Failed to get symbol name\n");
     }
     if (nameOrError.get().str() == symbol_name) {
       llvm::Expected<uint64_t> addrOrError = symbol.getAddress();
       if (!addrOrError) {
-        POCL_ABORT("Error: failed to get symbol address\n");
+        POCL_ABORT("ERROR (fsa_get_symbol_pc): Failed to get symbol address\n");
       }
       POCL_MSG_PRINT_LLVM("Found symbol %s at 0x%lx\n", symbol_name,
                           addrOrError.get());
       return addrOrError.get();
     }
   }
-  POCL_ABORT("Error: failed to find symbol %s\n", symbol_name);
+  POCL_ABORT("ERROR (fsa_get_symbol_pc): Failed to find symbol %s\n",
+             symbol_name);
   return 0;
 }

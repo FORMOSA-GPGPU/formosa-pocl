@@ -259,11 +259,13 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     uint32_t available_local_mem;
     err = fsa_check_occupancy(group_size, &available_local_mem);
     if (err != 0) {
-      POCL_ABORT("POCL_FORMOSA_RUN\n");
+      POCL_ABORT("ERROR (pocl_formosa_run): Check occupancy failed\n");
     }
     if (local_mem_size > available_local_mem) {
-      POCL_ABORT("Out of local memory: needed=%d bytes, available=%d bytes\n",
-                 local_mem_size, available_local_mem);
+      POCL_ABORT(
+          "ERROR (pocl_formosa_run): Out of local memory: needed=%d bytes, "
+          "available=%d bytes\n",
+          local_mem_size, available_local_mem);
     }
   }
 
@@ -277,7 +279,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   void *device_args_buffer_addr;
   err = fsaMalloc(&device_args_buffer_addr, kargs_buffer_size);
   if (err != 0) {
-    POCL_ABORT("POCL_FORMOSA_RUN\n");
+    POCL_ABORT("ERROR (pocl_formosa_run): Device memory allocation failed\n");
   }
   fsa_kargs_buffer.buf_address = (uint64_t)device_args_buffer_addr;
   fsa_kargs_buffer.buf_size = kargs_buffer_size;
@@ -323,9 +325,9 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
         host_args_offset += ptr_size;
       }
     } else if (meta->arg_info[i].type == POCL_ARG_TYPE_IMAGE) {
-      POCL_ABORT("POCL_FORMOSA_RUN\n");
+      POCL_ABORT("ERROR (pocl_formosa_run): Image argument not supported\n");
     } else if (meta->arg_info[i].type == POCL_ARG_TYPE_SAMPLER) {
-      POCL_ABORT("POCL_FORMOSA_RUN\n");
+      POCL_ABORT("ERROR (pocl_formosa_run): Sampler argument not supported\n");
     } else {
       // scalar argument
       memcpy(host_kargs_base_ptr + host_args_offset, al->value,
@@ -354,7 +356,8 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   err = fsa_copy_to_dev(&fsa_kargs_buffer, host_kargs_base_ptr, 0,
                         kargs_buffer_size);
   if (err != 0) {
-    POCL_ABORT("POCL_FORMOSA_RUN\n");
+    POCL_ABORT(
+        "ERROR (pocl_formosa_run): Kernel argument copy to device failed\n");
   }
 
   // release argument host buffer
@@ -366,7 +369,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     err = fsa_get_elf_name(program, device_i, sz_program_fsabin);
     err |= fsa_upload_kernel_sections(sz_program_fsabin, dd);
     if (err != 0) {
-      POCL_ABORT("POCL_FORMOSA_RUN\n");
+      POCL_ABORT("ERROR (pocl_formosa_run): Kernel upload failed\n");
     }
     char *trampoline_name = malloc(strlen(kernel->name) + 12);
     sprintf(trampoline_name, "%s_trampoline", kernel->name);
@@ -376,20 +379,20 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     err = fsa_write_csr(dd, CASVP_FORMOSA_CSR_KERNEL_PC, kernel_pc);
     err |= fsa_write_csr(dd, CASVP_FORMOSA_CSR_ENTRY_PC, entry_pc);
     if (err != 0) {
-      POCL_ABORT("POCL_FORMOSA_RUN\n");
+      POCL_ABORT("ERROR (pocl_formosa_run): Kernel CSR setup failed\n");
     }
   }
 
   // launch kernel execution
   err = fsa_write_csr(dd, CASVP_FORMOSA_CSR_START, 1);
   if (err != 0) {
-    POCL_ABORT("POCL_FORMOSA_RUN\n");
+    POCL_ABORT("ERROR (pocl_formosa_run): Kernel launch failed\n");
   }
 
   // wait for the execution to complete
   err = fsa_wait_ack(dd);
   if (err != 0) {
-    POCL_ABORT("POCL_FORMOSA_RUN\n");
+    POCL_ABORT("ERROR (pocl_formosa_run): Kernel execution failed\n");
   }
 
   // release arguments device buffer
@@ -596,7 +599,7 @@ void pocl_formosa_free(cl_device_id device, cl_mem mem_obj) {
   cl_mem_flags flags = mem_obj->flags;
   formosa_buffer_data_t *fb = (formosa_buffer_data_t *)p->mem_ptr;
   if (!fb) {
-    POCL_ABORT("FORMOSA: Memory flag not supported");
+    POCL_ABORT("ERROR (pocl_formosa_free): Memory flag not supported\n");
   }
   if (flags & CL_MEM_ALLOC_HOST_PTR) {
     pocl_release_mem_host_ptr(mem_obj);
@@ -693,7 +696,7 @@ void pocl_formosa_read(void *data, void *__restrict__ host_ptr,
       (formosa_buffer_data_t *)src_mem_id->mem_ptr;
   int status = fsa_copy_from_dev(buffer_data, host_ptr, offset, size);
   if (status != 0) {
-    POCL_ABORT("POCL_FORMOSA_READ\n");
+    POCL_ABORT("ERROR (pocl_formosa_read): Copy from device failed\n");
   }
 }
 
@@ -704,6 +707,6 @@ void pocl_formosa_write(void *data, const void *__restrict__ host_ptr,
       (formosa_buffer_data_t *)dst_mem_id->mem_ptr;
   int status = fsa_copy_to_dev(buffer_data, host_ptr, offset, size);
   if (status != 0) {
-    POCL_ABORT("POCL_FORMOSA_WRITE\n");
+    POCL_ABORT("ERROR (pocl_formosa_write): Copy to device failed\n");
   }
 }
