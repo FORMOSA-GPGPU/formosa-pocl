@@ -196,21 +196,51 @@ int fsa_wait_ack(pocl_formosa_data_t *dd) {
   sem_init(&sem, 0, 0);
   sem_wait(&sem);    // Wait until the signal handler post the sem.
   uint64_t ack = 0;  // acknowledge from device
-  int status = -1;
-  status = fsa_read_csr(dd, CASVP_FORMOSA_CSR_ACK, &ack);
+  int err = -1;
+  err = fsa_read_csr(dd, CASVP_FORMOSA_CSR_ACK, &ack);
   if (ack != 0) {
     POCL_MSG_ERR("Unexpected acknowledge from device (%ld)\n", ack);
     return -1;
   }
-  // TODO: check status.
 
-  status = fsa_write_csr(dd, CASVP_FORMOSA_CSR_ACK, 1);
-  if (status != 0) {
-    POCL_MSG_ERR("Failed to read acknowledge from device (%d)\n", status);
+  uint64_t status = 0;
+  uint64_t ecid, ewid, mcause, mepc, mtval;
+  err = fsa_read_csr(dd, CASVP_FORMOSA_CSR_STATUS, &status);
+  switch (status) {
+    default:
+    case 0x0:  // Okay
+      break;
+    case 0x1:  // Bad dimension
+      POCL_MSG_ERR("Bad dimension\n");
+      break;
+    case 0x2:  // Exceptions
+      err = fsa_read_csr(dd, CASVP_FORMOSA_CSR_ECID, &ecid);
+      err |= fsa_read_csr(dd, CASVP_FORMOSA_CSR_EWID, &ewid);
+      err |= fsa_read_csr(dd, CASVP_FORMOSA_CSR_MCAUSE, &mcause);
+      err |= fsa_read_csr(dd, CASVP_FORMOSA_CSR_MEPC, &mepc);
+      err |= fsa_read_csr(dd, CASVP_FORMOSA_CSR_MTVAL, &mtval);
+      if (err != 0) {
+        POCL_MSG_ERR("Failed to read exception information from device\n");
+        break;
+      }
+      POCL_MSG_ERR(
+          "Exception occurs:\n"
+          "ecid: 0x%08lx\n"
+          "ewid: 0x%08lx\n"
+          "mcause: 0x%08lx\n"
+          "mepc: 0x%08lx\n"
+          "mtval: 0x%08lx\n",
+          ecid, ewid, mcause, mepc, mtval);
+      break;
+  }
+
+  err = fsa_write_csr(dd, CASVP_FORMOSA_CSR_ACK, 1);
+  if (err != 0) {
+    POCL_MSG_ERR("Failed to read acknowledge from device (%d)\n", err);
     return -1;
   }
   sem_destroy(&sem);
-  return 0;
+  return (status == 0) ? 0 : -1;
 }
 
 int fsa_write_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t value) {
