@@ -85,9 +85,9 @@ int fsa_copy_to_dev(formosa_buffer_data_t *buffer_data, const void *host_ptr,
   if (msg == nullptr) return -1;
   msg = msg_set_payload(msg, static_cast<const uint8_t *>(host_ptr));
   if (msg == nullptr) return -1;
-  int status = ipc_send_write_msg(buffer_data->client_fd, msg);
+  int err = ipc_send_write_msg(buffer_data->client_fd, msg);
   msg_destroy(msg);
-  return status;
+  return err;
 }
 
 int fsa_copy_from_dev(formosa_buffer_data_t *buffer_data, void *host_ptr,
@@ -97,12 +97,12 @@ int fsa_copy_from_dev(formosa_buffer_data_t *buffer_data, void *host_ptr,
   msg_t *msg = msg_create(buffer_data->msg_id++, READ, size,
                           buffer_data->buf_address + src_offset);
   if (msg == nullptr) return -1;
-  int status = ipc_send_read_msg(buffer_data->client_fd, msg);
-  if (status != 0) goto FSA_COPY_FROM_DEV_FINALLY;
+  int err = ipc_send_read_msg(buffer_data->client_fd, msg);
+  if (err != 0) goto FSA_COPY_FROM_DEV_FINALLY;
   memcpy(host_ptr, msg->payload, size);
 FSA_COPY_FROM_DEV_FINALLY:
   msg_destroy(msg);
-  return status;
+  return err;
 }
 
 int fsa_get_elf_name(cl_program program, cl_uint device_i, char *elf_name) {
@@ -113,7 +113,7 @@ int fsa_get_elf_name(cl_program program, cl_uint device_i, char *elf_name) {
 
   // remove extension name
   char *last_dot = strrchr(program_bc, '.');
-  if (last_dot != NULL) *last_dot = '\0';
+  if (last_dot != nullptr) *last_dot = '\0';
 
   strcpy(elf_name, program_bc);
   strncat(elf_name, ".fsa.bin", POCL_MAX_PATHNAME_LENGTH - 1);
@@ -165,8 +165,8 @@ int fsa_upload_kernel_sections(const char *elf_file, pocl_formosa_data_t *dd) {
       uint64_t addr = section.getAddress();
       if (addr > FSA_GLOBAL_MEM_BASE &&
           addr <= FSA_GLOBAL_MEM_BASE + CASVP_FORMOSA_GLOBAL_MEM_SIZE) {
-        int status = fsaAddrMalloc(addr, data.size());
-        if (status != 0) {
+        int err = fsaAddrMalloc(addr, data.size());
+        if (err != 0) {
           POCL_ABORT(
               "ERROR (fsa_upload_kernel_sections): Failed to allocate section "
               "%s\n",
@@ -180,8 +180,8 @@ int fsa_upload_kernel_sections(const char *elf_file, pocl_formosa_data_t *dd) {
       buffer_data.buf_address = addr;
       buffer_data.msg_id = 0;
 
-      int status = fsa_copy_to_dev(&buffer_data, data.data(), 0, data.size());
-      if (status != 0) {
+      int err = fsa_copy_to_dev(&buffer_data, data.data(), 0, data.size());
+      if (err != 0) {
         POCL_ABORT(
             "ERROR (fsa_upload_kernel_sections): Failed to upload section %s\n",
             name.str().c_str());
@@ -196,8 +196,11 @@ int fsa_wait_ack(pocl_formosa_data_t *dd) {
   sem_init(&sem, 0, 0);
   sem_wait(&sem);    // Wait until the signal handler post the sem.
   uint64_t ack = 0;  // acknowledge from device
-  int err = -1;
-  err = fsa_read_csr(dd, CASVP_FORMOSA_CSR_ACK, &ack);
+  int err = fsa_read_csr(dd, CASVP_FORMOSA_CSR_ACK, &ack);
+  if (err != 0) {
+    POCL_MSG_ERR("Failed to read acknowledge from device (%d)\n", err);
+    return -1;
+  }
   if (ack != 0) {
     POCL_MSG_ERR("Unexpected acknowledge from device (%ld)\n", ack);
     return -1;
@@ -206,6 +209,10 @@ int fsa_wait_ack(pocl_formosa_data_t *dd) {
   uint64_t status = 0;
   uint64_t ecid, ewid, mcause, mepc, mtval;
   err = fsa_read_csr(dd, CASVP_FORMOSA_CSR_STATUS, &status);
+  if (err != 0) {
+    POCL_MSG_ERR("Failed to read status from device (%d)\n", err);
+    return -1;
+  }
   switch (status) {
     default:
     case 0x0:  // Okay
@@ -250,9 +257,9 @@ int fsa_write_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t value) {
   if (msg == nullptr) return -1;
   msg = msg_set_payload(msg, reinterpret_cast<uint8_t *>(&value));
   if (msg == nullptr) return -1;
-  int status = ipc_send_write_msg(dd->client_fd, msg);
+  int err = ipc_send_write_msg(dd->client_fd, msg);
   msg_destroy(msg);
-  return status;
+  return err;
 }
 
 int fsa_read_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t *value) {
@@ -260,12 +267,12 @@ int fsa_read_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t *value) {
   msg_t *msg =
       msg_create(dd->msg_id++, READ, 8, FSA_TASK_DISPATCHER_BASE + addr);
   if (msg == nullptr) return -1;
-  int status = ipc_send_read_msg(dd->client_fd, msg);
-  if (status != 0) goto FSA_READ_CSR_FINALLY;
+  int err = ipc_send_read_msg(dd->client_fd, msg);
+  if (err != 0) goto FSA_READ_CSR_FINALLY;
   *value = *reinterpret_cast<uint64_t *>(msg->payload);
 FSA_READ_CSR_FINALLY:
   msg_destroy(msg);
-  return status;
+  return err;
 }
 
 void fsa_int_handler(int sig) {
