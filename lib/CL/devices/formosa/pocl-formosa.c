@@ -384,6 +384,10 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   }
 
   // launch kernel execution
+  uint64_t start_status = 0;
+  do {
+    err = fsa_read_csr(dd, CASVP_FORMOSA_CSR_START, &start_status);
+  } while (start_status != 0);
   err = fsa_write_csr(dd, CASVP_FORMOSA_CSR_START, 1);
   if (err != 0) {
     POCL_ABORT("ERROR (pocl_formosa_run): Kernel launch failed\n");

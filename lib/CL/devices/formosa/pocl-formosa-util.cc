@@ -224,12 +224,12 @@ int fsa_wait_ack(pocl_formosa_data_t *dd) {
         break;
       }
       POCL_MSG_ERR(
-          "Exception occurs:\n"
-          "ecid: 0x%08lx\n"
-          "ewid: 0x%08lx\n"
-          "mcause: 0x%08lx\n"
-          "mepc: 0x%08lx\n"
-          "mtval: 0x%08lx\n",
+          "\nException occurs:\n"
+          "\tecid:   0x%08lx\n"
+          "\tewid:   0x%08lx\n"
+          "\tmcause: 0x%08lx\n"
+          "\tmepc:   0x%08lx\n"
+          "\tmtval:  0x%08lx\n",
           ecid, ewid, mcause, mepc, mtval);
       break;
   }
