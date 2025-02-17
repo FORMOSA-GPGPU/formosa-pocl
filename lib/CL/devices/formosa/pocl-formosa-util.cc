@@ -441,12 +441,16 @@ std::stringstream generate_command(std::vector<std::string> &args) {
 }
 
 int fsa_compile_program(char **kernel_names, int *num_kernels,
-                        char *str_program_fsa_bin, void *llvm_module) {
+                        char *str_program_fsa_bin, char *compiler_options,
+                        void *llvm_module) {
   int err;
   std::string llvm_path = FORMOSA_LLVM;
   std::string llvm_objdump_path = llvm_path + "/bin/llvm-objdump";
   std::string build_cflags = "-mcpu=formosa-gpgpu ";
   std::string extra_cflags = pocl_get_string_option("POCL_FORMOSA_CFLAGS", "");
+  if (compiler_options != nullptr) {
+    build_cflags += std::string(compiler_options) + " ";
+  }
   if (extra_cflags == "") {
     POCL_MSG_WARN(
         "Environment variable 'POCL_FORMOSA_CFLAGS' is not set, default to "
