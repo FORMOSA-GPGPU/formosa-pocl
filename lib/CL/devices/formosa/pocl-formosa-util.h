@@ -86,12 +86,13 @@ void fsa_int_handler(int sig);
 int fsa_wait_ack(pocl_formosa_data_t *dd);
 
 int fsa_compile_program(char **kernel_names, int *num_kernels,
-                        char *str_program_fsa_bin, void *llvm_module);
+                        char *str_program_fsa_bin, char *compiler_options,
+                        void *llvm_module);
 
 uint64_t fsa_get_symbol_pc(const char *elf_path, const char *symbol_name);
 
 #define FSA_TASK_DISPATCHER_BASE 0x1000
-#define FSA_GLOBAL_MEM_BASE      0x80000000
+#define FSA_GLOBAL_MEM_BASE 0x80000000
 
 #define FSA_WRITE_GROUPED_CSR(dd, addr, value)             \
   do {                                                     \
