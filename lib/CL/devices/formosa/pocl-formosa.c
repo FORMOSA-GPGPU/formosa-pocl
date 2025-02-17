@@ -34,7 +34,6 @@ void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
   ops->build_source = pocl_driver_build_source;
   ops->link_program = pocl_driver_link_program;
   ops->build_binary = pocl_driver_build_binary;
-  ops->free_program = pocl_driver_free_program;
   ops->setup_metadata = pocl_driver_setup_metadata;
   ops->supports_binary = pocl_driver_supports_binary;
   ops->build_poclbinary = pocl_driver_build_poclbinary;
@@ -237,9 +236,6 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     } else {
       // scalar argument
       kargs_buffer_size += al->size;
-      if (al->size % word_size != 0) {
-        kargs_buffer_size += word_size - (al->size % word_size);
-      }
     }
   }
 
@@ -333,9 +329,6 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
       memcpy(host_kargs_base_ptr + host_args_offset, al->value,
              al->size);  // scalar value
       host_args_offset += al->size;
-      if (al->size % word_size != 0) {
-        host_args_offset += word_size - (al->size % word_size);
-      }
     }
   }
 

@@ -86,3 +86,7 @@ cmake-build-*/
 .cache
 
 .gdb_history
+
+# nix generated files
+outputs/*
+result
