@@ -25,8 +25,6 @@
 
 if(MSVC)
   set_source_files_properties( pocl-formosa.c pocl-formosa.h 
-                               falloc/fsa_mem_allocator.c
-                               falloc/fsa_mem_allocator.h
                                PROPERTIES LANGUAGE C )
   set_source_files_properties( pocl-formosa-util.cc
                                pocl-formosa-util.h PROPERTIES LANGUAGE CXX )
@@ -47,8 +45,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_definitions(FORMOSA_LLVM="${LLVM_PREFIX}")
 add_pocl_device_library(pocl-devices-formosa
                         pocl-formosa.c pocl-formosa.h
-                        pocl-formosa-util.cc pocl-formosa-util.h
-                        falloc/fsa_mem_allocator.c falloc/fsa_mem_allocator.h)
+                        pocl-formosa-util.cc pocl-formosa-util.h)
 
 if(ENABLE_LOADABLE_DRIVERS)
   # Add runtime library
@@ -59,4 +56,4 @@ message(STATUS "CASVP_INSTALL_DIR: ${CASVP_INSTALL_DIR}")
 target_include_directories(pocl-devices-formosa PRIVATE
                            ${CASVP_INSTALL_DIR}/include)
 
-target_link_libraries(pocl-devices-formosa PRIVATE comm)
+target_link_libraries(pocl-devices-formosa PRIVATE comm formosa-driver-casvp)

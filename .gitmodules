@@ -1,3 +1,3 @@
-[submodule "ext/libcomm"]
-	path = ext/libcomm
-	url = ../../caslab-virtual-platform/libcomm
+[submodule "ext/formosa-driver"]
+	path = ext/formosa-driver
+	url = ../formosa-driver
