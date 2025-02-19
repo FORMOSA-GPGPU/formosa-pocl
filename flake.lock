@@ -3,6 +3,28 @@
     "casvp": {
       "inputs": {
         "flake-utils": "flake-utils",
+        "formosa-pocl": "formosa-pocl",
+        "nixpkgs": "nixpkgs_6"
+      },
+      "locked": {
+        "lastModified": 1739958700,
+        "narHash": "sha256-agVJUXlhp59Qk0DWeyx1KA70tQAff22h05owEtMABpk=",
+        "ref": "refs/heads/main",
+        "rev": "dba9a14cedfdf60edf5a89613e303c85f4e3e767",
+        "revCount": 213,
+        "submodules": true,
+        "type": "git",
+        "url": "ssh://git@git.caslab.ee.ncku.edu.tw/caslab-virtual-platform/casvp.git"
+      },
+      "original": {
+        "submodules": true,
+        "type": "git",
+        "url": "ssh://git@git.caslab.ee.ncku.edu.tw/caslab-virtual-platform/casvp.git"
+      }
+    },
+    "casvp_2": {
+      "inputs": {
+        "flake-utils": "flake-utils_2",
         "formosa-toolchain-nix": "formosa-toolchain-nix",
         "nixpkgs": "nixpkgs_3"
       },
@@ -22,9 +44,9 @@
         "url": "ssh://git@git.caslab.ee.ncku.edu.tw/caslab-virtual-platform/casvp.git"
       }
     },
-    "casvp_2": {
+    "casvp_3": {
       "inputs": {
-        "flake-utils": "flake-utils_2",
+        "flake-utils": "flake-utils_3",
         "nixpkgs": "nixpkgs"
       },
       "locked": {
@@ -133,9 +155,63 @@
         "type": "github"
       }
     },
+    "flake-utils_6": {
+      "inputs": {
+        "systems": "systems_6"
+      },
+      "locked": {
+        "lastModified": 1731533236,
+        "narHash": "sha256-l0KFg5HjrsfsO/JpG+r7fRrqm12kzFHyUHqHCVpMMbI=",
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "rev": "11707dc2f618dd54ca8739b309ec4fc024de578b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "type": "github"
+      }
+    },
+    "flake-utils_7": {
+      "inputs": {
+        "systems": "systems_7"
+      },
+      "locked": {
+        "lastModified": 1731533236,
+        "narHash": "sha256-l0KFg5HjrsfsO/JpG+r7fRrqm12kzFHyUHqHCVpMMbI=",
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "rev": "11707dc2f618dd54ca8739b309ec4fc024de578b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "type": "github"
+      }
+    },
+    "flake-utils_8": {
+      "inputs": {
+        "systems": "systems_8"
+      },
+      "locked": {
+        "lastModified": 1731533236,
+        "narHash": "sha256-l0KFg5HjrsfsO/JpG+r7fRrqm12kzFHyUHqHCVpMMbI=",
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "rev": "11707dc2f618dd54ca8739b309ec4fc024de578b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "type": "github"
+      }
+    },
     "formosa-llvm": {
       "inputs": {
-        "flake-utils": "flake-utils_5",
+        "flake-utils": "flake-utils_6",
         "nixpkgs": "nixpkgs_4"
       },
       "locked": {
@@ -153,10 +229,53 @@
         "url": "ssh://git@git.caslab.ee.ncku.edu.tw/formosa-gpgpu/formosa-llvm.git"
       }
     },
-    "formosa-toolchain-nix": {
+    "formosa-llvm_2": {
+      "inputs": {
+        "flake-utils": "flake-utils_8",
+        "nixpkgs": "nixpkgs_7"
+      },
+      "locked": {
+        "lastModified": 1739943307,
+        "narHash": "sha256-aM7uZ992Tt0iXFvoFe1C5K+osUwZm22C9Q1CShlsk3o=",
+        "ref": "refs/heads/formosa/main",
+        "rev": "3f106417d8c5c0de118b721552d13e6733ce82e4",
+        "shallow": true,
+        "type": "git",
+        "url": "ssh://git@git.caslab.ee.ncku.edu.tw/formosa-gpgpu/formosa-llvm.git"
+      },
+      "original": {
+        "shallow": true,
+        "type": "git",
+        "url": "ssh://git@git.caslab.ee.ncku.edu.tw/formosa-gpgpu/formosa-llvm.git"
+      }
+    },
+    "formosa-pocl": {
       "inputs": {
         "casvp": "casvp_2",
-        "flake-utils": "flake-utils_3",
+        "flake-utils": "flake-utils_5",
+        "formosa-llvm": "formosa-llvm",
+        "nixpkgs": "nixpkgs_5"
+      },
+      "locked": {
+        "lastModified": 1739952261,
+        "narHash": "sha256-rrvjS+uVNe88WpxVhvlec6WFagz38Xk4QATcPMsTrrg=",
+        "ref": "refs/heads/formosa/main",
+        "rev": "c54d70971d3f08fa8ca8b3edfaf1e9196e7e32e0",
+        "revCount": 8678,
+        "submodules": true,
+        "type": "git",
+        "url": "ssh://git@git.caslab.ee.ncku.edu.tw/formosa-gpgpu/pocl"
+      },
+      "original": {
+        "submodules": true,
+        "type": "git",
+        "url": "ssh://git@git.caslab.ee.ncku.edu.tw/formosa-gpgpu/pocl"
+      }
+    },
+    "formosa-toolchain-nix": {
+      "inputs": {
+        "casvp": "casvp_3",
+        "flake-utils": "flake-utils_4",
         "nixpkgs": "nixpkgs_2"
       },
       "locked": {
@@ -253,12 +372,60 @@
         "type": "github"
       }
     },
+    "nixpkgs_6": {
+      "locked": {
+        "lastModified": 1739923778,
+        "narHash": "sha256-BqUY8tz0AQ4to2Z4+uaKczh81zsGZSYxjgvtw+fvIfM=",
+        "owner": "nixos",
+        "repo": "nixpkgs",
+        "rev": "36864ed72f234b9540da4cf7a0c49e351d30d3f1",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nixos",
+        "ref": "release-24.11",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_7": {
+      "locked": {
+        "lastModified": 1739736696,
+        "narHash": "sha256-zON2GNBkzsIyALlOCFiEBcIjI4w38GYOb+P+R4S8Jsw=",
+        "owner": "nixos",
+        "repo": "nixpkgs",
+        "rev": "d74a2335ac9c133d6bbec9fc98d91a77f1604c1f",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nixos",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_8": {
+      "locked": {
+        "lastModified": 1739866667,
+        "narHash": "sha256-EO1ygNKZlsAC9avfcwHkKGMsmipUk1Uc0TbrEZpkn64=",
+        "owner": "nixos",
+        "repo": "nixpkgs",
+        "rev": "73cf49b8ad837ade2de76f87eb53fc85ed5d4680",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nixos",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "casvp": "casvp",
-        "flake-utils": "flake-utils_4",
-        "formosa-llvm": "formosa-llvm",
-        "nixpkgs": "nixpkgs_5"
+        "flake-utils": "flake-utils_7",
+        "formosa-llvm": "formosa-llvm_2",
+        "nixpkgs": "nixpkgs_8"
       }
     },
     "systems": {
@@ -322,6 +489,51 @@
       }
     },
     "systems_5": {
+      "locked": {
+        "lastModified": 1681028828,
+        "narHash": "sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768=",
+        "owner": "nix-systems",
+        "repo": "default",
+        "rev": "da67096a3b9bf56a91d16901293e51ba5b49a27e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-systems",
+        "repo": "default",
+        "type": "github"
+      }
+    },
+    "systems_6": {
+      "locked": {
+        "lastModified": 1681028828,
+        "narHash": "sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768=",
+        "owner": "nix-systems",
+        "repo": "default",
+        "rev": "da67096a3b9bf56a91d16901293e51ba5b49a27e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-systems",
+        "repo": "default",
+        "type": "github"
+      }
+    },
+    "systems_7": {
+      "locked": {
+        "lastModified": 1681028828,
+        "narHash": "sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768=",
+        "owner": "nix-systems",
+        "repo": "default",
+        "rev": "da67096a3b9bf56a91d16901293e51ba5b49a27e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-systems",
+        "repo": "default",
+        "type": "github"
+      }
+    },
+    "systems_8": {
       "locked": {
         "lastModified": 1681028828,
         "narHash": "sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768=",
