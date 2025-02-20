@@ -9,7 +9,7 @@
 #include <iostream>
 #include <sstream>
 
-#include "casvp-config/casvp-config.h"
+#include "casvp-config.h"
 #include "formosa-driver.h"
 #include "pocl-formosa-util.h"
 #include "pocl.h"

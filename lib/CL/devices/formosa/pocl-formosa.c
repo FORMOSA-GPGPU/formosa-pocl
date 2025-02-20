@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-#include "casvp-config/casvp-config.h"
+#include "casvp-config.h"
 #include "common.h"
 #include "common_driver.h"
 #include "formosa-driver.h"
