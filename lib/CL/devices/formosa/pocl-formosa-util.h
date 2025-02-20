@@ -22,7 +22,6 @@ typedef struct {
 } formosa_kernel_data_t;
 
 typedef struct {
-  int client_fd;
   uint64_t buf_address;
   uint64_t buf_size;
   uint64_t msg_id;
@@ -45,9 +44,6 @@ typedef struct {
   /* The number of contexts that are currently using this device */
   size_t context_ref_count;
 
-  /* The file descriptor of the virtual device */
-  int client_fd;
-
   /* The kernel data buffer */
   formosa_buffer_data_t *kernel_buffer;
 
@@ -66,20 +62,10 @@ typedef struct _pocl_basic_usm_allocation_t {
 
 int fsa_check_occupancy(uint32_t group_size, uint32_t *max_local_mem);
 
-int fsa_copy_to_dev(formosa_buffer_data_t *buffer_data, const void *host_ptr,
-                    uint64_t dst_offset, size_t size);
-
-int fsa_copy_from_dev(formosa_buffer_data_t *buffer_data, void *host_ptr,
-                      uint64_t src_offset, size_t size);
-
 int fsa_get_elf_name(cl_program program, cl_uint device_i, char *elf_name);
 
 int fsa_upload_kernel_sections(const char *filename,
                                pocl_formosa_data_t *formosa_data);
-
-int fsa_write_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t value);
-
-int fsa_read_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t *value);
 
 void fsa_int_handler(int sig);
 
@@ -93,16 +79,6 @@ uint64_t fsa_get_symbol_pc(const char *elf_path, const char *symbol_name);
 
 #define FSA_TASK_DISPATCHER_BASE 0x1000
 #define FSA_GLOBAL_MEM_BASE 0x80000000
-
-#define FSA_WRITE_GROUPED_CSR(dd, addr, value)             \
-  do {                                                     \
-    int err = fsa_write_csr((dd), (addr##_X), (value[0])); \
-    err |= fsa_write_csr((dd), (addr##_Y), (value[1]));    \
-    err |= fsa_write_csr((dd), (addr##_Z), (value[2]));    \
-    if (err == -1) {                                       \
-      POCL_ABORT("FSA_WRITE_GROUPED_CSR");                 \
-    }                                                      \
-  } while (0);
 
 #ifdef __cplusplus
 }

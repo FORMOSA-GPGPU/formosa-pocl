@@ -1,1 +1,1 @@
-add_subdirectory(libcomm)
+add_subdirectory(formosa-driver)

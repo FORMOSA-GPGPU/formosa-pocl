@@ -9,8 +9,8 @@
 #include <iostream>
 #include <sstream>
 
-#include "casvp-config/casvp-config.h"
-#include "falloc/fsa_mem_allocator.h"
+#include "casvp-config.h"
+#include "formosa-driver.h"
 #include "pocl-formosa-util.h"
 #include "pocl.h"
 #include "pocl_cache.h"
@@ -76,35 +76,6 @@ int fsa_check_occupancy(uint32_t group_size, uint32_t *max_local_mem) {
   return 0;
 }
 
-int fsa_copy_to_dev(formosa_buffer_data_t *buffer_data, const void *host_ptr,
-                    uint64_t dst_offset, size_t size) {
-  if (buffer_data == nullptr || host_ptr == nullptr) return -1;
-  if ((dst_offset + size) > buffer_data->buf_size) return -1;
-  msg_t *msg = msg_create(buffer_data->msg_id++, WRITE, size,
-                          buffer_data->buf_address + dst_offset);
-  if (msg == nullptr) return -1;
-  msg = msg_set_payload(msg, static_cast<const uint8_t *>(host_ptr));
-  if (msg == nullptr) return -1;
-  int err = ipc_send_write_msg(buffer_data->client_fd, msg);
-  msg_destroy(msg);
-  return err;
-}
-
-int fsa_copy_from_dev(formosa_buffer_data_t *buffer_data, void *host_ptr,
-                      uint64_t src_offset, size_t size) {
-  if (buffer_data == nullptr || host_ptr == nullptr) return -1;
-  if ((src_offset + size) > buffer_data->buf_size) return -1;
-  msg_t *msg = msg_create(buffer_data->msg_id++, READ, size,
-                          buffer_data->buf_address + src_offset);
-  if (msg == nullptr) return -1;
-  int err = ipc_send_read_msg(buffer_data->client_fd, msg);
-  if (err != 0) goto FSA_COPY_FROM_DEV_FINALLY;
-  memcpy(host_ptr, msg->payload, size);
-FSA_COPY_FROM_DEV_FINALLY:
-  msg_destroy(msg);
-  return err;
-}
-
 int fsa_get_elf_name(cl_program program, cl_uint device_i, char *elf_name) {
   if (program == nullptr || elf_name == nullptr) return -1;
 
@@ -165,7 +136,7 @@ int fsa_upload_kernel_sections(const char *elf_file, pocl_formosa_data_t *dd) {
       uint64_t addr = section.getAddress();
       if (addr > FSA_GLOBAL_MEM_BASE &&
           addr <= FSA_GLOBAL_MEM_BASE + CASVP_FORMOSA_GLOBAL_MEM_SIZE) {
-        int err = fsaAddrMalloc(addr, data.size());
+        int err = fsa_addr_malloc(addr, data.size());
         if (err != 0) {
           POCL_ABORT(
               "ERROR (fsa_upload_kernel_sections): Failed to allocate section "
@@ -174,13 +145,7 @@ int fsa_upload_kernel_sections(const char *elf_file, pocl_formosa_data_t *dd) {
         }
       }
 
-      formosa_buffer_data_t buffer_data;
-      buffer_data.client_fd = dd->client_fd;
-      buffer_data.buf_size = data.size();
-      buffer_data.buf_address = addr;
-      buffer_data.msg_id = 0;
-
-      int err = fsa_copy_to_dev(&buffer_data, data.data(), 0, data.size());
+      int err = fsa_copy_to_dev(addr, data.data(), data.size());
       if (err != 0) {
         POCL_ABORT(
             "ERROR (fsa_upload_kernel_sections): Failed to upload section %s\n",
@@ -196,7 +161,7 @@ int fsa_wait_ack(pocl_formosa_data_t *dd) {
   sem_init(&sem, 0, 0);
   sem_wait(&sem);    // Wait until the signal handler post the sem.
   uint64_t ack = 0;  // acknowledge from device
-  int err = fsa_read_csr(dd, CASVP_FORMOSA_CSR_ACK, &ack);
+  int err = fsa_mmio(CASVP_FORMOSA_CSR_ACK, 0, &ack);
   if (err != 0) {
     POCL_MSG_ERR("Failed to read acknowledge from device (%d)\n", err);
     return -1;
@@ -208,7 +173,7 @@ int fsa_wait_ack(pocl_formosa_data_t *dd) {
 
   uint64_t status = 0;
   uint64_t ecid, ewid, mcause, mepc, mtval;
-  err = fsa_read_csr(dd, CASVP_FORMOSA_CSR_STATUS, &status);
+  err = fsa_mmio(CASVP_FORMOSA_CSR_STATUS, 0, &status);
   if (err != 0) {
     POCL_MSG_ERR("Failed to read status from device (%d)\n", err);
     return -1;
@@ -221,11 +186,11 @@ int fsa_wait_ack(pocl_formosa_data_t *dd) {
       POCL_MSG_ERR("Bad dimension\n");
       break;
     case 0x2:  // Exceptions
-      err = fsa_read_csr(dd, CASVP_FORMOSA_CSR_ECID, &ecid);
-      err |= fsa_read_csr(dd, CASVP_FORMOSA_CSR_EWID, &ewid);
-      err |= fsa_read_csr(dd, CASVP_FORMOSA_CSR_MCAUSE, &mcause);
-      err |= fsa_read_csr(dd, CASVP_FORMOSA_CSR_MEPC, &mepc);
-      err |= fsa_read_csr(dd, CASVP_FORMOSA_CSR_MTVAL, &mtval);
+      err = fsa_mmio(CASVP_FORMOSA_CSR_ECID, 0, &ecid);
+      err |= fsa_mmio(CASVP_FORMOSA_CSR_EWID, 0, &ewid);
+      err |= fsa_mmio(CASVP_FORMOSA_CSR_MCAUSE, 0, &mcause);
+      err |= fsa_mmio(CASVP_FORMOSA_CSR_MEPC, 0, &mepc);
+      err |= fsa_mmio(CASVP_FORMOSA_CSR_MTVAL, 0, &mtval);
       if (err != 0) {
         POCL_MSG_ERR("Failed to read exception information from device\n");
         break;
@@ -241,38 +206,13 @@ int fsa_wait_ack(pocl_formosa_data_t *dd) {
       break;
   }
 
-  err = fsa_write_csr(dd, CASVP_FORMOSA_CSR_ACK, 1);
+  err = fsa_mmio(CASVP_FORMOSA_CSR_ACK, 1, nullptr);
   if (err != 0) {
     POCL_MSG_ERR("Failed to read acknowledge from device (%d)\n", err);
     return -1;
   }
   sem_destroy(&sem);
   return (status == 0) ? 0 : -1;
-}
-
-int fsa_write_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t value) {
-  if (dd == nullptr) return -1;
-  msg_t *msg =
-      msg_create(dd->msg_id++, WRITE, 8, FSA_TASK_DISPATCHER_BASE + addr);
-  if (msg == nullptr) return -1;
-  msg = msg_set_payload(msg, reinterpret_cast<uint8_t *>(&value));
-  if (msg == nullptr) return -1;
-  int err = ipc_send_write_msg(dd->client_fd, msg);
-  msg_destroy(msg);
-  return err;
-}
-
-int fsa_read_csr(pocl_formosa_data_t *dd, uint64_t addr, uint64_t *value) {
-  if (dd == nullptr) return -1;
-  msg_t *msg =
-      msg_create(dd->msg_id++, READ, 8, FSA_TASK_DISPATCHER_BASE + addr);
-  if (msg == nullptr) return -1;
-  int err = ipc_send_read_msg(dd->client_fd, msg);
-  if (err != 0) goto FSA_READ_CSR_FINALLY;
-  *value = *reinterpret_cast<uint64_t *>(msg->payload);
-FSA_READ_CSR_FINALLY:
-  msg_destroy(msg);
-  return err;
 }
 
 void fsa_int_handler(int sig) {

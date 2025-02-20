@@ -11,7 +11,6 @@
 , clinfo
 , pkg-config
 , formosa-llvm
-, casvp
 }:
 
 stdenv.mkDerivation {
@@ -32,7 +31,6 @@ stdenv.mkDerivation {
     "-D ENABLE_LATEST_CXX_STD=ON"
     "-D ENABLE_LIBLLVMOPENCL=ON"
     "-D ENABLE_HOST_CPU_DEVICES=OFF"
-    "-D CASVP_INSTALL_DIR=${casvp}"
   ];
 
   AGENT_SOCKET_PATH = "/tmp/casvp-ipc";
@@ -44,7 +42,6 @@ stdenv.mkDerivation {
     cmake
     ninja
     python3
-    casvp
   ];
 
   buildInputs = [
