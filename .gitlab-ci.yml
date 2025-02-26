@@ -4,5 +4,10 @@ include:
       review-word-limit: "200"
       additional-prompt: "Please conduct a thorough and critical review of the code. I want you to identify potential mistakes, logical errors, poor coding practices, and areas for improvement. Do not hold back; provide direct and candid feedback."
 
+  - component: $CI_SERVER_FQDN/ci-registry/auto-submodule-update/auto-submodule-update@1.2.0
+    inputs:
+      extra_script:
+        - nix flake update
+
 stages:
   - review
