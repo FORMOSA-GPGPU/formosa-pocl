@@ -74,11 +74,19 @@
     },
     "nixpkgs_2": {
       "locked": {
+<<<<<<< HEAD
         "lastModified": 1740696622,
         "narHash": "sha256-pDg0ffvHQmWZAZfU+qCN9YeWBYmZiBwnhFmzCmJupHA=",
         "owner": "nixos",
         "repo": "nixpkgs",
         "rev": "1f82f2aea88e9756fd4998e8d7ca07e950a748e1",
+=======
+        "lastModified": 1740367490,
+        "narHash": "sha256-WGaHVAjcrv+Cun7zPlI41SerRtfknGQap281+AakSAw=",
+        "owner": "nixos",
+        "repo": "nixpkgs",
+        "rev": "0196c0175e9191c474c26ab5548db27ef5d34b05",
+>>>>>>> 99369f1c4 (Update flake.lock)
         "type": "github"
       },
       "original": {
