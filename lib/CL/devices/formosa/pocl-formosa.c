@@ -279,6 +279,12 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   err |= fsa_mmio(CASVP_FORMOSA_CSR_NUM_GROUPS_X, pc->num_groups[0], NULL);
   err |= fsa_mmio(CASVP_FORMOSA_CSR_NUM_GROUPS_Y, pc->num_groups[1], NULL);
   err |= fsa_mmio(CASVP_FORMOSA_CSR_NUM_GROUPS_Z, pc->num_groups[2], NULL);
+  err |=
+      fsa_mmio(CASVP_FORMOSA_CSR_GLOBAL_OFFSET_X, pc->global_offset[0], NULL);
+  err |=
+      fsa_mmio(CASVP_FORMOSA_CSR_GLOBAL_OFFSET_Y, pc->global_offset[1], NULL);
+  err |=
+      fsa_mmio(CASVP_FORMOSA_CSR_GLOBAL_OFFSET_Z, pc->global_offset[2], NULL);
 
   // write arguments
   uint32_t host_args_offset = 0;
