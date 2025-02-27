@@ -42,10 +42,10 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1739943307,
-        "narHash": "sha256-ea+wysJrZlEWN4Ch2LWR73eHWis5iYS9hM9d9PFxsbw=",
+        "lastModified": 1740646069,
+        "narHash": "sha256-+X7/9aMQ4K9d1+oVPX8PPnYovfb+eebpxeknps7LTg4=",
         "ref": "refs/heads/formosa/main",
-        "rev": "3f106417d8c5c0de118b721552d13e6733ce82e4",
+        "rev": "ee1963b1e6d8c7973f4c3a9acf7b43a22fc6bc2d",
         "shallow": true,
         "type": "git",
         "url": "ssh://git@git.caslab.ee.ncku.edu.tw/formosa-gpgpu/formosa-llvm.git"
