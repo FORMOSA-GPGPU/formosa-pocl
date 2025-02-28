@@ -1,5 +1,6 @@
 { stdenv
 , opencl-headers
+, opencl-clhpp
 , openssh
 , git
 , cmake
@@ -47,6 +48,7 @@ stdenv.mkDerivation {
   buildInputs = [
     zlib
     opencl-headers
+    opencl-clhpp
     ocl-icd
     pkg-config
     hwloc
