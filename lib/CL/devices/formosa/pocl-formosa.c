@@ -350,7 +350,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     memcpy(host_kargs_base_ptr + host_args_offset, &local_mem_offset,
            4);  // arg offset
     host_args_offset += word_size;
-    local_mem_offset = meta->local_sizes[i];
+    local_mem_offset += meta->local_sizes[i];
   }
 
   // upload kernel arguments buffer
