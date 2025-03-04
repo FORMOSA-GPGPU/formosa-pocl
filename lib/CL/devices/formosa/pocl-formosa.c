@@ -13,6 +13,10 @@
 #include "pocl_llvm.h"
 #include "pocl_util.h"
 
+static inline uint64_t align(uint64_t n, size_t size) {
+  return (n + size - 1) & ~(size - 1);
+}
+
 void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
   ops->device_name = "formosa";
   ops->build_hash = pocl_formosa_build_hash;
@@ -216,26 +220,26 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     struct pocl_argument *al = &(cmd->command.run.arguments[i]);
     if (ARG_IS_LOCAL(meta->arg_info[i])) {
       local_mem_size += al->size;
-      kargs_buffer_size += word_size;
+      kargs_buffer_size = align(kargs_buffer_size, word_size) + word_size;
     } else if ((meta->arg_info[i].type == POCL_ARG_TYPE_POINTER) ||
                (meta->arg_info[i].type == POCL_ARG_TYPE_IMAGE) ||
                (meta->arg_info[i].type == POCL_ARG_TYPE_SAMPLER)) {
-      kargs_buffer_size += ptr_size;
+      kargs_buffer_size = align(kargs_buffer_size, ptr_size) + ptr_size;
     } else {
       // scalar argument
-      kargs_buffer_size += al->size;
+      kargs_buffer_size = align(kargs_buffer_size, al->size) + al->size;
     }
   }
 
   // local buffers
   for (int i = 0; i < meta->num_locals; ++i) {
     local_mem_size += meta->local_sizes[i];
-    kargs_buffer_size += word_size;
+    kargs_buffer_size = align(kargs_buffer_size, word_size) + word_size;
   }
 
   // add local size
   if (local_mem_size != 0) {
-    kargs_buffer_size += word_size;
+    kargs_buffer_size = align(kargs_buffer_size, word_size) + word_size;
   }
 
   // check occupancy
@@ -294,16 +298,19 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     struct pocl_argument *al = &(cmd->command.run.arguments[i]);
     if (ARG_IS_LOCAL(meta->arg_info[i])) {
       if (local_mem_offset == 0) {
+        host_args_offset = align(host_args_offset, word_size);
         memcpy(host_kargs_base_ptr + host_args_offset, &local_mem_size,
                4);  // total local memory size
         host_args_offset += word_size;
       }
+      host_args_offset = align(host_args_offset, word_size);
       memcpy(host_kargs_base_ptr + host_args_offset, &local_mem_offset,
              4);  // local memory offset
       host_args_offset += word_size;
       local_mem_offset += al->size;
     } else if (meta->arg_info[i].type == POCL_ARG_TYPE_POINTER) {
       if (al->value == NULL) {
+        host_args_offset = align(host_args_offset, ptr_size);
         memset(host_kargs_base_ptr + host_args_offset, 0,
                ptr_size);  // NULL pointer value
         host_args_offset += ptr_size;
@@ -313,6 +320,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
             (formosa_buffer_data_t *)m->device_ptrs[cmd->device->global_mem_id]
                 .mem_ptr;
         uint64_t dev_mem_addr = buf_data->buf_address + al->offset;
+        host_args_offset = align(host_args_offset, word_size);
         memcpy(host_kargs_base_ptr + host_args_offset, &dev_mem_addr,
                ptr_size);  // pointer value
         host_args_offset += ptr_size;
@@ -323,6 +331,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
       POCL_ABORT("ERROR (pocl_formosa_run): Sampler argument not supported\n");
     } else {
       // scalar argument
+      host_args_offset = align(host_args_offset, al->size);
       memcpy(host_kargs_base_ptr + host_args_offset, al->value,
              al->size);  // scalar value
       host_args_offset += al->size;
@@ -332,10 +341,12 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   // write local memory size
   for (int i = 0; i < meta->num_locals; ++i) {
     if (local_mem_offset == 0) {
+      host_args_offset = align(host_args_offset, word_size);
       memcpy(host_kargs_base_ptr + host_args_offset, &local_mem_size,
              4);  // local_size
       host_args_offset += word_size;
     }
+    host_args_offset = align(host_args_offset, word_size);
     memcpy(host_kargs_base_ptr + host_args_offset, &local_mem_offset,
            4);  // arg offset
     host_args_offset += word_size;
