@@ -1,11 +1,13 @@
 #include "pocl-formosa-util.h"
+#include "formosa-driver.h"
 
 #include <libcomm/comm.h>
 #include <libcomm/msg.h>
 #include <semaphore.h>
 #include <signal.h>
+#include <linux/elf.h>
 
-#include <cstdio>
+#include <cstdint>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -38,8 +40,8 @@
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Linker/Linker.h>
-#include <llvm/Object/ELF.h>
-#include <llvm/Object/ELFObjectFile.h>
+// #include <llvm/Object/ELF.h>
+// #include <llvm/Object/ELFObjectFile.h>
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Object/SymbolicFile.h>
 #include <llvm/Support/FileSystem.h>
@@ -52,7 +54,6 @@
 #include <system_error>
 
 static sem_t sem;
-
 int fsa_check_occupancy(uint32_t group_size, uint32_t *max_local_mem) {
   // check group size
   uint32_t warps_per_core = CASVP_FORMOSA_WARPS_PER_CORE;
@@ -93,68 +94,66 @@ int fsa_get_elf_name(cl_program program, cl_uint device_i, char *elf_name) {
   return 0;
 }
 
-int fsa_upload_kernel_sections(const char *elf_file, pocl_formosa_data_t *dd) {
+int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd, uint64_t *kernel_dev_addr, uint64_t *kernel_base) {
   if (elf_file == nullptr || dd == nullptr) return -1;
-  auto bufferOrError = llvm::MemoryBuffer::getFile(std::string(elf_file));
-  if (!bufferOrError) {
-    POCL_ABORT(
-        "ERROR (fsa_upload_kernel_sections): Failed to open ELF file %s\n",
-        elf_file);
+  uint64_t kernel_size = 0;
+  uint64_t min_base = -1ULL;
+  FILE *elf = fopen(elf_file, "rb");
+  rewind(elf);
+  Elf64_Ehdr ehdr;
+  fread(&ehdr, sizeof(ehdr), 1, elf);
+  // 1st pass, iterate all program headers to find the minimum base address
+  for (int i = 0; i < ehdr.e_phnum; i++) {
+    fseek(elf, ehdr.e_phoff + i * (ehdr.e_phentsize), SEEK_SET);
+    Elf64_Phdr phdr;
+    // read prog header from elf
+    fread(&phdr, sizeof(phdr), 1, elf);
+    if (phdr.p_type != PT_LOAD || phdr.p_paddr < FSA_GLOBAL_MEM_BASE)
+        continue;
+    uint64_t addr = phdr.p_paddr;
+    if(addr < min_base)
+      min_base = addr;
+    if(addr + phdr.p_memsz > kernel_size)
+      kernel_size = addr + phdr.p_memsz;
   }
-  auto buffer = std::move(bufferOrError.get());
-
-  // Parse ELF file
-  auto elfOrError =
-      llvm::object::ELF64LEObjectFile::create(buffer->getMemBufferRef());
-  if (!elfOrError) {
-    POCL_ABORT(
-        "ERROR (fsa_upload_kernel_sections): Failed to parse ELF file %s\n",
-        elf_file);
+  // calculate absolute kernel size (minus min_base as offset)
+  kernel_size -= min_base;
+  void *kernel_start_addr_;
+  fsa_malloc(&kernel_start_addr_, kernel_size);
+  uint64_t kernel_start_addr = (uint64_t)kernel_start_addr_;
+  *kernel_base = min_base;
+  *kernel_dev_addr = (uint64_t)kernel_start_addr;
+  if (POCL_DEBUGGING_ON) {
+    printf("kernel_start_addr: %lx\n", (uint64_t)kernel_start_addr);
+    printf("kernel_size: %lx\n", kernel_size);
   }
 
-  for (const llvm::object::SectionRef &section : (*elfOrError).sections()) {
-    llvm::StringRef name;
-    if (auto nameOrError = section.getName()) {
-      name = nameOrError.get();
+  // move file pointer to beginning of file
+  rewind(elf);
+  uint8_t *host_ptr = (uint8_t*)calloc(1, sizeof(uint8_t) * kernel_size);
+  uint64_t offset = 0;
+
+  // 2nd pass, copy all program headers to device memory
+  for (int i = 0; i < ehdr.e_phnum; i++) {
+    fseek(elf, ehdr.e_phoff + i * (ehdr.e_phentsize), SEEK_SET);
+    Elf64_Phdr phdr;
+    fread(&phdr, sizeof(phdr), 1, elf);
+    if (phdr.p_type != PT_LOAD || phdr.p_paddr < FSA_GLOBAL_MEM_BASE)
+        continue;
+    uint64_t size = phdr.p_filesz;
+    uint64_t offset = phdr.p_paddr - min_base;
+    fseek(elf, phdr.p_offset, SEEK_SET);
+    if(size) {
+      fread(host_ptr + offset, size, 1, elf);
     } else {
-      POCL_ABORT(
-          "ERROR (fsa_upload_kernel_sections): Failed to get section name\n");
+      size = phdr.p_memsz;
     }
-
-    if (name.starts_with(".text") || name.starts_with(".rodata") ||
-        name.starts_with(".data") || name.starts_with(".bss")) {
-      llvm::StringRef data;
-      if (auto dataOrError = section.getContents()) {
-        data = dataOrError.get();
-      } else {
-        POCL_ABORT(
-            "ERROR (fsa_upload_kernel_sections): Failed to get section "
-            "contents\n");
-      }
-
-      if (data.empty()) continue;
-
-      // upload to corresponding address
-      uint64_t addr = section.getAddress();
-      if (addr > FSA_GLOBAL_MEM_BASE &&
-          addr <= FSA_GLOBAL_MEM_BASE + CASVP_FORMOSA_GLOBAL_MEM_SIZE) {
-        int err = fsa_addr_malloc(addr, data.size());
-        if (err != 0) {
-          POCL_ABORT(
-              "ERROR (fsa_upload_kernel_sections): Failed to allocate section "
-              "%s\n",
-              name.str().c_str());
-        }
-      }
-
-      int err = fsa_copy_to_dev(addr, data.data(), data.size());
-      if (err != 0) {
-        POCL_ABORT(
-            "ERROR (fsa_upload_kernel_sections): Failed to upload section %s\n",
-            name.str().c_str());
-      }
-    }
+    printf("Copy %lx to %lx with size %lx\n",
+      (uint64_t)host_ptr + offset, (uint64_t)kernel_start_addr + offset, size);
+    fsa_copy_to_dev((uint64_t)kernel_start_addr + offset, host_ptr + offset, size);
   }
+  free(host_ptr);
+  fclose(elf);
   return 0;
 }
 
@@ -578,4 +577,34 @@ uint64_t fsa_get_symbol_pc(const char *elf_path, const char *symbol_name) {
   POCL_ABORT("ERROR (fsa_get_symbol_pc): Failed to find symbol %s\n",
              symbol_name);
   return 0;
+}
+
+
+uint64_t fsa_get_symbol_offset(const char *elf_path, const char *symbol_name) {
+  if(elf_path == nullptr || symbol_name == nullptr) {
+    POCL_ABORT("ERROR (fsa_get_symbol_offset): Null ptr in argument\n");
+  }
+
+  auto bufferOrError = llvm::MemoryBuffer::getFile(std::string(elf_path));
+  if (!bufferOrError) {
+    POCL_ABORT("ERROR (fsa_get_symbol_offset): Failed to open ELF file %s\n",
+               elf_path);
+  }
+
+  // Parse ELF file
+  auto objOrError = llvm::object::ObjectFile::createELFObjectFile(
+      bufferOrError.get()->getMemBufferRef());
+  if (!objOrError) {
+    POCL_ABORT("ERROR (fsa_get_symbol_offset): Failed to parse ELF file %s\n",
+               elf_path);
+  }
+  
+  bool found_load = false;
+  std::unique_ptr<llvm::object::ObjectFile> obj = std::move(objOrError.get());
+  
+  uint64_t symbol_addr = fsa_get_symbol_pc(elf_path, symbol_name);
+  uint64_t base_addr = obj->getStartAddress().get();
+  uint64_t symbol_offset = symbol_addr - base_addr;
+  printf("base addr 0x%lx, symbol addr 0x%lx, symbol offset 0x%lx\n", base_addr, symbol_addr, symbol_offset);
+  return symbol_offset;
 }

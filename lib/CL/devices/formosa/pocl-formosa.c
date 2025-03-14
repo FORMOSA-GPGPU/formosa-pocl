@@ -12,6 +12,7 @@
 #include "pocl-formosa-util.h"
 #include "pocl_llvm.h"
 #include "pocl_util.h"
+#include <stdio.h>
 
 static inline uint64_t align(uint64_t n, size_t size) {
   return (n + size - 1) & ~(size - 1);
@@ -368,28 +369,31 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   if (dd->kernel_buffer == NULL) {
     char sz_program_fsabin[POCL_MAX_PATHNAME_LENGTH];
     err = fsa_get_elf_name(program, device_i, sz_program_fsabin);
-    err |= fsa_upload_kernel_sections(sz_program_fsabin, dd);
+    printf("elf path: %s\n", sz_program_fsabin);
+    uint64_t elf_load_paddr_base, dev_kernel_addr;
+    err |= fsa_upload_kernel(sz_program_fsabin, dd, &dev_kernel_addr,
+                             &elf_load_paddr_base);
     if (err != 0) {
       POCL_ABORT("ERROR (pocl_formosa_run): Kernel upload failed\n");
     }
     char *trampoline_name = malloc(strlen(kernel->name) + 12);
     sprintf(trampoline_name, "%s_trampoline", kernel->name);
-    uint64_t kernel_pc = fsa_get_symbol_pc(sz_program_fsabin, trampoline_name);
+    uint64_t kernel_pc = fsa_get_symbol_pc(sz_program_fsabin, trampoline_name) - elf_load_paddr_base + dev_kernel_addr;
+    printf("kernel_pc: %lx\n", kernel_pc);
     POCL_MEM_FREE(trampoline_name);
-    uint64_t entry_pc = fsa_get_symbol_pc(sz_program_fsabin, "_start");
+    uint64_t entry_pc = fsa_get_symbol_pc(sz_program_fsabin, "_start") - elf_load_paddr_base + dev_kernel_addr;
+    printf("entry_pc: %lx\n", entry_pc);
     err = fsa_mmio(CASVP_FORMOSA_CSR_KERNEL_PC, kernel_pc, NULL);
     err |= fsa_mmio(CASVP_FORMOSA_CSR_ENTRY_PC, entry_pc, NULL);
     if (err != 0) {
       POCL_ABORT("ERROR (pocl_formosa_run): Kernel CSR setup failed\n");
     }
   }
-
   // launch kernel execution
   err = fsa_start_kernel();
   if (err != 0) {
     POCL_ABORT("ERROR (pocl_formosa_run): Kernel launch failed\n");
   }
-
   // wait for the execution to complete
   err = fsa_wait_ack(dd);
   if (err != 0) {

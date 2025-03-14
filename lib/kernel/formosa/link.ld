@@ -5,7 +5,7 @@ MEMORY
   read_only  (rx): ORIGIN = 0x10000000, LENGTH = 0x08000000  /* 128 MiB */
   kargs      (r):  ORIGIN = 0x18000000, LENGTH = 0x08000000  /* 128 MiB */
   local_mem  (rw): ORIGIN = 0x20000000, LENGTH = 0x08000000  /* 128 MiB */
-  global_mem (rw): ORIGIN = 0x80000000, LENGTH = 0x80000000  /*   2 GiB */
+  global_mem (rw): ORIGIN = 0x40000000, LENGTH = 0x80000000  /*   2 GiB */
 }
 
 /* Stack information variables */
@@ -25,7 +25,7 @@ SECTIONS {
   *(.text)
   *(.text.*)
   . = ALIGN(8);
-} > read_only
+} > global_mem
 
 .rodata : {
   . = ALIGN(8);
@@ -35,7 +35,7 @@ SECTIONS {
   *(.rodata)
   *(.rodata.*)
   . = ALIGN(8);
-} > read_only
+} > global_mem
 
 .data : {
   . = ALIGN(8);
