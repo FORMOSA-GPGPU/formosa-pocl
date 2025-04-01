@@ -63,10 +63,8 @@ _start:
 
   /* stack initilization */
   la sp, _stack_start
-  csrr a0, mhartid        /* global thread id */
-  csrr t0, xmhartidbase   /* global thread id base */
-  sub a0, a0, t0         /* local thread id */
-  slli a1, a0, 16         /* stack for each thread is 64 KiB */
+  csrr a0, mhartid  /* global thread id */
+  slli a1, a0, 10   /* stack for each thread is 1 KiB */
   sub sp, sp, a1
 
 main_entry:
