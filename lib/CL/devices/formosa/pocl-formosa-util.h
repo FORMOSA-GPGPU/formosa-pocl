@@ -79,7 +79,7 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
 uint64_t fsa_get_symbol_pc(const char *elf_path, const char *symbol_name);
 uint64_t fsa_get_symbol_offset(const char *elf_path, const char *symbol_name);
 #define FSA_TASK_DISPATCHER_BASE 0x1000
-#define FSA_GLOBAL_MEM_BASE 0x40000000
+#define FSA_GLOBAL_MEM_BASE 0x80000000
 
 #ifdef __cplusplus
 }
