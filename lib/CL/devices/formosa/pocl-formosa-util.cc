@@ -148,8 +148,10 @@ int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd, uint64_t *k
     } else {
       size = phdr.p_memsz;
     }
-    printf("Copy %lx to %lx with size %lx\n",
-      (uint64_t)host_ptr + offset, (uint64_t)kernel_start_addr + offset, size);
+    if (POCL_DEBUGGING_ON) {
+      printf("Copy %lx to %lx with size %lx\n",
+        (uint64_t)host_ptr + offset, (uint64_t)kernel_start_addr + offset, size);
+    }
     fsa_copy_to_dev((uint64_t)kernel_start_addr + offset, host_ptr + offset, size);
   }
   free(host_ptr);
