@@ -395,11 +395,13 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
       POCL_ABORT("ERROR (pocl_formosa_run): Kernel CSR setup failed\n");
     }
   }
+
   // launch kernel execution
   err = fsa_start_kernel();
   if (err != 0) {
     POCL_ABORT("ERROR (pocl_formosa_run): Kernel launch failed\n");
   }
+
   // wait for the execution to complete
   err = fsa_wait_ack(dd);
   if (err != 0) {

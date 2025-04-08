@@ -580,33 +580,3 @@ uint64_t fsa_get_symbol_pc(const char *elf_path, const char *symbol_name) {
              symbol_name);
   return 0;
 }
-
-
-uint64_t fsa_get_symbol_offset(const char *elf_path, const char *symbol_name) {
-  if(elf_path == nullptr || symbol_name == nullptr) {
-    POCL_ABORT("ERROR (fsa_get_symbol_offset): Null ptr in argument\n");
-  }
-
-  auto bufferOrError = llvm::MemoryBuffer::getFile(std::string(elf_path));
-  if (!bufferOrError) {
-    POCL_ABORT("ERROR (fsa_get_symbol_offset): Failed to open ELF file %s\n",
-               elf_path);
-  }
-
-  // Parse ELF file
-  auto objOrError = llvm::object::ObjectFile::createELFObjectFile(
-      bufferOrError.get()->getMemBufferRef());
-  if (!objOrError) {
-    POCL_ABORT("ERROR (fsa_get_symbol_offset): Failed to parse ELF file %s\n",
-               elf_path);
-  }
-  
-  bool found_load = false;
-  std::unique_ptr<llvm::object::ObjectFile> obj = std::move(objOrError.get());
-  
-  uint64_t symbol_addr = fsa_get_symbol_pc(elf_path, symbol_name);
-  uint64_t base_addr = obj->getStartAddress().get();
-  uint64_t symbol_offset = symbol_addr - base_addr;
-  printf("base addr 0x%lx, symbol addr 0x%lx, symbol offset 0x%lx\n", base_addr, symbol_addr, symbol_offset);
-  return symbol_offset;
-}
