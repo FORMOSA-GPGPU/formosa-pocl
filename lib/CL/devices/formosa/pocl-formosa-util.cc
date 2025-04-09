@@ -40,8 +40,6 @@
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Linker/Linker.h>
-// #include <llvm/Object/ELF.h>
-// #include <llvm/Object/ELFObjectFile.h>
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Object/SymbolicFile.h>
 #include <llvm/Support/FileSystem.h>
@@ -54,6 +52,7 @@
 #include <system_error>
 
 static sem_t sem;
+
 int fsa_check_occupancy(uint32_t group_size, uint32_t *max_local_mem) {
   // check group size
   uint32_t warps_per_core = CASVP_FORMOSA_WARPS_PER_CORE;
@@ -119,7 +118,12 @@ int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd, uint64_t *k
   // calculate absolute kernel size (minus min_base as offset)
   kernel_size -= min_base;
   void *kernel_start_addr_;
-  fsa_malloc(&kernel_start_addr_, kernel_size);
+  if (fsa_malloc(&kernel_start_addr_, kernel_size)){
+    POCL_MSG_ERR("Failed to allocate FSA device side memory in fsa_upload_kernel\n");
+    fclose(elf);
+    return -1;
+  }
+  
   uint64_t kernel_start_addr = (uint64_t)kernel_start_addr_;
   *kernel_base = min_base;
   *kernel_dev_addr = (uint64_t)kernel_start_addr;
