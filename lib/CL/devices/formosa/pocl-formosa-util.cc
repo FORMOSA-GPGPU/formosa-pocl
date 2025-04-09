@@ -1,11 +1,10 @@
 #include "pocl-formosa-util.h"
-#include "formosa-driver.h"
 
 #include <libcomm/comm.h>
 #include <libcomm/msg.h>
+#include <linux/elf.h>
 #include <semaphore.h>
 #include <signal.h>
-#include <linux/elf.h>
 
 #include <cstdint>
 #include <iostream>
@@ -93,7 +92,8 @@ int fsa_get_elf_name(cl_program program, cl_uint device_i, char *elf_name) {
   return 0;
 }
 
-int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd, uint64_t *kernel_dev_addr, uint64_t *kernel_base) {
+int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
+                      uint64_t *kernel_dev_addr, uint64_t *kernel_base) {
   if (elf_file == nullptr || dd == nullptr) return -1;
   uint64_t kernel_size = 0;
   uint64_t min_base = -1ULL;
@@ -107,23 +107,21 @@ int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd, uint64_t *k
     Elf64_Phdr phdr;
     // read prog header from elf
     fread(&phdr, sizeof(phdr), 1, elf);
-    if (phdr.p_type != PT_LOAD || phdr.p_paddr < FSA_GLOBAL_MEM_BASE)
-        continue;
+    if (phdr.p_type != PT_LOAD || phdr.p_paddr < FSA_GLOBAL_MEM_BASE) continue;
     uint64_t addr = phdr.p_paddr;
-    if(addr < min_base)
-      min_base = addr;
-    if(addr + phdr.p_memsz > kernel_size)
-      kernel_size = addr + phdr.p_memsz;
+    if (addr < min_base) min_base = addr;
+    if (addr + phdr.p_memsz > kernel_size) kernel_size = addr + phdr.p_memsz;
   }
   // calculate absolute kernel size (minus min_base as offset)
   kernel_size -= min_base;
   void *kernel_start_addr_;
-  if (fsa_malloc(&kernel_start_addr_, kernel_size)){
-    POCL_MSG_ERR("Failed to allocate FSA device side memory in fsa_upload_kernel\n");
+  if (fsa_malloc(&kernel_start_addr_, kernel_size)) {
+    POCL_MSG_ERR(
+        "Failed to allocate FSA device side memory in fsa_upload_kernel\n");
     fclose(elf);
     return -1;
   }
-  
+
   uint64_t kernel_start_addr = (uint64_t)kernel_start_addr_;
   *kernel_base = min_base;
   *kernel_dev_addr = (uint64_t)kernel_start_addr;
@@ -134,7 +132,7 @@ int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd, uint64_t *k
 
   // move file pointer to beginning of file
   rewind(elf);
-  uint8_t *host_ptr = (uint8_t*)calloc(1, sizeof(uint8_t) * kernel_size);
+  uint8_t *host_ptr = (uint8_t *)calloc(1, sizeof(uint8_t) * kernel_size);
   uint64_t offset = 0;
 
   // 2nd pass, copy all program headers to device memory
@@ -142,21 +140,21 @@ int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd, uint64_t *k
     fseek(elf, ehdr.e_phoff + i * (ehdr.e_phentsize), SEEK_SET);
     Elf64_Phdr phdr;
     fread(&phdr, sizeof(phdr), 1, elf);
-    if (phdr.p_type != PT_LOAD || phdr.p_paddr < FSA_GLOBAL_MEM_BASE)
-        continue;
+    if (phdr.p_type != PT_LOAD || phdr.p_paddr < FSA_GLOBAL_MEM_BASE) continue;
     uint64_t size = phdr.p_filesz;
     uint64_t offset = phdr.p_paddr - min_base;
     fseek(elf, phdr.p_offset, SEEK_SET);
-    if(size) {
+    if (size) {
       fread(host_ptr + offset, size, 1, elf);
     } else {
       size = phdr.p_memsz;
     }
     if (POCL_DEBUGGING_ON) {
-      printf("Copy %lx to %lx with size %lx\n",
-        (uint64_t)host_ptr + offset, (uint64_t)kernel_start_addr + offset, size);
+      printf("Copy %lx to %lx with size %lx\n", (uint64_t)host_ptr + offset,
+             (uint64_t)kernel_start_addr + offset, size);
     }
-    fsa_copy_to_dev((uint64_t)kernel_start_addr + offset, host_ptr + offset, size);
+    fsa_copy_to_dev((uint64_t)kernel_start_addr + offset, host_ptr + offset,
+                    size);
   }
   free(host_ptr);
   fclose(elf);
