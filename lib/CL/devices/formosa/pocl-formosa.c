@@ -2,6 +2,7 @@
 
 #include <libcomm/comm.h>
 #include <libcomm/msg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -12,7 +13,6 @@
 #include "pocl-formosa-util.h"
 #include "pocl_llvm.h"
 #include "pocl_util.h"
-#include <stdio.h>
 
 static inline uint64_t align(uint64_t n, size_t size) {
   return (n + size - 1) & ~(size - 1);
@@ -380,12 +380,14 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     }
     char *trampoline_name = malloc(strlen(kernel->name) + 12);
     sprintf(trampoline_name, "%s_trampoline", kernel->name);
-    uint64_t kernel_pc = fsa_get_symbol_pc(sz_program_fsabin, trampoline_name) - elf_load_paddr_base + dev_kernel_addr;
+    uint64_t kernel_pc = fsa_get_symbol_pc(sz_program_fsabin, trampoline_name) -
+                         elf_load_paddr_base + dev_kernel_addr;
     if (POCL_DEBUGGING_ON) {
       printf("kernel_pc: %lx\n", kernel_pc);
     }
     POCL_MEM_FREE(trampoline_name);
-    uint64_t entry_pc = fsa_get_symbol_pc(sz_program_fsabin, "_start") - elf_load_paddr_base + dev_kernel_addr;
+    uint64_t entry_pc = fsa_get_symbol_pc(sz_program_fsabin, "_start") -
+                        elf_load_paddr_base + dev_kernel_addr;
     if (POCL_DEBUGGING_ON) {
       printf("entry_pc: %lx\n", entry_pc);
     }

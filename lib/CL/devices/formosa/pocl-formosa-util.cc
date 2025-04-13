@@ -107,10 +107,14 @@ int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
     Elf64_Phdr phdr;
     // read prog header from elf
     fread(&phdr, sizeof(phdr), 1, elf);
-    if (phdr.p_type != PT_LOAD || phdr.p_paddr < FSA_GLOBAL_MEM_BASE) continue;
+    if (phdr.p_type != PT_LOAD) continue;
     uint64_t addr = phdr.p_paddr;
     if (addr < min_base) min_base = addr;
     if (addr + phdr.p_memsz > kernel_size) kernel_size = addr + phdr.p_memsz;
+  }
+  if (min_base == -1ULL) {
+    printf("FSA upload kernel failed, min_base not found\n");
+    exit(1);
   }
   // calculate absolute kernel size (minus min_base as offset)
   kernel_size -= min_base;
@@ -140,7 +144,7 @@ int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
     fseek(elf, ehdr.e_phoff + i * (ehdr.e_phentsize), SEEK_SET);
     Elf64_Phdr phdr;
     fread(&phdr, sizeof(phdr), 1, elf);
-    if (phdr.p_type != PT_LOAD || phdr.p_paddr < FSA_GLOBAL_MEM_BASE) continue;
+    if (phdr.p_type != PT_LOAD) continue;
     uint64_t size = phdr.p_filesz;
     uint64_t offset = phdr.p_paddr - min_base;
     fseek(elf, phdr.p_offset, SEEK_SET);

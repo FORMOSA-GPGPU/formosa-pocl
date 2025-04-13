@@ -2,16 +2,13 @@ OUTPUT_ARCH(riscv)
 
 MEMORY
 {
-  read_only  (rx): ORIGIN = 0x10000000, LENGTH = 0x08000000  /* 128 MiB */
-  kargs      (r):  ORIGIN = 0x18000000, LENGTH = 0x08000000  /* 128 MiB */
-  global_mem (rw): ORIGIN = 0x80000000, LENGTH = 0x80000000  /*   2 GiB */
+  global_mem (rw): ORIGIN = 0x00000000, LENGTH = 0x80000000  /*   2 GiB */
 }
 
 /* Stack information variables */
 _min_stack   = 0x400;   /* 1K - minimum stack space to reserve */
 
 /* Kernel arguments */
-_kargs = ORIGIN(kargs);
 
 ENTRY(_start)
 
