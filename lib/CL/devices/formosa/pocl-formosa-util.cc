@@ -382,12 +382,14 @@ std::stringstream generate_command(std::vector<std::string> &args) {
   return ss_cmd;
 }
 
-std::tuple<int, std::stringstream> compile_source(char *src_path, char *obj_path, std::string clang_path, std::string build_cflags) {
+std::tuple<int, std::stringstream> compile_source(char *src_path,
+                                                  const char *obj_path,
+                                                  std::string clang_path,
+                                                  std::string build_cflags) {
   int err;
   std::stringstream ss_cmd, ss_out;
-  std::vector<std::string> args = {
-      clang_path,   build_cflags,       src_path,
-      "-c",         "-o",               obj_path};
+  std::vector<std::string> args = {clang_path, build_cflags, src_path,
+                                   "-c",       "-o",         obj_path};
   ss_cmd = generate_command(args);
   POCL_MSG_PRINT_LLVM("Running \"%s\"\n", ss_cmd.str().c_str());
   err = exec(ss_cmd.str().c_str(), ss_out);
@@ -463,10 +465,6 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
   char linker_script_path[POCL_MAX_PATHNAME_LENGTH];
   char printf_src_path[POCL_MAX_PATHNAME_LENGTH];
   char putchar_src_path[POCL_MAX_PATHNAME_LENGTH];
-  char printf_obj_path[POCL_MAX_PATHNAME_LENGTH];
-  char putchar_obj_path[POCL_MAX_PATHNAME_LENGTH];
-  char printf_lib_path[POCL_MAX_PATHNAME_LENGTH];
-  char lib_search_path[POCL_MAX_PATHNAME_LENGTH];
   pocl_get_srcdir_or_datadir(kernel_util_path, "/lib/CL/devices", "",
                              "/formosa/kernel_util.cl");
   pocl_get_srcdir_or_datadir(start_file_path, "/lib/CL/devices", "",
@@ -477,23 +475,21 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
                              "/formosa/printf.c");
   pocl_get_srcdir_or_datadir(putchar_src_path, "/lib/CL/devices", "",
                              "/formosa/putchar.c");
-  pocl_get_srcdir_or_datadir(printf_obj_path, "/lib/CL/devices", "",
-                             "/formosa/printf.o");
-  pocl_get_srcdir_or_datadir(putchar_obj_path, "/lib/CL/devices", "",
-                             "/formosa/putchar.o");
-  pocl_get_srcdir_or_datadir(printf_lib_path, "/lib/CL/devices", "",
-                             "/formosa/libprintf.a");
-  pocl_get_srcdir_or_datadir(lib_search_path, "/lib/CL/devices", "",
-                             "/formosa/");
+
+  const char *printf_obj_path = "/tmp/printf.o";
+  const char *putchar_obj_path = "/tmp/putchar.o";
+  const char *printf_lib_path = "/tmp/libprintf.a";
 
   // First compile printf.c and putchar.c
   std::stringstream ss_out;
-  std::tie(err, ss_out) = compile_source(printf_src_path, printf_obj_path, clang_path, build_cflags);
+  std::tie(err, ss_out) = compile_source(printf_src_path, printf_obj_path,
+                                         clang_path, build_cflags);
   if (err != 0) {
     POCL_MSG_ERR("%s\n", ss_out.str().c_str());
     return err;
   }
-  std::tie(err, ss_out) = compile_source(putchar_src_path, putchar_obj_path, clang_path, build_cflags);
+  std::tie(err, ss_out) = compile_source(putchar_src_path, putchar_obj_path,
+                                         clang_path, build_cflags);
   if (err != 0) {
     POCL_MSG_ERR("%s\n", ss_out.str().c_str());
     return err;
@@ -502,9 +498,8 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
   // Archive printf.o and putchar.o into libprintf.a
   std::stringstream ss_cmd;
   std::string archive_path = llvm_path + "/bin/llvm-ar";
-  std::vector<std::string> args = {
-    archive_path, "rcs", printf_lib_path, printf_obj_path, putchar_obj_path
-  };
+  std::vector<std::string> args = {archive_path, "rcs", printf_lib_path,
+                                   printf_obj_path, putchar_obj_path};
   ss_cmd = generate_command(args);
   POCL_MSG_PRINT_LLVM("Running \"%s\"\n", ss_cmd.str().c_str());
   err = exec(ss_cmd.str().c_str(), ss_out);
@@ -514,11 +509,10 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
   }
 
   // Link kernel program with predefined kernel functions and libprintf.a
-  args = {
-      clang_path,         build_cflags,       start_file_path,
-      bitcode_path,       ("-L" + std::string(lib_search_path)), "-lprintf",
-      kernel_util_path,   build_ldflags,      "-T",
-      linker_script_path, "-o",               elf_path};
+  args = {clang_path,         build_cflags,  start_file_path,
+          bitcode_path,       "-L/tmp",      "-lprintf",
+          kernel_util_path,   build_ldflags, "-T",
+          linker_script_path, "-o",          elf_path};
   ss_cmd = generate_command(args);
   POCL_MSG_PRINT_LLVM("Running \"%s\"\n", ss_cmd.str().c_str());
   err = exec(ss_cmd.str().c_str(), ss_out);
