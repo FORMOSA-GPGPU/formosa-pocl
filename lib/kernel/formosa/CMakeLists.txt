@@ -43,7 +43,7 @@ set(LLC_FLAGS "")
 
 set(KERNEL_CL_FLAGS "-Xclang"
                     "-cl-std=CL${FORMOSA_DEVICE_CL_STD}"
-                    "-Xclang" 
+                    "-Xclang"
                     "-cl-ext=-all,+cl_khr_byte_addressable_store,+cl_khr_int64,+cl_khr_fp64"
                     "-D__OPENCL_C_VERSION__=${FORMOSA_DEVICE_CL_VERSION}"
                     ${KERNEL_CL_FLAGS})
@@ -67,6 +67,6 @@ set(KERNEL_TARGET_LIST "${KERNEL_TARGET_LIST}" PARENT_SCOPE)
 install(FILES "${KERNEL_BC}"
         DESTINATION "${POCL_INSTALL_PRIVATE_DATADIR}" COMPONENT "lib")
 
-install(FILES "kernel_util.cl" "start.S" "link.ld"
+install(FILES "kernel_util.cl" "start.S" "link.ld" "printf.c" "putchar.c"
         DESTINATION "${POCL_INSTALL_PRIVATE_DATADIR}/formosa"
         COMPONENT "lib")

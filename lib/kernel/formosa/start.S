@@ -41,28 +41,32 @@ _start:
 
   /*
     calculate workitem local id
-    linear thread id = mhartid
+    local linear thread id = mhartid - mhartidbase
     local id z (xcllz) = linear thread id / (group size x * group size y)
     remaining = linear thread id % (group size x * group size y)
     local id y (xclly) = remaining / group size x
     local id x (xcllx) = remaining % group size x
   */
-  csrr t0, mhartid  /* linear thread id */
-  csrr t1, xclsx    /* get workgroup size x */
-  csrr t2, xclsy    /* get workgroup size y */
-  mul  t2, t1, t2   /* group size x * group size y */
-  div  t3, t0, t2   /* local id x */
-  csrw xcllz, t3    /* set local id z */
-  rem  t0, t0, t2   /* remaining */
-  div  t3, t0, t1   /* local id y */
-  csrw xclly, t3    /* set local id y */
-  rem  t0, t0, t1   /* local id x */
-  csrw xcllx, t0    /* set local id x */
-  
+  csrr t0, mhartid        /* global linear thread id */
+  csrr t1, xmhartidbase   /* global linear thread id base */
+  sub  t0, t0, t1         /* local linear thread id */
+  csrr t1, xclsx          /* get workgroup size x */
+  csrr t2, xclsy          /* get workgroup size y */
+  mul  t2, t1, t2         /* group size x * group size y */
+  div  t3, t0, t2         /* local id x */
+  csrw xcllz, t3          /* set local id z */
+  rem  t0, t0, t2         /* remaining */
+  div  t3, t0, t1         /* local id y */
+  csrw xclly, t3          /* set local id y */
+  rem  t0, t0, t1         /* local id x */
+  csrw xcllx, t0          /* set local id x */
+
   /* stack initilization */
   la sp, _stack_start
-  csrr a0, mhartid  /* global thread id */
-  slli a1, a0, 16   /* stack for each thread is 64 KiB */
+  csrr a0, mhartid        /* global thread id */
+  csrr t0, xmhartidbase   /* global thread id base */
+  sub a0, a0, t0         /* local thread id */
+  slli a1, a0, 16         /* stack for each thread is 64 KiB */
   sub sp, sp, a1
 
 main_entry:
@@ -78,7 +82,7 @@ main_entry:
 
   /* flush all caches */
   // fence  // TODO: uncomment this line when fence instruction is supported
- 
+
   /* use ecall to terminate kernel programs */
   ecall
 
