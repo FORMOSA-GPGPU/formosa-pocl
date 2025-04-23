@@ -43,7 +43,7 @@
       },
       "locked": {
         "lastModified": 1745321693,
-        "narHash": "sha256-Hr2PJG0KWzeEsKcHDoIBVMEEqhI+D3DpVOW3/J9zpJM=",
+        "narHash": "sha256-CsBS0jXZbZH5AJDvVIf1bxw0RU/YvAL9YspRF9p6wu0=",
         "ref": "refs/heads/formosa/main",
         "rev": "5d558a0559c3b3c661b128554795194dee5769f0",
         "shallow": true,
