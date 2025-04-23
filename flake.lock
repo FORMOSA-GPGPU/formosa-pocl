@@ -43,7 +43,7 @@
       },
       "locked": {
         "lastModified": 1745321693,
-        "narHash": "sha256-CsBS0jXZbZH5AJDvVIf1bxw0RU/YvAL9YspRF9p6wu0=",
+        "narHash": "sha256-Hr2PJG0KWzeEsKcHDoIBVMEEqhI+D3DpVOW3/J9zpJM=",
         "ref": "refs/heads/formosa/main",
         "rev": "5d558a0559c3b3c661b128554795194dee5769f0",
         "shallow": true,
@@ -74,11 +74,11 @@
     },
     "nixpkgs_2": {
       "locked": {
-        "lastModified": 1745387714,
-        "narHash": "sha256-Zx+s6b17o8f6r9hiE22uPDAzf6wKHpxrRCTOyDmV804=",
+        "lastModified": 1745400554,
+        "narHash": "sha256-k8OKKM0aoAqVJ4xDACPLSiu7MF5M2/FlKPOOrtwI59c=",
         "owner": "nixos",
         "repo": "nixpkgs",
-        "rev": "11fbaa8e3decd8b0b7ebd6eec6090738bcfc502c",
+        "rev": "73fa8c1289d22294e2f061de6d3653d338d819ae",
         "type": "github"
       },
       "original": {
