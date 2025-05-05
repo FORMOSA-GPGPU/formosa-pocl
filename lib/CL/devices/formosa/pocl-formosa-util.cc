@@ -2,10 +2,10 @@
 
 #include <libcomm/comm.h>
 #include <libcomm/msg.h>
+#include <linux/elf.h>
 #include <semaphore.h>
 #include <signal.h>
 
-#include <cstdio>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -38,8 +38,6 @@
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Linker/Linker.h>
-#include <llvm/Object/ELF.h>
-#include <llvm/Object/ELFObjectFile.h>
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Object/SymbolicFile.h>
 #include <llvm/Support/FileSystem.h>
@@ -93,68 +91,70 @@ int fsa_get_elf_name(cl_program program, cl_uint device_i, char *elf_name) {
   return 0;
 }
 
-int fsa_upload_kernel_sections(const char *elf_file, pocl_formosa_data_t *dd) {
+int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
+                      uint64_t *kernel_dev_addr, uint64_t *kernel_base) {
   if (elf_file == nullptr || dd == nullptr) return -1;
-  auto bufferOrError = llvm::MemoryBuffer::getFile(std::string(elf_file));
-  if (!bufferOrError) {
-    POCL_ABORT(
-        "ERROR (fsa_upload_kernel_sections): Failed to open ELF file %s\n",
-        elf_file);
+  uint64_t kernel_size = 0;
+  uint64_t min_base = -1ULL;
+  FILE *elf = fopen(elf_file, "rb");
+  rewind(elf);
+  Elf64_Ehdr ehdr;
+  fread(&ehdr, sizeof(ehdr), 1, elf);
+  // 1st pass, iterate all program headers to find the minimum base address
+  for (int i = 0; i < ehdr.e_phnum; i++) {
+    fseek(elf, ehdr.e_phoff + i * (ehdr.e_phentsize), SEEK_SET);
+    Elf64_Phdr phdr;
+    // read prog header from elf
+    fread(&phdr, sizeof(phdr), 1, elf);
+    if (phdr.p_type != PT_LOAD) continue;
+    uint64_t addr = phdr.p_paddr;
+    if (addr < min_base) min_base = addr;
+    if (addr + phdr.p_memsz > kernel_size) kernel_size = addr + phdr.p_memsz;
   }
-  auto buffer = std::move(bufferOrError.get());
-
-  // Parse ELF file
-  auto elfOrError =
-      llvm::object::ELF64LEObjectFile::create(buffer->getMemBufferRef());
-  if (!elfOrError) {
-    POCL_ABORT(
-        "ERROR (fsa_upload_kernel_sections): Failed to parse ELF file %s\n",
-        elf_file);
+  if (min_base == -1ULL) {
+    printf("FSA upload kernel failed, min_base not found\n");
+    exit(1);
+  }
+  assert(min_base == 0 && "min_base should be zero");
+  // calculate absolute kernel size (minus min_base as offset)
+  void *kernel_start_addr;
+  if (fsa_malloc(&kernel_start_addr, kernel_size)) {
+    POCL_MSG_ERR(
+        "Failed to allocate FSA device side memory in fsa_upload_kernel");
+    fclose(elf);
+    return -1;
   }
 
-  for (const llvm::object::SectionRef &section : (*elfOrError).sections()) {
-    llvm::StringRef name;
-    if (auto nameOrError = section.getName()) {
-      name = nameOrError.get();
-    } else {
-      POCL_ABORT(
-          "ERROR (fsa_upload_kernel_sections): Failed to get section name\n");
+  *kernel_dev_addr = (uint64_t)kernel_start_addr;
+  POCL_MSG_PRINT_INFO("kernel_start_addr: %lx\n", (uint64_t)kernel_start_addr);
+  POCL_MSG_PRINT_INFO("kernel_size: %lx\n", kernel_size);
+  // move file pointer to beginning of file
+  rewind(elf);
+  uint8_t *host_ptr = (uint8_t *)calloc(1, sizeof(uint8_t) * kernel_size);
+  uint64_t offset = 0;
+
+  // 2nd pass, copy all program headers to device memory
+  for (int i = 0; i < ehdr.e_phnum; i++) {
+    fseek(elf, ehdr.e_phoff + i * (ehdr.e_phentsize), SEEK_SET);
+    Elf64_Phdr phdr;
+    fread(&phdr, sizeof(phdr), 1, elf);
+    if (phdr.p_type != PT_LOAD) continue;
+    uint64_t size = phdr.p_filesz;
+    uint64_t offset = phdr.p_paddr - min_base;
+    fseek(elf, phdr.p_offset, SEEK_SET);
+    if (size) {
+      fread(host_ptr + offset, size, 1, elf);
     }
+    if (size < phdr.p_memsz) size = phdr.p_memsz;  // trail-zero-filling
 
-    if (name.starts_with(".text") || name.starts_with(".rodata") ||
-        name.starts_with(".data") || name.starts_with(".bss")) {
-      llvm::StringRef data;
-      if (auto dataOrError = section.getContents()) {
-        data = dataOrError.get();
-      } else {
-        POCL_ABORT(
-            "ERROR (fsa_upload_kernel_sections): Failed to get section "
-            "contents\n");
-      }
-
-      if (data.empty()) continue;
-
-      // upload to corresponding address
-      uint64_t addr = section.getAddress();
-      if (addr > FSA_GLOBAL_MEM_BASE &&
-          addr <= FSA_GLOBAL_MEM_BASE + CASVP_FORMOSA_GLOBAL_MEM_SIZE) {
-        int err = fsa_addr_malloc(addr, data.size());
-        if (err != 0) {
-          POCL_ABORT(
-              "ERROR (fsa_upload_kernel_sections): Failed to allocate section "
-              "%s\n",
-              name.str().c_str());
-        }
-      }
-
-      int err = fsa_copy_to_dev(addr, data.data(), data.size());
-      if (err != 0) {
-        POCL_ABORT(
-            "ERROR (fsa_upload_kernel_sections): Failed to upload section %s\n",
-            name.str().c_str());
-      }
-    }
+    POCL_MSG_PRINT_INFO("Copy %lx to %lx with size %lx\n",
+                        (uint64_t)host_ptr + offset,
+                        (uint64_t)kernel_start_addr + offset, size);
+    fsa_copy_to_dev((uint64_t)kernel_start_addr + offset, host_ptr + offset,
+                    size);
   }
+  free(host_ptr);
+  fclose(elf);
   return 0;
 }
 
@@ -482,14 +482,16 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
 
   // First compile printf.c and putchar.c
   std::stringstream ss_out;
-  std::tie(err, ss_out) = compile_source(printf_src_path, printf_obj_path,
-                                         clang_path, build_cflags);
+  std::tie(err, ss_out) =
+      compile_source(printf_src_path, printf_obj_path, clang_path,
+                     build_cflags + " -fPIC -c ");
   if (err != 0) {
     POCL_MSG_ERR("%s\n", ss_out.str().c_str());
     return err;
   }
-  std::tie(err, ss_out) = compile_source(putchar_src_path, putchar_obj_path,
-                                         clang_path, build_cflags);
+  std::tie(err, ss_out) =
+      compile_source(putchar_src_path, putchar_obj_path, clang_path,
+                     build_cflags + " -fPIC -c ");
   if (err != 0) {
     POCL_MSG_ERR("%s\n", ss_out.str().c_str());
     return err;
@@ -498,7 +500,7 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
   // Archive printf.o and putchar.o into libprintf.a
   std::stringstream ss_cmd;
   std::string archive_path = llvm_path + "/bin/llvm-ar";
-  std::vector<std::string> args = {archive_path, "rcs", printf_lib_path,
+  std::vector<std::string> args = {archive_path, " -rcs ", printf_lib_path,
                                    printf_obj_path, putchar_obj_path};
   ss_cmd = generate_command(args);
   POCL_MSG_PRINT_LLVM("Running \"%s\"\n", ss_cmd.str().c_str());
@@ -509,10 +511,12 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
   }
 
   // Link kernel program with predefined kernel functions and libprintf.a
-  args = {clang_path,         build_cflags,  start_file_path,
-          bitcode_path,       "-L/tmp",      "-lprintf",
-          kernel_util_path,   build_ldflags, "-T",
-          linker_script_path, "-o",          elf_path};
+  args = {clang_path,       build_cflags + " -fPIE ",
+          start_file_path,  bitcode_path,
+          " -L/tmp ",       " -lprintf ",
+          kernel_util_path, build_ldflags,
+          " -T ",           linker_script_path,
+          " -Wl,-pie -o ",  elf_path};
   ss_cmd = generate_command(args);
   POCL_MSG_PRINT_LLVM("Running \"%s\"\n", ss_cmd.str().c_str());
   err = exec(ss_cmd.str().c_str(), ss_out);

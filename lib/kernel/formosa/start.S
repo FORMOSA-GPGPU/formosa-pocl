@@ -61,13 +61,22 @@ _start:
   rem  t0, t0, t1         /* local id x */
   csrw xcllx, t0          /* set local id x */
 
+  /* 
+    Stack Initialization:
+
+    Each thread is allocated 1 KiB of stack space.
+    The stack pointer (sp) is calculated as:
+        sp = global_mem_base + (mhartid + 1) * 1 KiB
+
+    This ensures each thread gets a unique, non-overlapping stack region.
+  */
+
   /* stack initilization */
-  la sp, _stack_start
-  csrr a0, mhartid        /* global thread id */
-  csrr t0, xmhartidbase   /* global thread id base */
-  sub a0, a0, t0         /* local thread id */
-  slli a1, a0, 16         /* stack for each thread is 64 KiB */
-  sub sp, sp, a1
+  csrr t0, mhartid
+  addi t0, t0, 1
+  slli t0, t0, 10         /* 1KiB per thread */
+  li t1, 0x80000000       /* global mem base */
+  add sp, t1, t0
 
 main_entry:
   /* set argc and argv to 0 */
