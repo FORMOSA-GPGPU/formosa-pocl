@@ -115,8 +115,8 @@ int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
     printf("FSA upload kernel failed, min_base not found\n");
     exit(1);
   }
+  assert(min_base == 0 && "min_base should be zero");
   // calculate absolute kernel size (minus min_base as offset)
-  kernel_size -= min_base;
   void *kernel_start_addr_;
   if (fsa_malloc(&kernel_start_addr_, kernel_size)) {
     POCL_MSG_ERR(
@@ -126,7 +126,6 @@ int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
   }
 
   uint64_t kernel_start_addr = (uint64_t)kernel_start_addr_;
-  *kernel_base = min_base;
   *kernel_dev_addr = (uint64_t)kernel_start_addr;
   if (POCL_DEBUGGING_ON) {
     printf("kernel_start_addr: %lx\n", (uint64_t)kernel_start_addr);

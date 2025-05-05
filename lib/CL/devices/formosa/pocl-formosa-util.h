@@ -64,9 +64,6 @@ int fsa_check_occupancy(uint32_t group_size, uint32_t *max_local_mem);
 
 int fsa_get_elf_name(cl_program program, cl_uint device_i, char *elf_name);
 
-int fsa_upload_kernel_sections(const char *filename,
-                               pocl_formosa_data_t *formosa_data);
-
 int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
                       uint64_t *kernel_dev_addr, uint64_t *kernel_base);
 void fsa_int_handler(int sig);
