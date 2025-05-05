@@ -150,8 +150,7 @@ int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
     if (size) {
       fread(host_ptr + offset, size, 1, elf);
     }
-    if (size < phdr.p_memsz)
-      size = phdr.p_memsz; // trail-zero-filling
+    if (size < phdr.p_memsz) size = phdr.p_memsz;  // trail-zero-filling
 
     if (POCL_DEBUGGING_ON) {
       printf("Copy %lx to %lx with size %lx\n", (uint64_t)host_ptr + offset,
@@ -489,14 +488,16 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
 
   // First compile printf.c and putchar.c
   std::stringstream ss_out;
-  std::tie(err, ss_out) = compile_source(printf_src_path, printf_obj_path,
-                                         clang_path, build_cflags + " -fPIC -c ");
+  std::tie(err, ss_out) =
+      compile_source(printf_src_path, printf_obj_path, clang_path,
+                     build_cflags + " -fPIC -c ");
   if (err != 0) {
     POCL_MSG_ERR("%s\n", ss_out.str().c_str());
     return err;
   }
-  std::tie(err, ss_out) = compile_source(putchar_src_path, putchar_obj_path,
-                                         clang_path, build_cflags + " -fPIC -c ");
+  std::tie(err, ss_out) =
+      compile_source(putchar_src_path, putchar_obj_path, clang_path,
+                     build_cflags + " -fPIC -c ");
   if (err != 0) {
     POCL_MSG_ERR("%s\n", ss_out.str().c_str());
     return err;
@@ -516,10 +517,12 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
   }
 
   // Link kernel program with predefined kernel functions and libprintf.a
-  args = {clang_path,         build_cflags + " -fPIE ",  start_file_path,
-          bitcode_path,       " -L/tmp ",      " -lprintf ",
-          kernel_util_path,   build_ldflags, " -T ",
-          linker_script_path, " -Wl,-pie -o ",          elf_path};
+  args = {clang_path,       build_cflags + " -fPIE ",
+          start_file_path,  bitcode_path,
+          " -L/tmp ",       " -lprintf ",
+          kernel_util_path, build_ldflags,
+          " -T ",           linker_script_path,
+          " -Wl,-pie -o ",  elf_path};
   ss_cmd = generate_command(args);
   POCL_MSG_PRINT_LLVM("Running \"%s\"\n", ss_cmd.str().c_str());
   err = exec(ss_cmd.str().c_str(), ss_out);

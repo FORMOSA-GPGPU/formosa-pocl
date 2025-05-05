@@ -396,9 +396,6 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     if (err != 0) {
       POCL_ABORT("ERROR (pocl_formosa_run): Kernel CSR setup failed\n");
     }
-    // uint64_t stack_pc = fsa_get_symbol_pc(sz_program_fsabin, "_stack") -
-    // elf_load_paddr_base + dev_kernel_addr;
-    // printf("Stack pc:%lx\n", stack_pc);
   }
 
   // launch kernel execution

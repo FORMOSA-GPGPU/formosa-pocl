@@ -5,11 +5,6 @@ MEMORY
   global_mem (rwx): ORIGIN = 0x00000000, LENGTH = 0x80000000  /*   2 GiB */
 }
 
-/* Stack information variables */
-_min_stack   = 0x400;   /* 1K - minimum stack space to reserve */
-
-/* Kernel arguments */
-
 ENTRY(_start)
 
 SECTIONS {
