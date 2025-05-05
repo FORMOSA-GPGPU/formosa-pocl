@@ -117,15 +117,14 @@ int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
   }
   assert(min_base == 0 && "min_base should be zero");
   // calculate absolute kernel size (minus min_base as offset)
-  void *kernel_start_addr_;
-  if (fsa_malloc(&kernel_start_addr_, kernel_size)) {
+  void *kernel_start_addr;
+  if (fsa_malloc(&kernel_start_addr, kernel_size)) {
     POCL_MSG_ERR(
-        "Failed to allocate FSA device side memory in fsa_upload_kernel\n");
+        "Failed to allocate FSA device side memory in fsa_upload_kernel");
     fclose(elf);
     return -1;
   }
 
-  uint64_t kernel_start_addr = (uint64_t)kernel_start_addr_;
   *kernel_dev_addr = (uint64_t)kernel_start_addr;
   if (POCL_DEBUGGING_ON) {
     printf("kernel_start_addr: %lx\n", (uint64_t)kernel_start_addr);
@@ -152,8 +151,9 @@ int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
     if (size < phdr.p_memsz) size = phdr.p_memsz;  // trail-zero-filling
 
     if (POCL_DEBUGGING_ON) {
-      printf("Copy %lx to %lx with size %lx\n", (uint64_t)host_ptr + offset,
-             (uint64_t)kernel_start_addr + offset, size);
+      POCL_MSG_PRINT_INFO("Copy %lx to %lx with size %lx\n",
+                          (uint64_t)host_ptr + offset,
+                          (uint64_t)kernel_start_addr + offset, size);
     }
     fsa_copy_to_dev((uint64_t)kernel_start_addr + offset, host_ptr + offset,
                     size);
