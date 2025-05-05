@@ -73,7 +73,7 @@ _start:
 
   /* stack initilization */
   csrr t0, mhartid
-  add t0, t0, 1
+  addi t0, t0, 1
   slli t0, t0, 10         /* 1KiB per thread */
   li t1, 0x80000000       /* global mem base */
   add sp, t1, t0
