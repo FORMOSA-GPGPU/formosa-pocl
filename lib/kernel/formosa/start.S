@@ -63,14 +63,16 @@ _start:
 
   /* 
     sp = global_mem_base + core_num   * thread_per_core * stack_size per thread
-       = 0x80000000      + (xcid + 1) * 1024 (32W-32T)  * (1 << 10) (1 KiB per thread)
+       = 0x80000000      + (xcid + 1) * (xnt * xnw)  * (1 << 10) (1 KiB per thread)
   */
   /* stack initilization */
   li t0, 0x80000000 /* global mem base */
   csrr t1, xcid     /* core id  */
-  addi t1, t1, 1    /* core_num */
-  li t2, 1024       /* 32W-32T per core */
-  mul t3, t1, t2
+  addi t1, t1, 1    /* num_core */
+  csrr t2, xnw      /* num_warp per core */
+  csrr t3, xnt      /* t3 = num_thread per warp */
+  mul t2, t2, t3    /* t2 = num_thread per core */
+  mul t3, t1, t2    /* t3 = num_core * (num_thread per core) */
   slli t3, t3, 10   /* 1KiB per thread, t3 = core_num * thread_per_core * stack_size per thread */
   add sp, t3, t0    /* set stack ptr = global_mem_base (t0) + core_num * thread_per_core * stack_size per thread (t3) */
   csrr a0, mhartid  /* global thread id */
