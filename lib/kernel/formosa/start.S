@@ -62,7 +62,7 @@ _start:
   csrw xcllx, t0          /* set local id x */
 
   /* stack initilization */
-  la sp, _stack_start
+  li sp, 0x80100000
   csrr a0, mhartid  /* global thread id */
   slli a1, a0, 10   /* stack for each thread is 1 KiB */
   sub sp, sp, a1

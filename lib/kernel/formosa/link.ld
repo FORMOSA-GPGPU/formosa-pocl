@@ -2,7 +2,7 @@ OUTPUT_ARCH(riscv)
 
 MEMORY
 {
-  global_mem (rw): ORIGIN = 0x00000000, LENGTH = 0x80000000  /*   2 GiB */
+  global_mem (rwx): ORIGIN = 0x00000000, LENGTH = 0x80000000  /*   2 GiB */
 }
 
 /* Stack information variables */
@@ -55,13 +55,4 @@ SECTIONS {
   . = ALIGN(8);
 } > global_mem
 
-/* ensure there is enough room for stack */
-.stack (NOLOAD): {
-  . = ALIGN(8);
-  . = . + _min_stack * 1024;  /* 32W-32T */
-  . = ALIGN(8);
-  stack = . ;
-  _stack = . ;
-} > global_mem
-_stack_start = _stack;
 }
