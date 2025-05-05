@@ -150,9 +150,10 @@ int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
     fseek(elf, phdr.p_offset, SEEK_SET);
     if (size) {
       fread(host_ptr + offset, size, 1, elf);
-    } else {
-      size = phdr.p_memsz;
     }
+    if (size < phdr.p_memsz)
+      size = phdr.p_memsz; // trail-zero-filling
+
     if (POCL_DEBUGGING_ON) {
       printf("Copy %lx to %lx with size %lx\n", (uint64_t)host_ptr + offset,
              (uint64_t)kernel_start_addr + offset, size);
