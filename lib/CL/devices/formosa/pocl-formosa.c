@@ -370,20 +370,19 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     char sz_program_fsabin[POCL_MAX_PATHNAME_LENGTH];
     err = fsa_get_elf_name(program, device_i, sz_program_fsabin);
     POCL_MSG_PRINT_INFO("elf path: %s\n", sz_program_fsabin);
-    uint64_t elf_load_paddr_base, dev_kernel_addr;
-    err |= fsa_upload_kernel(sz_program_fsabin, dd, &dev_kernel_addr,
-                             &elf_load_paddr_base);
+    uint64_t dev_kernel_addr = 0;
+    err |= fsa_upload_kernel(sz_program_fsabin, dd, &dev_kernel_addr);
     if (err != 0) {
       POCL_ABORT("ERROR (pocl_formosa_run): Kernel upload failed\n");
     }
     char *trampoline_name = malloc(strlen(kernel->name) + 12);
     sprintf(trampoline_name, "%s_trampoline", kernel->name);
-    uint64_t kernel_pc = fsa_get_symbol_pc(sz_program_fsabin, trampoline_name) -
-                         elf_load_paddr_base + dev_kernel_addr;
+    uint64_t kernel_pc =
+        fsa_get_symbol_pc(sz_program_fsabin, trampoline_name) + dev_kernel_addr;
     POCL_MSG_PRINT_INFO("kernel_pc: %lx\n", kernel_pc);
     POCL_MEM_FREE(trampoline_name);
-    uint64_t entry_pc = fsa_get_symbol_pc(sz_program_fsabin, "_start") -
-                        elf_load_paddr_base + dev_kernel_addr;
+    uint64_t entry_pc =
+        fsa_get_symbol_pc(sz_program_fsabin, "_start") + dev_kernel_addr;
     POCL_MSG_PRINT_INFO("entry_pc: %lx\n", entry_pc);
     err = fsa_mmio(CASVP_FORMOSA_CSR_KERNEL_PC, kernel_pc, NULL);
     err |= fsa_mmio(CASVP_FORMOSA_CSR_ENTRY_PC, entry_pc, NULL);
