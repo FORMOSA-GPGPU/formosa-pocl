@@ -92,10 +92,9 @@ int fsa_get_elf_name(cl_program program, cl_uint device_i, char *elf_name) {
 }
 
 int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
-                      uint64_t *kernel_dev_addr, uint64_t *kernel_base) {
+                      uint64_t *kernel_dev_addr) {
   if (elf_file == nullptr || dd == nullptr) return -1;
   uint64_t kernel_size = 0;
-  uint64_t min_base = -1ULL;
   FILE *elf = fopen(elf_file, "rb");
   rewind(elf);
   Elf64_Ehdr ehdr;
@@ -108,15 +107,8 @@ int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
     fread(&phdr, sizeof(phdr), 1, elf);
     if (phdr.p_type != PT_LOAD) continue;
     uint64_t addr = phdr.p_paddr;
-    if (addr < min_base) min_base = addr;
     if (addr + phdr.p_memsz > kernel_size) kernel_size = addr + phdr.p_memsz;
   }
-  if (min_base == -1ULL) {
-    printf("FSA upload kernel failed, min_base not found\n");
-    exit(1);
-  }
-  assert(min_base == 0 && "min_base should be zero");
-  // calculate absolute kernel size (minus min_base as offset)
   void *kernel_start_addr;
   if (fsa_malloc(&kernel_start_addr, kernel_size)) {
     POCL_MSG_ERR(
@@ -126,8 +118,6 @@ int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
   }
 
   *kernel_dev_addr = (uint64_t)kernel_start_addr;
-  POCL_MSG_PRINT_INFO("kernel_start_addr: %lx\n", (uint64_t)kernel_start_addr);
-  POCL_MSG_PRINT_INFO("kernel_size: %lx\n", kernel_size);
   // move file pointer to beginning of file
   rewind(elf);
   uint8_t *host_ptr = (uint8_t *)calloc(1, sizeof(uint8_t) * kernel_size);
@@ -140,7 +130,7 @@ int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
     fread(&phdr, sizeof(phdr), 1, elf);
     if (phdr.p_type != PT_LOAD) continue;
     uint64_t size = phdr.p_filesz;
-    uint64_t offset = phdr.p_paddr - min_base;
+    uint64_t offset = phdr.p_paddr;  // ORIGIN in link.ld is zero
     fseek(elf, phdr.p_offset, SEEK_SET);
     if (size) {
       fread(host_ptr + offset, size, 1, elf);
