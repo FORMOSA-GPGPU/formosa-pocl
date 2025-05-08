@@ -474,14 +474,14 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
   std::stringstream ss_out;
   std::tie(err, ss_out) =
       compile_source(printf_src_path, printf_obj_path, clang_path,
-                     build_cflags + " -fPIC -c ");
+                     build_cflags + " -fPIC ");
   if (err != 0) {
     POCL_MSG_ERR("%s\n", ss_out.str().c_str());
     return err;
   }
   std::tie(err, ss_out) =
       compile_source(putchar_src_path, putchar_obj_path, clang_path,
-                     build_cflags + " -fPIC -c ");
+                     build_cflags + " -fPIC ");
   if (err != 0) {
     POCL_MSG_ERR("%s\n", ss_out.str().c_str());
     return err;
