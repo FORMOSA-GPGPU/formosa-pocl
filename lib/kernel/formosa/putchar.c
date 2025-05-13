@@ -1,6 +1,6 @@
 #include <stdint.h>
 
-#define HART_CONSOLE_BASE 0x00002000
+#define HART_CONSOLE_BASE 0x70000000
 
 void _putchar(char character) {
   // Use mhartid to determine which output address to write to
