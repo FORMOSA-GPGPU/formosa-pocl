@@ -68,7 +68,7 @@ int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
                       uint64_t *kernel_dev_addr);
 void fsa_int_handler(int sig);
 
-int fsa_wait_ack(pocl_formosa_data_t *dd);
+int fsa_wait_ack(pocl_formosa_data_t *dd, uint64_t *completion_signal);
 
 int fsa_compile_program(char **kernel_names, int *num_kernels,
                         char *str_program_fsa_bin, char *compiler_options,
@@ -77,12 +77,13 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
 uint64_t fsa_get_symbol_pc(const char *elf_path, const char *symbol_name);
 
 #define FSA_TASK_DISPATCHER_BASE 0x1000
-#define FSA_GLOBAL_MEM_BASE                                      \
-  ((0x80000000) +                                                \
-   ((CASVP_FORMOSA_NUM_CORES) * (CASVP_FORMOSA_WARPS_PER_CORE) * \
-    (CASVP_FORMOSA_THREADS_PER_WARP) * (CASVP_FORMOSA_STACK_SIZE_PER_THREAD)))
+#define FSA_GLOBAL_MEM_BASE                      \
+  ((0x80000000) +                                \
+   ((fsa_num_cores()) * (fsa_warps_per_core()) * \
+    (fsa_threads_per_warp() * (fsa_stack_size_per_thread()))
+
 #ifdef __cplusplus
 }
 #endif
 
-#endif
+#endif // POCL_FORMOSA_UTIL_H

@@ -1,18 +1,14 @@
 #include "pocl-formosa-util.h"
 
-#include <libcomm/comm.h>
-#include <libcomm/msg.h>
 #include <linux/elf.h>
-#include <semaphore.h>
-#include <signal.h>
+#include <unistd.h>
 
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <tuple>
 
-#include "casvp-config.h"
-#include "formosa-driver.h"
+#include "formosa-hal/formosa-hal.h"
 #include "pocl-formosa-util.h"
 #include "pocl.h"
 #include "pocl_cache.h"
@@ -49,12 +45,10 @@
 #include <string>
 #include <system_error>
 
-static sem_t sem;
-
 int fsa_check_occupancy(uint32_t group_size, uint64_t *max_local_mem) {
   // check group size
-  uint32_t warps_per_core = CASVP_FORMOSA_WARPS_PER_CORE;
-  uint32_t threads_per_warp = CASVP_FORMOSA_THREADS_PER_WARP;
+  uint32_t warps_per_core = fsa_warps_per_core();
+  uint32_t threads_per_warp = fsa_threads_per_warp();
   uint32_t threads_per_core = warps_per_core * threads_per_warp;
   if (group_size > threads_per_core) {
     POCL_MSG_ERR(
@@ -69,7 +63,7 @@ int fsa_check_occupancy(uint32_t group_size, uint64_t *max_local_mem) {
 
   // check local memory capacity
   if (max_local_mem) {
-    uint64_t local_mem_size = CASVP_FORMOSA_LOCAL_MEM_SIZE;
+    uint64_t local_mem_size = fsa_local_mem_size();
     *max_local_mem = local_mem_size / groups_per_core;
   }
 
@@ -98,13 +92,14 @@ int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
   FILE *elf = fopen(elf_file, "rb");
   rewind(elf);
   Elf64_Ehdr ehdr;
-  int ret = fread(&ehdr, sizeof(ehdr), 1, elf);
+  size_t read_size;
+  read_size = fread(&ehdr, sizeof(ehdr), 1, elf);
   // 1st pass, iterate all program headers to find the minimum base address
   for (int i = 0; i < ehdr.e_phnum; i++) {
     fseek(elf, ehdr.e_phoff + i * (ehdr.e_phentsize), SEEK_SET);
     Elf64_Phdr phdr;
     // read prog header from elf
-    int ret = fread(&phdr, sizeof(phdr), 1, elf);
+    read_size = fread(&phdr, sizeof(phdr), 1, elf);
     if (phdr.p_type != PT_LOAD) continue;
     uint64_t addr = phdr.p_paddr;
     if (addr + phdr.p_memsz > kernel_size) kernel_size = addr + phdr.p_memsz;
@@ -127,13 +122,13 @@ int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
   for (int i = 0; i < ehdr.e_phnum; i++) {
     fseek(elf, ehdr.e_phoff + i * (ehdr.e_phentsize), SEEK_SET);
     Elf64_Phdr phdr;
-    int ret = fread(&phdr, sizeof(phdr), 1, elf);
+    read_size = fread(&phdr, sizeof(phdr), 1, elf);
     if (phdr.p_type != PT_LOAD) continue;
     uint64_t size = phdr.p_filesz;
     uint64_t offset = phdr.p_paddr;  // ORIGIN in link.ld is zero
     fseek(elf, phdr.p_offset, SEEK_SET);
     if (size) {
-      int ret = fread(host_ptr + offset, size, 1, elf);
+      read_size = fread(host_ptr + offset, size, 1, elf);
     }
     if (size < phdr.p_memsz) size = phdr.p_memsz;  // trail-zero-filling
 
@@ -148,45 +143,29 @@ int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
   return 0;
 }
 
-int fsa_wait_ack(pocl_formosa_data_t *dd) {
-  if (dd == nullptr) return -1;
-  sem_init(&sem, 0, 0);
-  sem_wait(&sem);    // Wait until the signal handler post the sem.
-  uint64_t ack = 0;  // acknowledge from device
-  int err = fsa_mmio(CASVP_FORMOSA_CSR_ACK, 0, &ack);
-  if (err != 0) {
-    POCL_MSG_ERR("Failed to read acknowledge from device (%d)\n", err);
-    return -1;
+int fsa_wait_ack(pocl_formosa_data_t *dd, uint64_t *completion_signal) {
+  if (dd == nullptr || completion_signal == nullptr) return -1;
+  // polling the completion_signal until it is set to non-zero value
+  while (*completion_signal == 0) {
+    usleep(1000);  // sleep for 1ms
   }
-  if (ack != 0) {
-    POCL_MSG_ERR("Unexpected acknowledge from device (%ld)\n", ack);
+
+  uintptr_t dev_status = *completion_signal;
+  KernelStatus *status;
+  int err = fsa_copy_from_dev(dev_status, status, sizeof(KernelStatus));
+  if (err != 0) {
+    POCL_MSG_ERR("Failed to read kernel status from device (%d)\n", err);
     return -1;
   }
 
-  uint64_t status = 0;
-  uint64_t ecid, ewid, mcause, mepc, mtval;
-  err = fsa_mmio(CASVP_FORMOSA_CSR_STATUS, 0, &status);
-  if (err != 0) {
-    POCL_MSG_ERR("Failed to read status from device (%d)\n", err);
-    return -1;
-  }
-  switch (status) {
+  switch (status->code) {
     default:
-    case 0x0:  // Okay
+    case kKernelOkay:
       break;
-    case 0x1:  // Bad dimension
+    case kKernelBadDimension:
       POCL_MSG_ERR("Bad dimension\n");
       break;
-    case 0x2:  // Exceptions
-      err = fsa_mmio(CASVP_FORMOSA_CSR_ECID, 0, &ecid);
-      err |= fsa_mmio(CASVP_FORMOSA_CSR_EWID, 0, &ewid);
-      err |= fsa_mmio(CASVP_FORMOSA_CSR_MCAUSE, 0, &mcause);
-      err |= fsa_mmio(CASVP_FORMOSA_CSR_MEPC, 0, &mepc);
-      err |= fsa_mmio(CASVP_FORMOSA_CSR_MTVAL, 0, &mtval);
-      if (err != 0) {
-        POCL_MSG_ERR("Failed to read exception information from device\n");
-        break;
-      }
+    case kKernelException:
       POCL_MSG_ERR(
           "\nException occurs:\n"
           "\tecid:   0x%08lx\n"
@@ -194,25 +173,14 @@ int fsa_wait_ack(pocl_formosa_data_t *dd) {
           "\tmcause: 0x%08lx\n"
           "\tmepc:   0x%08lx\n"
           "\tmtval:  0x%08lx\n",
-          ecid, ewid, mcause, mepc, mtval);
+          status->ecid, status->ewid, status->mcause, status->mepc,
+          status->mtval);
       break;
   }
 
-  err = fsa_mmio(CASVP_FORMOSA_CSR_ACK, 1, nullptr);
-  if (err != 0) {
-    POCL_MSG_ERR("Failed to read acknowledge from device (%d)\n", err);
-    return -1;
-  }
-  sem_destroy(&sem);
-  return (status == 0) ? 0 : -1;
-}
+  POCL_MEM_FREE(completion_signal);
 
-void fsa_int_handler(int sig) {
-  if (sig == SIGUSR1) {
-    if (sem_post(&sem) < 0) {
-      POCL_MSG_ERR("Received unexpected device interrupt.\n");
-    }
-  }
+  return (status->code == kKernelOkay) ? 0 : -1;
 }
 
 static int exec(const char *cmd, std::ostream &out) {
