@@ -52,5 +52,6 @@ if(ENABLE_LOADABLE_DRIVERS)
   target_link_libraries(pocl-devices-formosa PRIVATE ${PTHREAD_LIBRARY})
 endif()
 
-
-target_link_libraries(pocl-devices-formosa PUBLIC libcomm formosa-driver.casvp)
+set(FORMOSA_PLATFORM "casvp" CACHE STRING "Platform for Formosa device driver, default to casvp")
+message(STATUS "FORMOSA_PLATFORM: ${FORMOSA_PLATFORM}")
+target_link_libraries(pocl-devices-formosa PUBLIC libcomm formosa-driver.${FORMOSA_PLATFORM})
