@@ -60,7 +60,7 @@ typedef struct _pocl_basic_usm_allocation_t {
   struct _pocl_basic_usm_allocation_t *next, *prev;
 } pocl_formosa_usm_allocation_t;
 
-int fsa_check_occupancy(uint32_t group_size, uint32_t *max_local_mem);
+int fsa_check_occupancy(uint32_t group_size, uint64_t *max_local_mem);
 
 int fsa_get_elf_name(cl_program program, cl_uint device_i, char *elf_name);
 

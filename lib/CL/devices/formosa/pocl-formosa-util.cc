@@ -51,7 +51,7 @@
 
 static sem_t sem;
 
-int fsa_check_occupancy(uint32_t group_size, uint32_t *max_local_mem) {
+int fsa_check_occupancy(uint32_t group_size, uint64_t *max_local_mem) {
   // check group size
   uint32_t warps_per_core = CASVP_FORMOSA_WARPS_PER_CORE;
   uint32_t threads_per_warp = CASVP_FORMOSA_THREADS_PER_WARP;
@@ -98,13 +98,13 @@ int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
   FILE *elf = fopen(elf_file, "rb");
   rewind(elf);
   Elf64_Ehdr ehdr;
-  fread(&ehdr, sizeof(ehdr), 1, elf);
+  int ret = fread(&ehdr, sizeof(ehdr), 1, elf);
   // 1st pass, iterate all program headers to find the minimum base address
   for (int i = 0; i < ehdr.e_phnum; i++) {
     fseek(elf, ehdr.e_phoff + i * (ehdr.e_phentsize), SEEK_SET);
     Elf64_Phdr phdr;
     // read prog header from elf
-    fread(&phdr, sizeof(phdr), 1, elf);
+    int ret = fread(&phdr, sizeof(phdr), 1, elf);
     if (phdr.p_type != PT_LOAD) continue;
     uint64_t addr = phdr.p_paddr;
     if (addr + phdr.p_memsz > kernel_size) kernel_size = addr + phdr.p_memsz;
@@ -127,13 +127,13 @@ int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
   for (int i = 0; i < ehdr.e_phnum; i++) {
     fseek(elf, ehdr.e_phoff + i * (ehdr.e_phentsize), SEEK_SET);
     Elf64_Phdr phdr;
-    fread(&phdr, sizeof(phdr), 1, elf);
+    int ret = fread(&phdr, sizeof(phdr), 1, elf);
     if (phdr.p_type != PT_LOAD) continue;
     uint64_t size = phdr.p_filesz;
     uint64_t offset = phdr.p_paddr;  // ORIGIN in link.ld is zero
     fseek(elf, phdr.p_offset, SEEK_SET);
     if (size) {
-      fread(host_ptr + offset, size, 1, elf);
+      int ret = fread(host_ptr + offset, size, 1, elf);
     }
     if (size < phdr.p_memsz) size = phdr.p_memsz;  // trail-zero-filling
 
@@ -246,6 +246,7 @@ static void create_trampoline_function(
   auto i8Type = llvm::Type::getInt8Ty(context);
   auto i32Type = llvm::Type::getInt32Ty(context);
   auto i8PtrType = i8Type->getPointerTo();
+  auto i64Type = llvm::Type::getInt64Ty(context);
   llvm::FunctionType *trampolineType =
       llvm::FunctionType::get(voidType, {i8PtrType}, false);
 
@@ -262,41 +263,35 @@ static void create_trampoline_function(
   // Get the trampoline's argument (the `i8*` pointer)
   auto argPtr = trampolineFunction->getArg(0);
 
+  auto local_size_ptr =
+      builder.CreateGEP(i8Type, argPtr, builder.getInt32(0), "local_size_gep");
+  auto local_size = builder.CreateLoad(i64Type, local_size_ptr, "local_size");
+  auto fty = llvm::FunctionType::get(i8PtrType, {i64Type}, false);
+  auto fsa_local_alloc_func =
+      module->getOrInsertFunction("fsa_local_alloc", fty);
+  llvm::Value *localMemPtr = builder.CreateCall(
+      fsa_local_alloc_func, {local_size}, "allocated_local_mem");
+
   // Cast the `i8*` pointer to the structure type representing the arguments
   llvm::Type *argStructPtrType = argStructType->getPointerTo();
-  auto castedArg =
-      builder.CreateBitCast(argPtr, argStructPtrType, "casted_arg");
+  auto arg_struct_bytes =
+      builder.CreateGEP(i8Type, argPtr, builder.getInt32(8));
+  auto castedArg = builder.CreateBitCast(arg_struct_bytes, argStructPtrType);
 
   // Extract each argument from the structure
   std::vector<llvm::Value *> extractedArgs;
-  llvm::Value *allocated_local_mem = nullptr;
   for (unsigned i = 0; i < argTypes.size(); ++i) {
     if (pocl::isLocalMemFunctionArg(function, i)) {
-      if (allocated_local_mem == nullptr) {
-        // Load __local_size
-        auto local_size_ptr =
-            builder.CreateGEP(i8Type, castedArg, builder.getInt32(0),
-                              "arg" + std::to_string(i) + "__local_size_gep");
-        auto local_size =
-            builder.CreateLoad(i32Type, local_size_ptr,
-                               "arg" + std::to_string(i) + "__local_size");
-        auto function_type =
-            llvm::FunctionType::get(i8PtrType, {i32Type}, false);
-        auto fsa_local_alloc_func =
-            module->getOrInsertFunction("fsa_local_alloc", function_type);
-        allocated_local_mem =
-            builder.CreateCall(fsa_local_alloc_func, {local_size},
-                               "arg" + std::to_string(i) + "__local_mem");
-      }
       // Load argument __offset
       auto offset_name = "arg" + std::to_string(i) + "__offset";
-      auto offset_ptr = builder.CreateGEP(
-          i8Type, castedArg, builder.getInt32(8), offset_name + "_gep");
-      auto offset = builder.CreateLoad(i8Type, offset_ptr, offset_name);
+      auto offset_gep = builder.CreateStructGEP(
+          argStructType, castedArg, i, "arg" + std::to_string(i) + "_gep");
+      auto offset_value = builder.CreateLoad(i64Type, offset_gep, offset_name);
       // Apply pointer offset
-      auto byte_ptr = builder.CreateGEP(i8PtrType, allocated_local_mem, offset,
-                                        "arg" + std::to_string(i) + "__gep");
-      extractedArgs.push_back(byte_ptr);
+      auto offset_byte_ptr =
+          builder.CreateGEP(i8Type, localMemPtr, offset_value,
+                            "arg" + std::to_string(i) + "__gep");
+      extractedArgs.push_back(offset_byte_ptr);
     } else {
       auto argGEP = builder.CreateStructGEP(
           argStructType, castedArg, i, "arg" + std::to_string(i) + "__gep");
@@ -472,16 +467,14 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
 
   // First compile printf.c and putchar.c
   std::stringstream ss_out;
-  std::tie(err, ss_out) =
-      compile_source(printf_src_path, printf_obj_path, clang_path,
-                     build_cflags + " -fPIC ");
+  std::tie(err, ss_out) = compile_source(printf_src_path, printf_obj_path,
+                                         clang_path, build_cflags + " -fPIC ");
   if (err != 0) {
     POCL_MSG_ERR("%s\n", ss_out.str().c_str());
     return err;
   }
-  std::tie(err, ss_out) =
-      compile_source(putchar_src_path, putchar_obj_path, clang_path,
-                     build_cflags + " -fPIC ");
+  std::tie(err, ss_out) = compile_source(putchar_src_path, putchar_obj_path,
+                                         clang_path, build_cflags + " -fPIC ");
   if (err != 0) {
     POCL_MSG_ERR("%s\n", ss_out.str().c_str());
     return err;

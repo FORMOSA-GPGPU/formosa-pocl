@@ -214,13 +214,15 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   const uint32_t word_size = 8;
 
   // calculate kernel arguments buffer size
-  uint32_t local_mem_size = 0;   // total local memory size
-  size_t kargs_buffer_size = 0;  // kernel argument buffer size
+  uint64_t local_mem_size = 0;           // total local memory size
+  size_t kargs_buffer_size = word_size;  // kernel argument buffer size,
+                                         // preserve space for local memory size
 
   for (int i = 0; i < meta->num_args; ++i) {
     struct pocl_argument *al = &(cmd->command.run.arguments[i]);
     if (ARG_IS_LOCAL(meta->arg_info[i])) {
       local_mem_size += al->size;
+      // add space for local memory offset
       kargs_buffer_size = align(kargs_buffer_size, word_size) + word_size;
     } else if ((meta->arg_info[i].type == POCL_ARG_TYPE_POINTER) ||
                (meta->arg_info[i].type == POCL_ARG_TYPE_IMAGE) ||
@@ -238,22 +240,17 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     kargs_buffer_size = align(kargs_buffer_size, word_size) + word_size;
   }
 
-  // add local size
-  if (local_mem_size != 0) {
-    kargs_buffer_size = align(kargs_buffer_size, word_size) + word_size;
-  }
-
   // check occupancy
   if (group_size != 1) {
-    uint32_t available_local_mem;
+    uint64_t available_local_mem;
     err = fsa_check_occupancy(group_size, &available_local_mem);
     if (err != 0) {
       POCL_ABORT("ERROR (pocl_formosa_run): Check occupancy failed\n");
     }
     if (local_mem_size > available_local_mem) {
       POCL_ABORT(
-          "ERROR (pocl_formosa_run): Out of local memory: needed=%d bytes, "
-          "available=%d bytes\n",
+          "ERROR (pocl_formosa_run): Out of local memory: needed=%ld bytes, "
+          "available=%ld bytes\n",
           local_mem_size, available_local_mem);
     }
   }
@@ -293,20 +290,24 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
 
   // write arguments
   uint32_t host_args_offset = 0;
-  uint32_t local_mem_offset = 0;
+  uint64_t local_mem_offset = 0;
+
+  if (local_mem_size > 0) {
+    memcpy(host_kargs_base_ptr + host_args_offset, &local_mem_size,
+           word_size);  // total local memory size
+    host_args_offset += word_size;
+  } else {
+    // if no local memory, write 0
+    memset(host_kargs_base_ptr + host_args_offset, 0, word_size);  // local size
+    host_args_offset += word_size;
+  }
 
   for (int i = 0; i < meta->num_args; ++i) {
     struct pocl_argument *al = &(cmd->command.run.arguments[i]);
     if (ARG_IS_LOCAL(meta->arg_info[i])) {
-      if (local_mem_offset == 0) {
-        host_args_offset = align(host_args_offset, word_size);
-        memcpy(host_kargs_base_ptr + host_args_offset, &local_mem_size,
-               4);  // total local memory size
-        host_args_offset += word_size;
-      }
       host_args_offset = align(host_args_offset, word_size);
       memcpy(host_kargs_base_ptr + host_args_offset, &local_mem_offset,
-             4);  // local memory offset
+             word_size);  // local memory offset
       host_args_offset += word_size;
       local_mem_offset += al->size;
     } else if (meta->arg_info[i].type == POCL_ARG_TYPE_POINTER) {
@@ -339,14 +340,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     }
   }
 
-  // write local memory size
   for (int i = 0; i < meta->num_locals; ++i) {
-    if (local_mem_offset == 0) {
-      host_args_offset = align(host_args_offset, word_size);
-      memcpy(host_kargs_base_ptr + host_args_offset, &local_mem_size,
-             4);  // local_size
-      host_args_offset += word_size;
-    }
     host_args_offset = align(host_args_offset, word_size);
     memcpy(host_kargs_base_ptr + host_args_offset, &local_mem_offset,
            4);  // arg offset
