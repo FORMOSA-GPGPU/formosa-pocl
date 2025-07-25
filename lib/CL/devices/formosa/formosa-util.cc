@@ -1,4 +1,4 @@
-#include "pocl-formosa-util.h"
+#include "formosa-util.h"
 
 #include <linux/elf.h>
 #include <unistd.h>
@@ -7,9 +7,10 @@
 #include <sstream>
 #include <string>
 #include <tuple>
+#include <vector>
 
 #include "formosa-hal/formosa-hal.h"
-#include "pocl-formosa-util.h"
+#include "formosa-llvm-util.h"
 #include "pocl.h"
 #include "pocl_cache.h"
 #include "pocl_debug.h"
@@ -17,35 +18,7 @@
 #include "pocl_runtime_config.h"
 #include "pocl_util.h"
 
-#if LLVM_MAJOR >= 17
-#include <llvm/Transforms/IPO/Internalize.h>
-#endif
-
-#include <LLVMUtils.h>
-#include <llvm/Analysis/TargetLibraryInfo.h>
-#include <llvm/Analysis/TargetTransformInfo.h>
-#include <llvm/Bitcode/BitcodeReader.h>
-#include <llvm/Bitcode/BitcodeWriter.h>
-#include <llvm/IR/Function.h>
-#include <llvm/IR/Instructions.h>
-#include <llvm/IR/LegacyPassManager.h>
-#include <llvm/IR/Metadata.h>
-#include <llvm/IR/Module.h>
-#include <llvm/IR/Type.h>
-#include <llvm/IR/Verifier.h>
-#include <llvm/Linker/Linker.h>
-#include <llvm/Object/ObjectFile.h>
-#include <llvm/Object/SymbolicFile.h>
-#include <llvm/Support/FileSystem.h>
-#include <llvm/Support/MemoryBuffer.h>
-#include <llvm/Support/raw_ostream.h>
-#include <llvm/Target/TargetMachine.h>
-#include <llvm/Transforms/Utils/Cloning.h>
-
-#include <string>
-#include <system_error>
-
-int fsa_check_occupancy(uint32_t group_size, uint64_t *max_local_mem) {
+int pocl_fsa_check_occupancy(uint32_t group_size, uint64_t *max_local_mem) {
   // check group size
   uint32_t warps_per_core = fsa_warps_per_core();
   uint32_t threads_per_warp = fsa_threads_per_warp();
@@ -70,7 +43,8 @@ int fsa_check_occupancy(uint32_t group_size, uint64_t *max_local_mem) {
   return 0;
 }
 
-int fsa_get_elf_name(cl_program program, cl_uint device_i, char *elf_name) {
+int pocl_fsa_get_elf_name(cl_program program, cl_uint device_i,
+                          char *elf_name) {
   if (program == nullptr || elf_name == nullptr) return -1;
 
   char program_bc[POCL_MAX_PATHNAME_LENGTH];
@@ -85,8 +59,8 @@ int fsa_get_elf_name(cl_program program, cl_uint device_i, char *elf_name) {
   return 0;
 }
 
-int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
-                      uint64_t *kernel_dev_addr) {
+int pocl_fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
+                           uint64_t *kernel_dev_addr) {
   if (elf_file == nullptr || dd == nullptr) return -1;
   uint64_t kernel_size = 0;
   FILE *elf = fopen(elf_file, "rb");
@@ -143,12 +117,10 @@ int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
   return 0;
 }
 
-int fsa_wait_ack(pocl_formosa_data_t *dd, uint64_t *completion_signal) {
+int pocl_fsa_wait_ack(pocl_formosa_data_t *dd, uint64_t *completion_signal) {
   if (dd == nullptr || completion_signal == nullptr) return -1;
   // polling the completion_signal until it is set to non-zero value
-  while (*completion_signal == 0) {
-    usleep(1000);  // sleep for 1ms
-  }
+  fsa_wait_for_completion(completion_signal, 0);  // blocking wait
 
   uintptr_t dev_status = *completion_signal;
   KernelStatus *status;
@@ -195,138 +167,6 @@ static int exec(const char *cmd, std::ostream &out) {
   return pclose(pipe);
 }
 
-static void create_trampoline_function(
-    llvm::Function *function, llvm::Module *module,
-    llvm::SmallVector<std::string, 8> &funcNames) {
-  auto &context = module->getContext();
-  llvm::IRBuilder<> builder(context);
-
-  // Get the function's argument types
-  llvm::FunctionType *funcType = function->getFunctionType();
-  llvm::ArrayRef<llvm::Type *> argTypes = funcType->params();
-
-  // Create a structure type for the arguments
-  llvm::StructType *argStructType =
-      llvm::StructType::create(context, argTypes, "ArgStruct");
-
-  // Create the trampoline function type: `void trampoline(i8*)`
-  llvm::Type *voidType = llvm::Type::getVoidTy(context);
-  auto i8Type = llvm::Type::getInt8Ty(context);
-  auto i32Type = llvm::Type::getInt32Ty(context);
-  auto i8PtrType = llvm::PointerType::get(i8Type->getContext(), 0);
-  auto i64Type = llvm::Type::getInt64Ty(context);
-  llvm::FunctionType *trampolineType =
-      llvm::FunctionType::get(voidType, {i8PtrType}, false);
-
-  // Create the trampoline function
-  auto trampolineFunction =
-      llvm::Function::Create(trampolineType, llvm::Function::ExternalLinkage,
-                             function->getName() + "_trampoline", module);
-
-  // Create a basic block in the trampoline function
-  auto entryBlock =
-      llvm::BasicBlock::Create(context, "entry", trampolineFunction);
-  builder.SetInsertPoint(entryBlock);
-
-  // Get the trampoline's argument (the `i8*` pointer)
-  auto argPtr = trampolineFunction->getArg(0);
-
-  auto local_size_ptr =
-      builder.CreateGEP(i8Type, argPtr, builder.getInt32(0), "local_size_gep");
-  auto local_size = builder.CreateLoad(i64Type, local_size_ptr, "local_size");
-  auto fty = llvm::FunctionType::get(i8PtrType, {i64Type}, false);
-  auto fsa_local_alloc_func =
-      module->getOrInsertFunction("fsa_local_alloc", fty);
-  llvm::Value *localMemPtr = builder.CreateCall(
-      fsa_local_alloc_func, {local_size}, "allocated_local_mem");
-
-  // Cast the `i8*` pointer to the structure type representing the arguments
-  llvm::Type *argStructPtrType = llvm::PointerType::get(argStructType->getContext(), 0);
-  auto arg_struct_bytes =
-      builder.CreateGEP(i8Type, argPtr, builder.getInt32(8));
-  auto castedArg = builder.CreateBitCast(arg_struct_bytes, argStructPtrType);
-
-  // Extract each argument from the structure
-  std::vector<llvm::Value *> extractedArgs;
-  for (unsigned i = 0; i < argTypes.size(); ++i) {
-    if (pocl::isLocalMemFunctionArg(function, i)) {
-      // Load argument __offset
-      auto offset_name = "arg" + std::to_string(i) + "__offset";
-      auto offset_gep = builder.CreateStructGEP(
-          argStructType, castedArg, i, "arg" + std::to_string(i) + "_gep");
-      auto offset_value = builder.CreateLoad(i64Type, offset_gep, offset_name);
-      // Apply pointer offset
-      auto offset_byte_ptr =
-          builder.CreateGEP(i8Type, localMemPtr, offset_value,
-                            "arg" + std::to_string(i) + "__gep");
-      extractedArgs.push_back(offset_byte_ptr);
-    } else {
-      auto argGEP = builder.CreateStructGEP(
-          argStructType, castedArg, i, "arg" + std::to_string(i) + "__gep");
-      auto argValue = builder.CreateLoad(argTypes[i], argGEP,
-                                         "arg" + std::to_string(i) + "__value");
-      extractedArgs.push_back(argValue);
-    }
-  }
-
-  // Call the target function with the extracted arguments
-  auto callInst = builder.CreateCall(function, extractedArgs);
-
-  // Handle return type (if void, return void)
-  if (funcType->getReturnType()->isVoidTy()) {
-    builder.CreateRetVoid();
-  } else {
-    llvm::Type *retType = funcType->getReturnType();
-    llvm::Value *retValue = callInst;
-    // If necessary, process retValue before return
-    builder.CreateRet(retValue);
-  }
-
-  trampolineFunction->addFnAttr(llvm::Attribute::NoInline);
-  trampolineFunction->addFnAttr(llvm::Attribute::OptimizeNone);
-
-  funcNames.push_back(function->getName().str());
-
-  // Finish
-  llvm::verifyFunction(*trampolineFunction);
-}
-
-static void generate_trampoline_for_kernels(
-    llvm::SmallVector<std::string, 8> &funcNames, llvm::Module *module) {
-  llvm::SmallVector<llvm::Function *, 8> functionsToErase;
-  for (auto &function : module->functions()) {
-    if (!pocl::isKernelToProcess(function)) continue;
-    create_trampoline_function(&function, module, funcNames);
-  }
-}
-
-static char *convert_to_char_array(
-    const llvm::SmallVector<std::string, 8> &names) {
-  // Calculate the total length required for the buffer
-  size_t totalLength = 0;
-  for (const auto &name : names) {
-    totalLength += name.size() + 1;  // +1 for the null terminator
-  }
-
-  // Allocate buffer
-  char *buffer = new char[totalLength];
-  if (buffer == nullptr) {
-    POCL_MSG_ERR("Host memory allocation failed\n");
-    return nullptr;
-  }
-
-  // Copy names into buffer with null separation
-  size_t position = 0;
-  for (const auto &name : names) {
-    std::strcpy(buffer + position, name.c_str());
-    position += name.size();
-    buffer[position] = '\0';  // Null terminator
-    position += 1;
-  }
-
-  return buffer;
-}
-
 std::stringstream generate_command(std::vector<std::string> &args) {
   std::stringstream ss_cmd;
   for (const auto &arg : args) {
@@ -349,9 +189,9 @@ std::tuple<int, std::stringstream> compile_source(char *src_path,
   return std::make_tuple(err, std::move(ss_out));
 }
 
-int fsa_compile_program(char **kernel_names, int *num_kernels,
-                        char *str_program_fsa_bin, char *compiler_options,
-                        void *llvm_module) {
+int pocl_fsa_compile_program(char **kernel_names, int *num_kernels,
+                             char *str_program_fsa_bin, char *compiler_options,
+                             void *llvm_module) {
   int err;
   std::string llvm_path = FORMOSA_LLVM;
   std::string llvm_objdump_path = llvm_path + "/bin/llvm-objdump";
@@ -391,24 +231,8 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
   char elf_path[POCL_MAX_PATHNAME_LENGTH];
   memcpy(elf_path, str_program_fsa_bin, strlen(str_program_fsa_bin) + 1);
 
-  auto module = (llvm::Module *)llvm_module;
-  llvm::SmallVector<std::string, 8> kernelNames;
-  generate_trampoline_for_kernels(kernelNames, module);
-
-  *num_kernels = kernelNames.size();
-  *kernel_names = convert_to_char_array(kernelNames);
-
-  std::error_code EC;
-  llvm::raw_fd_ostream file(bitcode_path, EC, llvm::sys::fs::OF_None);
-  llvm::WriteBitcodeToFile(*module, file);
-  file.close();
-
-  if (POCL_DEBUGGING_ON) {
-    std::error_code EC;
-    llvm::raw_fd_ostream file("program.ll", EC, llvm::sys::fs::OF_None);
-    module->print(file, nullptr);
-    file.close();
-  }
+  pocl_fsa_build_kernel(llvm_module, bitcode_path, (unsigned *)num_kernels,
+                        kernel_names);
 
   std::string clang_path(CLANGCC);
   if (!llvm_path.empty()) {
@@ -492,47 +316,5 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
       return err;
     }
   }
-  return 0;
-}
-
-uint64_t fsa_get_symbol_pc(const char *elf_path, const char *symbol_name) {
-  auto bufferOrError = llvm::MemoryBuffer::getFile(std::string(elf_path));
-  if (!bufferOrError) {
-    POCL_ABORT("ERROR (fsa_get_symbol_pc): Failed to open ELF file %s\n",
-               elf_path);
-  }
-
-  // Parse ELF file
-  auto objOrError = llvm::object::ObjectFile::createELFObjectFile(
-      bufferOrError.get()->getMemBufferRef());
-  if (!objOrError) {
-    POCL_ABORT("ERROR (fsa_get_symbol_pc): Failed to parse ELF file %s\n",
-               elf_path);
-  }
-
-  std::unique_ptr<llvm::object::ObjectFile> obj = std::move(objOrError.get());
-  for (const llvm::object::SymbolRef &symbol : obj->symbols()) {
-    llvm::Expected<llvm::object::SymbolRef::Type> typeOrError =
-        symbol.getType();
-    if (!typeOrError) {
-      POCL_ABORT("ERROR (fsa_get_symbol_pc): Failed to get symbol type\n");
-    }
-
-    llvm::Expected<llvm::StringRef> nameOrError = symbol.getName();
-    if (!nameOrError) {
-      POCL_ABORT("ERROR (fsa_get_symbol_pc): Failed to get symbol name\n");
-    }
-    if (nameOrError.get().str() == symbol_name) {
-      llvm::Expected<uint64_t> addrOrError = symbol.getAddress();
-      if (!addrOrError) {
-        POCL_ABORT("ERROR (fsa_get_symbol_pc): Failed to get symbol address\n");
-      }
-      POCL_MSG_PRINT_LLVM("Found symbol %s at 0x%lx\n", symbol_name,
-                          addrOrError.get());
-      return addrOrError.get();
-    }
-  }
-  POCL_ABORT("ERROR (fsa_get_symbol_pc): Failed to find symbol %s\n",
-             symbol_name);
   return 0;
 }

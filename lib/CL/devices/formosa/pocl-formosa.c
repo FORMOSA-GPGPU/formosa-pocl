@@ -7,7 +7,8 @@
 #include "common.h"
 #include "common_driver.h"
 #include "formosa-hal/formosa-hal.h"
-#include "pocl-formosa-util.h"
+#include "formosa-util.h"
+#include "formosa-llvm-util.h"
 #include "pocl_llvm.h"
 #include "pocl_util.h"
 
@@ -233,7 +234,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   // check occupancy
   if (group_size != 1) {
     uint64_t available_local_mem;
-    err = fsa_check_occupancy(group_size, &available_local_mem);
+    err = pocl_fsa_check_occupancy(group_size, &available_local_mem);
     if (err != 0) {
       POCL_ABORT("ERROR (pocl_formosa_run): Check occupancy failed\n");
     }
@@ -259,7 +260,8 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   }
   err = fsa_malloc(&device_kernel_status_addr, sizeof(KernelStatus));
   if (err != 0) {
-    POCL_ABORT("ERROR (pocl_formosa_run): Device kernel status allocation failed\n");
+    POCL_ABORT(
+        "ERROR (pocl_formosa_run): Device kernel status allocation failed\n");
   }
   fsa_kargs_buffer.buf_address = (uint64_t)device_args_buffer_addr;
   fsa_kargs_buffer.buf_size = kargs_buffer_size;
@@ -340,20 +342,20 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   uint64_t *completion_signal = malloc(sizeof(uint64_t));
   if (dd->kernel_buffer == NULL) {
     char sz_program_fsabin[POCL_MAX_PATHNAME_LENGTH];
-    err = fsa_get_elf_name(program, device_i, sz_program_fsabin);
+    err = pocl_fsa_get_elf_name(program, device_i, sz_program_fsabin);
     POCL_MSG_PRINT_INFO("elf path: %s\n", sz_program_fsabin);
     uint64_t dev_kernel_addr = 0;
-    err |= fsa_upload_kernel(sz_program_fsabin, dd, &dev_kernel_addr);
+    err |= pocl_fsa_upload_kernel(sz_program_fsabin, dd, &dev_kernel_addr);
     if (err != 0) {
       POCL_ABORT("ERROR (pocl_formosa_run): Kernel upload failed\n");
     }
     char *trampoline_name = malloc(strlen(kernel->name) + 12);
     sprintf(trampoline_name, "%s_trampoline", kernel->name);
     kernel_pc =
-        fsa_get_symbol_pc(sz_program_fsabin, trampoline_name) + dev_kernel_addr;
+        pocl_fsa_get_symbol_pc(sz_program_fsabin, trampoline_name) + dev_kernel_addr;
     POCL_MSG_PRINT_INFO("kernel_pc: %lx\n", kernel_pc);
     POCL_MEM_FREE(trampoline_name);
-    entry_pc = fsa_get_symbol_pc(sz_program_fsabin, "_start") + dev_kernel_addr;
+    entry_pc = pocl_fsa_get_symbol_pc(sz_program_fsabin, "_start") + dev_kernel_addr;
     POCL_MSG_PRINT_INFO("entry_pc: %lx\n", entry_pc);
     if (err != 0) {
       POCL_ABORT("ERROR (pocl_formosa_run): Kernel CSR setup failed\n");
@@ -361,18 +363,17 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   }
 
   // launch kernel execution
-  err = fsa_cmd_start_kernel(pc->work_dim, pc->local_size, pc->num_groups,
-                             pc->global_offset, entry_pc,
-                             (uintptr_t)device_args_buffer_addr, kernel_pc,
-                             (uintptr_t)device_kernel_status_addr,
-                             completion_signal);
+  err = fsa_cmd_start_kernel(
+      pc->work_dim, pc->local_size, pc->num_groups, pc->global_offset, entry_pc,
+      (uintptr_t)device_args_buffer_addr, kernel_pc,
+      (uintptr_t)device_kernel_status_addr, completion_signal);
 
   if (err != 0) {
     POCL_ABORT("ERROR (pocl_formosa_run): Kernel launch failed\n");
   }
 
   // wait for the execution to complete
-  err = fsa_wait_ack(dd, completion_signal);
+  err = pocl_fsa_wait_ack(dd, completion_signal);
   if (err != 0) {
     POCL_ABORT("ERROR (pocl_formosa_run): Kernel execution failed\n");
   }
@@ -414,14 +415,14 @@ int pocl_formosa_post_build_program(cl_program program, cl_uint device_i) {
   pdata->kernel_names = NULL;
 
   char fsa_program_bin[POCL_MAX_PATHNAME_LENGTH];
-  err = fsa_get_elf_name(program, device_i, fsa_program_bin);
+  err = pocl_fsa_get_elf_name(program, device_i, fsa_program_bin);
   if (err != 0) {
     POCL_MSG_ERR("Get ELF name failed\n");
     goto POST_BUILD_PROGRAM_FINALLY;
   }
-  err = fsa_compile_program(&pdata->kernel_names, &pdata->num_kernels,
-                            fsa_program_bin, program->compiler_options,
-                            program->llvm_irs[device_i]);
+  err = pocl_fsa_compile_program(&pdata->kernel_names, &pdata->num_kernels,
+                                 fsa_program_bin, program->compiler_options,
+                                 program->llvm_irs[device_i]);
 
 POST_BUILD_PROGRAM_FINALLY:
   program->data[device_i] = pdata;
