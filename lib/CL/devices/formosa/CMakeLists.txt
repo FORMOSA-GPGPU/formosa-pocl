@@ -55,4 +55,4 @@ message(STATUS "FORMOSA_PLATFORM: ${FORMOSA_PLATFORM}")
 target_link_libraries(pocl-devices-formosa PUBLIC libcomm formosa-driver.${FORMOSA_PLATFORM})
 
 target_include_directories(pocl-devices-formosa PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../llvmopencl)
-target_compile_options(pocl-devices-formosa PRIVATE -I${LLVM_INCLUDEDIR})
+target_compile_options(pocl-devices-formosa PRIVATE -I${LLVM_INCLUDE_DIRS})

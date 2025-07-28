@@ -91,7 +91,7 @@ int pocl_fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
   FILE *elf = fopen(elf_file, "rb");
   rewind(elf);
   Elf64_Ehdr ehdr;
-  size_t read_size;
+  [[maybe_unused]] size_t read_size;
   read_size = fread(&ehdr, sizeof(ehdr), 1, elf);
   // 1st pass, iterate all program headers to find the minimum base address
   for (int i = 0; i < ehdr.e_phnum; i++) {
@@ -186,8 +186,6 @@ int pocl_fsa_wait_ack(pocl_formosa_data_t *dd, uint64_t *completion_signal) {
           "\tmtval:  0x%08lx\n",
           status.ecid, status.ewid, status.mcause, status.mepc, status.mtval);
   }
-
-  POCL_MEM_FREE(completion_signal);
 
   return (status.code == kKernelOkay) ? 0 : -1;
 }

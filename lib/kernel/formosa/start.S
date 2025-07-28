@@ -80,8 +80,8 @@ _start:
 
 main_entry:
   /* set argc and argv to 0 */
-  csrr t0, xkernelpc
   csrr a0, xkernelarg
+  ld t0, 0(a0)  // trampoline address
   li a1, 0
 
   /* jump to main program entry point */

@@ -205,9 +205,14 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   const uint32_t word_size = 8;
 
   // calculate kernel arguments buffer size
-  uint64_t local_mem_size = 0;           // total local memory size
-  size_t kargs_buffer_size = word_size;  // kernel argument buffer size,
-                                         // preserve space for local memory size
+  uint64_t local_mem_size = 0;  // total local memory size
+
+  // kernel arguments buffer size
+  // it contains:
+  // 1. trampoline address (8 bytes)
+  // 2. local memory size (8 bytes)
+  // 3. other arguments
+  size_t kargs_buffer_size = word_size * 2;
 
   for (int i = 0; i < meta->num_args; ++i) {
     struct pocl_argument *al = &(cmd->command.run.arguments[i]);
@@ -269,6 +274,8 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   // write arguments
   uint32_t host_args_offset = 0;
   uint64_t local_mem_offset = 0;
+
+  host_args_offset += word_size;  // preseve space for trampoline address
 
   if (local_mem_size > 0) {
     memcpy(host_kargs_base_ptr + host_args_offset, &local_mem_size,
@@ -338,7 +345,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   free(host_kargs_base_ptr);
 
   // upload kernel to device
-  uintptr_t entry_pc = 0, kernel_pc = 0;
+  uintptr_t entry_pc = 0, trampoline_pc = 0;
   uint64_t *completion_signal = malloc(sizeof(uint64_t));
   if (dd->kernel_buffer == NULL) {
     char sz_program_fsabin[POCL_MAX_PATHNAME_LENGTH];
@@ -349,22 +356,26 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     if (err != 0) {
       POCL_ABORT("ERROR (pocl_formosa_run): Kernel upload failed\n");
     }
-    char *trampoline_name = malloc(strlen(kernel->name) + 12);
-    sprintf(trampoline_name, "%s_trampoline", kernel->name);
-    kernel_pc = pocl_fsa_get_symbol_pc(sz_program_fsabin, trampoline_name) +
-                dev_kernel_addr;
-    POCL_MSG_PRINT_INFO("kernel_pc: %lx\n", kernel_pc);
-    POCL_MEM_FREE(trampoline_name);
+
     entry_pc =
         pocl_fsa_get_symbol_pc(sz_program_fsabin, "_start") + dev_kernel_addr;
     POCL_MSG_PRINT_INFO("entry_pc: %lx\n", entry_pc);
+
+    char *trampoline_name = malloc(strlen(kernel->name) + 12);
+    sprintf(trampoline_name, "%s_trampoline", kernel->name);
+    trampoline_pc = pocl_fsa_get_symbol_pc(sz_program_fsabin, trampoline_name) +
+                    dev_kernel_addr;
+    POCL_MSG_PRINT_INFO("trampoline_pc: %lx\n", trampoline_pc);
+    POCL_MEM_FREE(trampoline_name);
+    memcpy(host_kargs_base_ptr, &trampoline_pc,
+           word_size);  // write trampoline address to kernel args buffer
   }
 
   // launch kernel execution
   err = fsa_cmd_start_kernel(
       pc->work_dim, pc->local_size, pc->num_groups, pc->global_offset, entry_pc,
-      (uintptr_t)device_args_buffer_addr, kernel_pc,
-      (uintptr_t)device_kernel_status_addr, completion_signal);
+      (uintptr_t)device_args_buffer_addr, (uintptr_t)device_kernel_status_addr,
+      completion_signal);
 
   if (err != 0) {
     POCL_ABORT("ERROR (pocl_formosa_run): Kernel launch failed\n");
@@ -375,6 +386,8 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   if (err != 0) {
     POCL_ABORT("ERROR (pocl_formosa_run): Kernel execution failed\n");
   }
+
+  POCL_MEM_FREE(completion_signal);
 
   // release arguments device buffer
   err = fsa_free((void *)fsa_kargs_buffer.buf_address);
