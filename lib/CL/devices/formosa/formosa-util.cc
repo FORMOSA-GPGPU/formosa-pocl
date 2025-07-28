@@ -18,6 +18,31 @@
 #include "pocl_runtime_config.h"
 #include "pocl_util.h"
 
+namespace {
+void deserialize_kernel_status(const uint8_t *raw, KernelStatus *status) {
+  uint64_t code = *reinterpret_cast<const uint64_t *>(raw);
+  switch (code) {
+    case 0:
+      status->code = kKernelOkay;
+      break;
+    case 1:
+      status->code = kKernelBadDimension;
+      break;
+    case 2:
+      status->code = kKernelException;
+      break;
+    default:
+      status->code = kKernelUnknownError;
+      break;
+  }
+  status->ecid = *reinterpret_cast<const uint64_t *>(raw + 8);
+  status->ewid = *reinterpret_cast<const uint64_t *>(raw + 16);
+  status->mcause = *reinterpret_cast<const uint64_t *>(raw + 24);
+  status->mepc = *reinterpret_cast<const uint64_t *>(raw + 32);
+  status->mtval = *reinterpret_cast<const uint64_t *>(raw + 40);
+}
+}  // namespace
+
 int pocl_fsa_check_occupancy(uint32_t group_size, uint64_t *max_local_mem) {
   // check group size
   uint32_t warps_per_core = fsa_warps_per_core();
@@ -123,15 +148,17 @@ int pocl_fsa_wait_ack(pocl_formosa_data_t *dd, uint64_t *completion_signal) {
   fsa_wait_for_completion(completion_signal, 0);  // blocking wait
 
   uintptr_t dev_status = *completion_signal;
-  KernelStatus *status;
-  int err = fsa_copy_from_dev(dev_status, status, sizeof(KernelStatus));
+  uint8_t status_raw[sizeof(uint64_t) * 6];
+  int err = fsa_copy_from_dev(dev_status, status_raw, sizeof(status_raw));
   if (err != 0) {
     POCL_MSG_ERR("Failed to read kernel status from device (%d)\n", err);
     return -1;
   }
 
-  switch (status->code) {
-    default:
+  KernelStatus status;
+  deserialize_kernel_status(status_raw, &status);
+
+  switch (status.code) {
     case kKernelOkay:
       break;
     case kKernelBadDimension:
@@ -145,14 +172,24 @@ int pocl_fsa_wait_ack(pocl_formosa_data_t *dd, uint64_t *completion_signal) {
           "\tmcause: 0x%08lx\n"
           "\tmepc:   0x%08lx\n"
           "\tmtval:  0x%08lx\n",
-          status->ecid, status->ewid, status->mcause, status->mepc,
-          status->mtval);
+          status.ecid, status.ewid, status.mcause, status.mepc, status.mtval);
       break;
+    default:
+      __attribute__((fallthrough));
+    case kKernelUnknownError:
+      POCL_MSG_ERR(
+          "Unknown error occurred in kernel execution\n"
+          "\tecid:   0x%08lx\n"
+          "\tewid:   0x%08lx\n"
+          "\tmcause: 0x%08lx\n"
+          "\tmepc:   0x%08lx\n"
+          "\tmtval:  0x%08lx\n",
+          status.ecid, status.ewid, status.mcause, status.mepc, status.mtval);
   }
 
   POCL_MEM_FREE(completion_signal);
 
-  return (status->code == kKernelOkay) ? 0 : -1;
+  return (status.code == kKernelOkay) ? 0 : -1;
 }
 
 static int exec(const char *cmd, std::ostream &out) {

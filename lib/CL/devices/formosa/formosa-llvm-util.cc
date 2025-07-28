@@ -149,7 +149,7 @@ char *convertToCharArray(const llvm::SmallVector<std::string, 8> &Names) {
   // Copy names into buffer with null separation
   size_t Position = 0;
   for (const auto &Name : Names) {
-    std::strcpy(Buffer + Position, Name.c_str());
+    std::copy(Name.begin(), Name.end(), Buffer + Position);
     Position += Name.size();
     Buffer[Position] = '\0';  // Null terminator
     Position += 1;

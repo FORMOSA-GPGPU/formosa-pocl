@@ -7,8 +7,8 @@
 #include "common.h"
 #include "common_driver.h"
 #include "formosa-hal/formosa-hal.h"
-#include "formosa-util.h"
 #include "formosa-llvm-util.h"
+#include "formosa-util.h"
 #include "pocl_llvm.h"
 #include "pocl_util.h"
 
@@ -338,7 +338,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   free(host_kargs_base_ptr);
 
   // upload kernel to device
-  uintptr_t entry_pc, kernel_pc;
+  uintptr_t entry_pc = 0, kernel_pc = 0;
   uint64_t *completion_signal = malloc(sizeof(uint64_t));
   if (dd->kernel_buffer == NULL) {
     char sz_program_fsabin[POCL_MAX_PATHNAME_LENGTH];
@@ -351,15 +351,13 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     }
     char *trampoline_name = malloc(strlen(kernel->name) + 12);
     sprintf(trampoline_name, "%s_trampoline", kernel->name);
-    kernel_pc =
-        pocl_fsa_get_symbol_pc(sz_program_fsabin, trampoline_name) + dev_kernel_addr;
+    kernel_pc = pocl_fsa_get_symbol_pc(sz_program_fsabin, trampoline_name) +
+                dev_kernel_addr;
     POCL_MSG_PRINT_INFO("kernel_pc: %lx\n", kernel_pc);
     POCL_MEM_FREE(trampoline_name);
-    entry_pc = pocl_fsa_get_symbol_pc(sz_program_fsabin, "_start") + dev_kernel_addr;
+    entry_pc =
+        pocl_fsa_get_symbol_pc(sz_program_fsabin, "_start") + dev_kernel_addr;
     POCL_MSG_PRINT_INFO("entry_pc: %lx\n", entry_pc);
-    if (err != 0) {
-      POCL_ABORT("ERROR (pocl_formosa_run): Kernel CSR setup failed\n");
-    }
   }
 
   // launch kernel execution
