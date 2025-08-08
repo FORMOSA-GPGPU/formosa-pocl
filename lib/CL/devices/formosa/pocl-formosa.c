@@ -416,7 +416,11 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
 
 char *pocl_formosa_init_build(void *data) {
   // clang -cc1 options
-  return strdup("");
+  const char *pocl_cflags = pocl_get_string_option("POCL_FORMOSA_CFLAGS", "");
+  if (strstr(pocl_cflags, "-fsa-ics-first") != NULL)
+    return strdup("-fsa-ics-first-cg -target-feature +xformosapri");
+  else
+    return strdup("");
 }
 
 int pocl_formosa_post_build_program(cl_program program, cl_uint device_i) {
