@@ -403,6 +403,8 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
         "-O1 -mllvm -fsa-pdom-level\n");
     build_cflags += "-O1 -mllvm -fsa-pdom-level";
   } else {
+    if (extra_cflags.find("-fsa-ics-first") != std::string::npos)
+      build_cflags += " -Xclang -fsa-ics-first-cg ";
     build_cflags += extra_cflags;
   }
 
