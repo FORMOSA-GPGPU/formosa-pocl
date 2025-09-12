@@ -2,7 +2,7 @@
   description = "A very basic flake";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?ref=release-24.11";
+    nixpkgs.url = "github:nixos/nixpkgs?ref=release-25.05";
     flake-utils.url = "github:numtide/flake-utils";
     formosa-llvm.url = "git+ssh://git@git.caslab.ee.ncku.edu.tw/formosa-gpgpu/formosa-llvm.git";
   };

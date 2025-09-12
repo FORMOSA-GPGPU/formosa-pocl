@@ -42,11 +42,11 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1749210220,
-        "narHash": "sha256-O01L35iVk/xli9bQifEXs1eQ3vTiSYYtWalBl310aDM=",
+        "lastModified": 1757656589,
+        "narHash": "sha256-n9zSDQnOkEF2ZAKG2ETlC6N3m7CS0XJRKbG0uUAJUqk=",
         "ref": "refs/heads/formosa/main",
-        "rev": "e20306adc8182f81cdc0bc6ada3a637bc6537703",
-        "revCount": 507068,
+        "rev": "919f202e46831d27ffb9a733d28f4e9b01d57398",
+        "revCount": 526117,
         "type": "git",
         "url": "ssh://git@git.caslab.ee.ncku.edu.tw/formosa-gpgpu/formosa-llvm.git"
       },
@@ -57,32 +57,32 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1745471805,
-        "narHash": "sha256-ydCrtb0MvX21e9NGRATJSrSIpPalJDfEEbdGHkV5Ytc=",
+        "lastModified": 1757651156,
+        "narHash": "sha256-q86Ksl9GLqlol8cPFp6qC974DwlVKmIFPlVL5sSMF+U=",
         "owner": "nixos",
         "repo": "nixpkgs",
-        "rev": "4fb9e49843b424ddcce4792530474b7e7501095e",
+        "rev": "428790e2a1014459b72ea76b68e28062895205d7",
         "type": "github"
       },
       "original": {
         "owner": "nixos",
-        "ref": "release-24.11",
+        "ref": "release-25.05",
         "repo": "nixpkgs",
         "type": "github"
       }
     },
     "nixpkgs_2": {
       "locked": {
-        "lastModified": 1751290243,
-        "narHash": "sha256-kNf+obkpJZWar7HZymXZbW+Rlk3HTEIMlpc6FCNz0Ds=",
+        "lastModified": 1757668928,
+        "narHash": "sha256-PaB0iksYhn44VoUZWaqAaykRA4cGUzaFNpAMGrw/DPI=",
         "owner": "nixos",
         "repo": "nixpkgs",
-        "rev": "5ab036a8d97cb9476fbe81b09076e6e91d15e1b6",
+        "rev": "b41479bdb9d97bb58b29607393228706b04f548c",
         "type": "github"
       },
       "original": {
         "owner": "nixos",
-        "ref": "release-24.11",
+        "ref": "release-25.05",
         "repo": "nixpkgs",
         "type": "github"
       }
