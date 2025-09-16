@@ -29,6 +29,7 @@
 CL_API_ENTRY cl_int
 POname (clCommandFillBufferKHR) (
     cl_command_buffer_khr command_buffer, cl_command_queue command_queue,
+    const cl_command_properties_khr* properties,
     cl_mem buffer, const void *pattern, size_t pattern_size, size_t offset,
     size_t size, cl_uint num_sync_points_in_wait_list,
     const cl_sync_point_khr *sync_point_wait_list,
@@ -36,26 +37,25 @@ POname (clCommandFillBufferKHR) (
     cl_mutable_command_khr *mutable_handle) CL_API_SUFFIX__VERSION_1_2
 {
   cl_int errcode;
-  _cl_command_node *cmd = NULL;
-
   CMDBUF_VALIDATE_COMMON_HANDLES;
+  SETUP_MUTABLE_HANDLE;
 
-  errcode = pocl_fill_buffer_common (command_buffer, command_queue, buffer,
-                                     pattern, pattern_size, offset, size,
-                                     num_sync_points_in_wait_list, NULL, NULL,
-                                     sync_point_wait_list, sync_point, &cmd);
+  errcode = pocl_fill_buffer_common (
+    command_buffer, command_queue, buffer, pattern, pattern_size, offset, size,
+    num_sync_points_in_wait_list, NULL, NULL, sync_point_wait_list, sync_point,
+    mutable_handle);
 
   if (errcode != CL_SUCCESS)
     return errcode;
 
-  errcode = pocl_command_record (command_buffer, cmd, sync_point);
+  errcode = pocl_command_record (command_buffer, *mutable_handle, sync_point);
   if (errcode != CL_SUCCESS)
     goto ERROR;
 
   return CL_SUCCESS;
 
 ERROR:
-  pocl_mem_manager_free_command (cmd);
+  pocl_mem_manager_free_command (*mutable_handle);
   return errcode;
 }
 POsym (clCommandFillBufferKHR)

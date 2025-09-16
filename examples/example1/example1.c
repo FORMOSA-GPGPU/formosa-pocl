@@ -49,7 +49,8 @@ main (int argc, char **argv)
   cl_float4 *srcA = NULL;
   cl_float4 *srcB = NULL;
   cl_float *dst = NULL;
-  int i, err, spirv, poclbin;
+  int err, spirv, poclbin;
+  cl_uint i;
 
   cl_context context = NULL;
   cl_platform_id platform = NULL;
@@ -71,17 +72,9 @@ main (int argc, char **argv)
   poclbin = (argc > 1 && argv[1][0] == 'b');
   const char *explicit_binary_path = (argc > 2) ? argv[2] : NULL;
 
-  if (poclbin)
-    {
-      /* Force disable the WG specialization to test executing from the generic
-         binary only. This is to avoid the online compiler creating
-         a specialized WG function that is ran instead of the binary we
-         want to test here. */
-      setenv("POCL_WORK_GROUP_SPECIALIZATION", "0", 1);
-    }
   const char *basename = "example1";
-  err = poclu_load_program_multidev (context, devices, num_devices, basename,
-                                     spirv, poclbin,
+  err = poclu_load_program_multidev (platform, context, devices, num_devices,
+                                     basename, spirv, poclbin,
                                      explicit_binary_path, NULL, &program);
 
   if (err != CL_SUCCESS)

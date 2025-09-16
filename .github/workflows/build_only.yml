@@ -1,10 +1,14 @@
 ---
-name: Build-only test matrix
+name: Build-only tests
 
 permissions:
   contents: read
 
 on:
+  push:
+    branches:
+      - 'main'
+      - 'release*'
   workflow_dispatch:
   pull_request:
     paths-ignore:
@@ -14,25 +18,19 @@ on:
       - 'CREDITS'
       - 'LICENSE'
       - 'README.*'
+      - 'tools/docker/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref || github.run_id }}
   cancel-in-progress: true
 
-env:
-  CCACHE_COMPRESS: "true"
-  CCACHE_COMPRESSLEVEL: "1"
-  CCACHE_MAXSIZE: "25000M"
-  CCACHE_BASEDIR: "${{ github.workspace }}"
-  CCACHE_DIR: "${{ github.workspace }}/../../../../ccache_storage"
-  EXAMPLES_DIR: "${{ github.workspace }}/../../../../examples"
-
 jobs:
   build_only_matrix:
     name: Build-only - ${{ matrix.config }}
     runs-on: [self-hosted, linux, "${{ matrix.config }}"]
-    # these runners have action runner directly in the home directory
+    # CPU runners have action runner directly in the home directory
     env:
+      CCACHE_BASEDIR: "${{ github.workspace }}"
       CCACHE_DIR: "${{ github.workspace }}/../../../ccache_storage"
       EXAMPLES_DIR: "${{ github.workspace }}/../../../examples"
     strategy:
@@ -42,12 +40,18 @@ jobs:
         # proxy - proxy driver
         # accel - almaif driver
         # no_llvm_no_debug - pthread driver + ENABLE_LLVM=0 + POCL_DEBUG_MESSAGES=0
+        # only_lib - build only libpocl, no examples or binaries
         # android is currently disabled, need to check NDK license if we can use it in CI
-        config: [cross, proxy, accel, no_llvm_no_debug]
+        config: [cross, proxy, accel, no_llvm_no_debug, only_lib]
 
     steps:
       - name: Checkout
-        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Load Env vars
+        id: load-env
+        run: |
+          cat ${{ github.workspace }}/.github/variables.txt >> $GITHUB_ENV
 
       - name: CMake
         id: cmake
@@ -70,6 +74,8 @@ jobs:
             runCMake -DENABLE_ALMAIF_DEVICE=1 -DENABLE_ICD=0 -DENABLE_LOADABLE_DRIVERS=0 -DENABLE_LLVM=0 -DENABLE_HOST_CPU_DEVICES=0
           elif [ "${{ matrix.config }}" == "no_llvm_no_debug" ]; then
             runCMake -DHOST_DEVICE_BUILD_HASH=1234567 -DENABLE_LLVM=0 -DENABLE_ICD=0 -DENABLE_LOADABLE_DRIVERS=0 -DPOCL_DEBUG_MESSAGES:BOOL=OFF
+          elif [ "${{ matrix.config }}" == "only_lib" ]; then
+            runCMake -DHOST_DEVICE_BUILD_HASH=1234567 -DENABLE_LLVM=0 -DENABLE_ICD=0 -DENABLE_LLVM=0 -DENABLE_LOADABLE_DRIVERS=0 -DENABLE_EXAMPLES=0 -DENABLE_POCLCC=0
           elif [ "${{ matrix.config }}" == "proxy" ]; then
             runCMake -DENABLE_PROXY_DEVICE=1 -DENABLE_PROXY_DEVICE_INTEROP=1 -DENABLE_HOST_CPU_DEVICES=0 -DENABLE_LLVM=0 -DENABLE_ICD=0 -DENABLE_LOADABLE_DRIVERS=0 -DVISIBILITY_HIDDEN=0
           else
@@ -80,4 +86,4 @@ jobs:
         id: build_pocl
         timeout-minutes: 30
         run: |
-          cd ${{ github.workspace }}/build && make -j$(nproc)
+          cd ${{ github.workspace }}/build && make -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh)

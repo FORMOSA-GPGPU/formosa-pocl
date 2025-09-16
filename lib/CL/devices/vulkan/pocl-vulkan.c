@@ -106,6 +106,7 @@
 #include "pocl_timing.h"
 #include "pocl_util.h"
 #include "pocl_version.h"
+#include "pocl_run_command.h"
 
 #include "pocl-vulkan.h"
 
@@ -313,13 +314,10 @@ typedef struct pocl_vulkan_device_data_s
   _cl_command_node *work_queue;
 
   /* driver wake + lock */
-  pthread_cond_t wakeup_cond
-      __attribute__ ((aligned (HOST_CPU_CACHELINE_SIZE)));
-  POCL_FAST_LOCK_T wq_lock_fast
-      __attribute__ ((aligned (HOST_CPU_CACHELINE_SIZE)));
+  POCL_ALIGNAS(HOST_CPU_CACHELINE_SIZE) pthread_cond_t wakeup_cond;
+  POCL_ALIGNAS(HOST_CPU_CACHELINE_SIZE) pocl_lock_t wq_lock_fast;
 
-  size_t driver_thread_exit_requested
-      __attribute__ ((aligned (HOST_CPU_CACHELINE_SIZE)));
+  POCL_ALIGNAS(HOST_CPU_CACHELINE_SIZE) size_t driver_thread_exit_requested;
   /* device pthread */
   pthread_t driver_pthread_id;
 
@@ -1460,6 +1458,7 @@ pocl_vulkan_init (unsigned j, cl_device_id dev, const char *parameters)
     strcat (extensions, " cl_khr_fp64");
 
   dev->extensions = strdup (extensions);
+  dev->on_host_queue_props = CL_QUEUE_PROFILING_ENABLE;
 
   if (dev->vendor_id == 0x10de)
     {
@@ -1679,7 +1678,7 @@ pocl_vulkan_init (unsigned j, cl_device_id dev, const char *parameters)
 
   POCL_INIT_COND (d->wakeup_cond);
 
-  POCL_FAST_INIT (d->wq_lock_fast);
+  POCL_INIT_LOCK (d->wq_lock_fast);
 
   d->work_queue = NULL;
 
@@ -1699,10 +1698,10 @@ pocl_vulkan_uninit (unsigned j, cl_device_id device)
   if (device->available != CL_FALSE)
     {
 
-      POCL_FAST_LOCK (d->wq_lock_fast);
+      POCL_LOCK (d->wq_lock_fast);
       d->driver_thread_exit_requested = 1;
       POCL_SIGNAL_COND (d->wakeup_cond);
-      POCL_FAST_UNLOCK (d->wq_lock_fast);
+      POCL_UNLOCK (d->wq_lock_fast);
 
       POCL_JOIN_THREAD (d->driver_pthread_id);
 
@@ -2840,16 +2839,16 @@ static void
 vulkan_push_command (cl_device_id dev, _cl_command_node *cmd)
 {
   pocl_vulkan_device_data_t *d = (pocl_vulkan_device_data_t *)dev->data;
-  POCL_FAST_LOCK (d->wq_lock_fast);
+  POCL_LOCK (d->wq_lock_fast);
   DL_APPEND (d->work_queue, cmd);
   POCL_SIGNAL_COND (d->wakeup_cond);
-  POCL_FAST_UNLOCK (d->wq_lock_fast);
+  POCL_UNLOCK (d->wq_lock_fast);
 }
 
 void
 pocl_vulkan_submit (_cl_command_node *node, cl_command_queue cq)
 {
-  node->ready = 1;
+  node->state = POCL_COMMAND_READY;
   if (pocl_command_is_ready (node->sync.event.event))
     {
       pocl_update_event_submitted (node->sync.event.event);
@@ -2937,12 +2936,26 @@ pocl_vulkan_notify (cl_device_id device, cl_event event, cl_event finished)
 
   if (finished->status < CL_COMPLETE)
     {
-      pocl_update_event_failed (event);
+      /* Unlock the finished event in order to prevent a lock order violation
+       * with the command queue that will be locked during
+       * pocl_update_event_failed.
+       */
+      pocl_unlock_events_inorder (event, finished);
+      pocl_update_event_failed (CL_FAILED, NULL, 0, event, NULL);
+      /* Lock events in this order to avoid a lock order violation between
+       * the finished/notifier and event/wait events.
+       */
+      pocl_lock_events_inorder (finished, event);
       return;
     }
 
-  if (!node->ready)
-    return;
+  if (node->state != POCL_COMMAND_READY)
+    {
+      POCL_MSG_PRINT_EVENTS (
+        "vulkan: command related to the notified event %lu not ready\n",
+        event->id);
+      return;
+    }
 
   POCL_MSG_PRINT_VULKAN ("notify on event %zu \n", event->id);
 
@@ -3370,7 +3383,7 @@ void pocl_vulkan_memfill(void *data,
   cmd.sync.event.event = NULL;
   cmd.next = NULL;
   cmd.prev = NULL;
-  cmd.ready = 1;
+  cmd.state = POCL_COMMAND_READY;
 
   co->wg = NULL;
   co->hash = NULL;
@@ -4088,7 +4101,7 @@ pocl_vulkan_run (void *data, _cl_command_node *cmd)
   VkPipeline pipeline;
   VkShaderModule compute_shader = NULL;
   VkPushConstantRange pushc_range;
-  char pushc_data[d->max_pushc_size];
+  char *pushc_data = alloca (d->max_pushc_size);
   char *goffs_start = NULL;
 
   pocl_vulkan_setup_kernel_arguments (
@@ -4261,7 +4274,7 @@ vulkan_process_work (pocl_vulkan_device_data_t *d)
 {
   _cl_command_node *cmd;
 
-  POCL_FAST_LOCK (d->wq_lock_fast);
+  POCL_LOCK (d->wq_lock_fast);
   size_t do_exit = 0;
 
 RETRY:
@@ -4271,14 +4284,14 @@ RETRY:
   if (cmd)
     {
       DL_DELETE (d->work_queue, cmd);
-      POCL_FAST_UNLOCK (d->wq_lock_fast);
+      POCL_UNLOCK (d->wq_lock_fast);
 
       assert (pocl_command_is_ready (cmd->sync.event.event));
       assert (cmd->sync.event.event->status == CL_SUBMITTED);
 
       pocl_exec_command (cmd);
 
-      POCL_FAST_LOCK (d->wq_lock_fast);
+      POCL_LOCK (d->wq_lock_fast);
     }
 
   if ((cmd == NULL) && (do_exit == 0))
@@ -4288,7 +4301,7 @@ RETRY:
       goto RETRY;
     }
 
-  POCL_FAST_UNLOCK (d->wq_lock_fast);
+  POCL_UNLOCK (d->wq_lock_fast);
 
   return do_exit;
 }

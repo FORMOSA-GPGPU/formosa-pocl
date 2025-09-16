@@ -25,12 +25,9 @@
 
 add_compile_options(${OPENCL_CFLAGS})
 
-if (MSVC)
-  set_source_files_properties( vecadd.c vecadd_exec.c PROPERTIES LANGUAGE CXX )
-endif(MSVC)
 add_executable("vecadd" vecadd.c vecadd_exec.c vecadd.cl)
-
 target_link_libraries("vecadd" ${POCLU_LINK_OPTIONS})
+add_symlink_to_built_opencl_dynlib("vecadd")
 
 add_test(NAME "examples/vecadd" COMMAND "vecadd")
 
@@ -49,5 +46,5 @@ set_tests_properties(
     COST 3.0
     ${PROPS}
     PROCESSORS 1
-    LABELS "internal;vulkan;level0"
+    LABELS "cpu;vulkan;level0"
     DEPENDS "pocl_version_check")

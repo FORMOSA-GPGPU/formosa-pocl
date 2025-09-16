@@ -1,6 +1,7 @@
 /* OpenCL built-in library: get_global_id()
 
    Copyright (c) 2011 Universidad Rey Juan Carlos
+                 2024 Pekka Jääskeläinen / Intel Finland Oy
 
    Permission is hereby granted, free of charge, to any person obtaining a copy
    of this software and associated documentation files (the "Software"), to
@@ -47,8 +48,13 @@ extern const size_t _global_id_z;
 
 /* We generate the global id in WorkitemLoops using the loop iterator to make
    the life easier for loopvec. This will be inlined and removed. */
+#if _MSC_VER
+size_t
+__identifier ("?get_global_id@@$$J0YAKI@Z") (unsigned dim)
+#else
 size_t
 _Z13get_global_idj (unsigned dim)
+#endif
 {
   switch (dim)
     {

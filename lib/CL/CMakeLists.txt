@@ -23,7 +23,6 @@
 #
 #=============================================================================
 
-
 include_directories(AFTER "devices" ".")
 
 add_subdirectory("devices")
@@ -113,6 +112,7 @@ set(POCL_LIB_SOURCES  "clCreateContextFromType.c"
                    "clReleaseSampler.c"
                    "clRetainSampler.c"
                    "clGetSamplerInfo.c"
+                   "clGetMutableCommandInfoKHR.c"
                    "clEnqueueCopyImage.c"
                    "clEnqueueMapImage.c"
                    "clGetHostTimer.c"
@@ -140,28 +140,12 @@ set(POCL_LIB_SOURCES  "clCreateContextFromType.c"
                    "clSetProgramSpecializationConstant.c"
                    "clCloneKernel.c"
                    "clEnqueueSVMMigrateMem.c"
-                   "pocl_builtin_kernels.c" "pocl_builtin_kernels.h"
-                   "dbk/pocl_dbk_khr_jpeg_shared.c" "dbk/pocl_dbk_khr_jpeg_shared.h"
-                   "pocl_cl.h" "pocl_util.h" "pocl_util.c"
-                   "pocl_cl_half_util.c" "pocl_cl_half_util.h"
-                   "pocl_image_util.c" "pocl_image_util.h"
-                   "pocl_img_buf_cpy.c"
-                   "pocl_fill_memobj.c"
-                   "pocl_ndrange_kernel.c"
-                   "pocl_icd.h" "pocl_llvm.h"
-                   "pocl_tracing.h" "pocl_tracing.c"
-                   "pocl_runtime_config.c" "pocl_runtime_config.h"
-                   "pocl_mem_management.c"  "pocl_mem_management.h"
-                   "pocl_hash.c" "pocl_file_util.c"
-                   "pocl_debug.h" "pocl_debug.c" "pocl_timing.c"
-                   "pocl_timing.h" "pocl_threads.h" "pocl_threads.c"
-                   "pocl_tensor_util.h" "pocl_tensor_util.c"
+                   "clUpdateMutableCommandsKHR.c"
                    "clSVMAlloc.c" "clSVMFree.c" "clEnqueueSVMFree.c"
                    "clEnqueueSVMMap.c" "clEnqueueSVMUnmap.c"
                    "clEnqueueSVMMemcpy.c" "clEnqueueSVMMemFill.c"
                    "clSetKernelArgSVMPointer.c" "clSetKernelExecInfo.c"
                    "clSetDefaultDeviceCommandQueue.c"
-                   "pocl_binary.c" "pocl_opengl.c" "pocl_cq_profiling.c"
                    "clCommandBarrierWithWaitListKHR.c"
                    "clCommandCopyBufferKHR.c"
                    "clCommandCopyBufferRectKHR.c"
@@ -201,14 +185,50 @@ set(POCL_LIB_SOURCES  "clCreateContextFromType.c"
                    "clEnqueueSVMMemcpyRectPOCL.c"
                    "clEnqueueSVMMemfillRectPOCL.c"
                    "clSetKernelArgDevicePointer.c"
+
+                   "pocl_builtin_kernels.c" "pocl_builtin_kernels.h"
+                   "pocl_cl_half_util.c" "pocl_cl_half_util.h"
+                   "pocl_cl.h" "pocl_icd.h" "pocl_llvm.h"
+                   "pocl_util.h" "pocl_util.c"
+                   "pocl_run_command.c" "pocl_run_command.h"
+                   "pocl_image_util.c" "pocl_image_util.h"
+                   "pocl_img_buf_cpy.c"
+                   "pocl_fill_memobj.c"
+                   "pocl_ndrange_kernel.c"
+                   "pocl_tracing.h" "pocl_tracing.c"
+                   "pocl_runtime_config.c" "pocl_runtime_config.h"
+                   "pocl_mem_management.c"  "pocl_mem_management.h"
+                   "pocl_hash.c"
+                   "pocl_debug.h" "pocl_debug.c"
+                   "pocl_tensor_util.h" "pocl_tensor_util.c"
+                   "pocl_binary.c" "pocl_opengl.c" "pocl_cq_profiling.c"
+                   # platform dep
+                   "pocl_timing.h" "pocl_threads.h" "pocl_file_util.h"
+                   # dbks
+                   "dbk/pocl_dbk_khr_jpeg_shared.c" "dbk/pocl_dbk_khr_jpeg_shared.h"
+                   "dbk/pocl_dbk_khr_onnxrt_shared.c" "dbk/pocl_dbk_khr_onnxrt_shared.h"
+                   "dbk/pocl_dbk_khr_img_shared.c" "dbk/pocl_dbk_khr_img_shared.h"
+                   "dbk/pocl_dbk_khr_dnn_utils_shared.c" "dbk/pocl_dbk_khr_dnn_utils_shared.h"
 )
+
+unset(EXTRA_LLVM_SOURCES)
+
+if(ENABLE_LLVM_PLATFORM_SUPPORT)
+  list(APPEND POCL_LIB_SOURCES "pocl_timing.cc" "pocl_threads.cc")
+  list(APPEND EXTRA_LLVM_SOURCES "pocl_llvm_file_utils.cc" "pocl_llvm_dynlib.cc")
+else()
+  list(APPEND POCL_LIB_SOURCES "pocl_timing.c" "pocl_threads.c" "pocl_file_util.c" "pocl_dynlib.c")
+endif()
 
 if(ANDROID)
   list(APPEND POCL_LIB_SOURCES "pocl_mkstemp.c")
 endif()
+if(APPLE)
+  list(APPEND POCL_LIB_SOURCES "pthread_barrier.c")
+endif()
 
-if(ENABLE_RDMA)
-  list(APPEND POCL_LIB_SOURCES "pocl_rdma.c")
+if(WIN32)
+  list(APPEND POCL_LIB_SOURCES "pocl_ipc_mutex_win.cc")
 endif()
 
 set(LIBPOCL_OBJS "$<TARGET_OBJECTS:libpocl_unlinked_objs>"
@@ -227,6 +247,11 @@ else()
 endif()
 
 add_library("pocl_cache" OBJECT "pocl_cache.c")
+if(BUILD_SHARED_LIBS AND MSVC)
+  # Inject __declspec(dllexport).
+  target_compile_definitions("pocl_cache" PRIVATE EXPORT_POCL_LIB)
+  target_compile_definitions("pocl_cache" INTERFACE IMPORT_POCL_LIB)
+endif()
 harden("pocl_cache")
 
 if(OCL_ICD_INCLUDE_DIRS)
@@ -240,16 +265,17 @@ if (ENABLE_LLVM)
   unset(CMAKE_CXX_STANDARD)
   unset(CMAKE_CXX_STANDARD_REQUIRED)
 
-  set(LLVM_API_SOURCES "pocl_llvm_build.cc" "pocl_llvm_metadata.cc" "pocl_llvm_utils.cc" "pocl_llvm_wg.cc")
-  if(USE_LLVM_FOR_DYNLIBS)
-    list(APPEND LLVM_API_SOURCES "pocl_llvm_dynlib.cc")
-  endif()
-
+  set(LLVM_API_SOURCES "pocl_llvm_build.cc" "pocl_llvm_metadata.cc" "pocl_llvm_utils.cc" "pocl_llvm_wg.cc" "pocl_llvm_spirv.cc" ${EXTRA_LLVM_SOURCES})
   set_source_files_properties(${LLVM_API_SOURCES} PROPERTIES COMPILE_FLAGS "${LLVM_CXXFLAGS} -I\"${CMAKE_CURRENT_SOURCE_DIR}/../llvmopencl\"")
 
   add_library("lib_cl_llvm" OBJECT ${LLVM_API_SOURCES})
   target_include_directories(lib_cl_llvm PRIVATE ${LLVM_INCLUDE_DIRS})
   harden("lib_cl_llvm")
+  if(BUILD_SHARED_LIBS AND MSVC)
+    # Inject __declspec(dllexport).
+    target_compile_definitions(lib_cl_llvm PRIVATE EXPORT_POCL_LIB)
+    target_compile_definitions(lib_cl_llvm INTERFACE IMPORT_POCL_LIB)
+  endif()
 
   if(OCL_ICD_INCLUDE_DIRS)
     target_include_directories("lib_cl_llvm" SYSTEM PUBLIC ${OCL_ICD_INCLUDE_DIRS})
@@ -258,6 +284,11 @@ if (ENABLE_LLVM)
   if (HAVE_LLVM_SPIRV_LIB)
     target_include_directories(lib_cl_llvm PRIVATE ${LLVM_SPIRV_INCLUDEDIR})
   endif()
+
+  if(ENABLE_HEADER_BUNDLING)
+    add_dependencies(lib_cl_llvm regenerate_bundled_headers)
+  endif()
+
 
   list(APPEND LIBPOCL_OBJS "$<TARGET_OBJECTS:llvmpasses>")
   list(APPEND LIBPOCL_OBJS "$<TARGET_OBJECTS:lib_cl_llvm>")
@@ -280,16 +311,13 @@ if(HAVE_LTTNG_UST)
   list(APPEND POCL_LIB_SOURCES "pocl_lttng.c" "pocl_lttng.h")
 endif()
 
-if(MSVC)
-  set_source_files_properties( ${POCL_LIB_SOURCES} PROPERTIES LANGUAGE CXX )
-endif(MSVC)
-
-if(NOT USE_LLVM_FOR_DYNLIBS)
-  list(APPEND POCL_LIB_SOURCES "pocl_dynlib.c")
-endif()
-
 # this is so that we don't compile twice when building both libpocl and libOpenCL
 add_library("libpocl_unlinked_objs" OBJECT ${POCL_LIB_SOURCES})
+if(BUILD_SHARED_LIBS AND MSVC)
+  # Inject __declspec(dllexport).
+  target_compile_definitions(libpocl_unlinked_objs PRIVATE EXPORT_POCL_LIB)
+  target_compile_definitions(libpocl_unlinked_objs INTERFACE IMPORT_POCL_LIB)
+endif()
 
 harden("libpocl_unlinked_objs")
 
@@ -339,11 +367,19 @@ set(POCL_TRANSITIVE_LIBS ${POCL_PRIVATE_LINK_LIST} PARENT_SCOPE)
 #################################################################
 
 add_library("${POCL_LIBRARY_NAME}" ${LIBPOCL_OBJS})
+if(BUILD_SHARED_LIBS AND MSVC)
+  # Inject __declspec(dllexport).
+  target_compile_definitions("${POCL_LIBRARY_NAME}" PRIVATE EXPORT_POCL_LIB)
+  target_compile_definitions("${POCL_LIBRARY_NAME}" INTERFACE IMPORT_POCL_LIB)
+endif()
 
 harden("${POCL_LIBRARY_NAME}")
 
 if(UNIX AND (NOT APPLE))
   target_link_options("${POCL_LIBRARY_NAME}" PRIVATE "LINKER:--exclude-libs,ALL")
+endif()
+if(WIN32)
+  target_link_options("${POCL_LIBRARY_NAME}" PRIVATE "LINKER:--enable-auto-import,--enable-runtime-pseudo-reloc")
 endif()
 
 set_target_properties("${POCL_LIBRARY_NAME}" PROPERTIES SOVERSION "${LIB_API_VERSION}"
@@ -352,15 +388,22 @@ set_target_properties("${POCL_LIBRARY_NAME}" PROPERTIES SOVERSION "${LIB_API_VER
 
 target_link_libraries("${POCL_LIBRARY_NAME}" PRIVATE ${POCL_PRIVATE_LINK_LIST})
 install(TARGETS "${POCL_LIBRARY_NAME}"
-        ARCHIVE DESTINATION ${POCL_INSTALL_PUBLIC_LIBDIR}/static
+        ARCHIVE DESTINATION ${POCL_INSTALL_STATIC_LIBDIR_REL}
         COMPONENT "dev"
-        LIBRARY DESTINATION ${POCL_INSTALL_PUBLIC_LIBDIR}
+        LIBRARY DESTINATION ${POCL_INSTALL_PUBLIC_LIBDIR_REL}
+        COMPONENT "lib"
+        RUNTIME DESTINATION ${POCL_INSTALL_PUBLIC_LIBDIR_REL}
         COMPONENT "lib"
 )
+
 
 if(ENABLE_IPO)
   if (ENABLE_LLVM)
     set_property(TARGET "lib_cl_llvm" PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
   endif()
   set_property(TARGET "${POCL_LIBRARY_NAME}" PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+endif()
+
+if(WIN32)
+  set_target_properties("${POCL_LIBRARY_NAME}" PROPERTIES PREFIX "")
 endif()

@@ -82,7 +82,9 @@ POCL_EXPORT
 void pocl_init_dlhandle_cache ();
 
 POCL_EXPORT
-char *pocl_check_kernel_disk_cache (_cl_command_node *cmd, int specialized);
+int pocl_check_kernel_disk_cache (char *module_fn,
+                                  _cl_command_node *cmd,
+                                  int specialized);
 
 POCL_EXPORT
 size_t pocl_cmd_max_grid_dim_width (_cl_command_run *cmd);
@@ -103,12 +105,6 @@ void pocl_reinit_system_memory();
 
 POCL_EXPORT
 void pocl_set_buffer_image_limits(cl_device_id device);
-
-POCL_EXPORT
-void* pocl_aligned_malloc_global_mem(cl_device_id device, size_t align, size_t size);
-
-POCL_EXPORT
-void pocl_free_global_mem(cl_device_id device, void *ptr, size_t size);
 
 void pocl_print_system_memory_stats();
 
@@ -132,7 +128,7 @@ POCL_EXPORT
 void pocl_setup_builtin_kernels_with_version (cl_device_id dev);
 
 POCL_EXPORT
-void __printf_flush_buffer (char *buffer, uint32_t buffer_size);
+void pocl_flush_printf_buffer (char *buffer, uint32_t buffer_size);
 
 POCL_EXPORT
 void pocl_write_printf_buffer (char *printf_buffer, uint32_t bytes);

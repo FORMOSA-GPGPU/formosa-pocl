@@ -217,7 +217,8 @@ std::vector<int> generate_hits(unsigned n)
 {
     std::vector<int> res;
     res.reserve(n);
-    for(unsigned i = 0; i < n; ++i) res.push_back(random()&1);
+    for (unsigned i = 0; i < n; ++i)
+      res.push_back(rand() & 1);
     return res;
 }
 
@@ -237,8 +238,6 @@ int main()
     std::vector<int> hits = generate_hits(100);
     std::vector<int> indices;
     exclusive_scan_cpu(hits, indices);
-    print_vec(hits);
-    print_vec(indices);
 
     std::vector<int> cl_indices;
     exclusive_scan_cl(hits, cl_indices);
@@ -247,8 +246,10 @@ int main()
         std::cout << "OK: CL gave correct results" << std::endl;
         return EXIT_SUCCESS;
     } else {
-        std::cout << "ERROR: CL gave wrong results" << std::endl;
+        std::cout << "ERROR: CL gave wrong results:" << std::endl;
         print_vec(cl_indices);
+        std::cout << "expected:" << std::endl;
+        print_vec(indices);
         return EXIT_FAILURE;
     }
 }

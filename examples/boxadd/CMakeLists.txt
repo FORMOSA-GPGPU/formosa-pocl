@@ -25,12 +25,9 @@
 
 add_compile_options(${OPENCL_CFLAGS})
 
-if (MSVC)
-  set_source_files_properties( boxadd.c boxadd_exec.c PROPERTIES LANGUAGE CXX )
-endif(MSVC)
 add_executable("boxadd" boxadd.c boxadd_exec.c boxadd.cl)
-
 target_link_libraries("boxadd" ${POCLU_LINK_OPTIONS})
+add_symlink_to_built_opencl_dynlib("boxadd")
 
 add_test(NAME "examples/boxadd" COMMAND "boxadd")
 
@@ -45,5 +42,5 @@ set_tests_properties( "examples/boxadd"
     COST 3.0
     ${PROPS}
     PROCESSORS 1
-    LABELS "internal;vulkan;level0"
+    LABELS "cpu;vulkan;level0"
     DEPENDS "pocl_version_check")

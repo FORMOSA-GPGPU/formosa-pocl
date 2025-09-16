@@ -30,8 +30,6 @@
 #include "pocl_llvm.h"
 #endif
 
-extern unsigned long context_c;
-
 int
 context_set_properties (cl_context context,
                         const cl_context_properties *properties)
@@ -214,7 +212,11 @@ POname(clCreateContext)(const cl_context_properties * properties,
 
   /* only required for online context */
   if (!pocl_offline_compile)
-    pocl_setup_context (context);
+    {
+      errcode = pocl_setup_context (context);
+      if (errcode)
+        goto ERROR;
+    }
 
   for (i = 0; i < context->num_create_devices; ++i)
     POname (clRetainDevice) (context->create_devices[i]);

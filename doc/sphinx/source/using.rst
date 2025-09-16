@@ -63,18 +63,6 @@ the pkg-config::
 In this link mode, your program will always require the pocl OpenCL library. It
 wont be able to run with another OpenCL implementation without recompilation.
 
-Using pocl on MacOSX
---------------------
-
-On MacOSX, you can either link your program directly with pocl or link through the
-ICD loader by KhronosGroup.
-
-Even if you use an ICD loader, the Apple OpenCL implementation will still be invisible,
-unless you use a wrapper library to expose the Apple OpenCL implementation as an ICD.
-
-When ENABLE_ICD is turned off and an application links directly with PoCL, the only
-platform that is visible to the application will be PoCL.
-
 .. _pocl-env-variables:
 
 Tuning pocl behavior with ENV variables
@@ -164,7 +152,7 @@ pocl.
 
  Overrides the vendor id reported by PoCL for the CPU drivers.
  For example, setting the vendor id to be 32902 (0x8086) and setting the driver
- version using **POCL_DRIVER_VER_OVERRIDE** to "2023.16.7.0.21_160000" (or such) can
+ version using **POCL_DRIVER_VERSION_OVERRIDE** to "2023.16.7.0.21_160000" (or such) can
  be used to convince binary-distributed DPC++ compilers to compile and run SYCL
  programs on the PoCL-CPU driver.
 
@@ -230,6 +218,11 @@ pocl.
  POCL_TTASIM0_PARAMETERS will be passed to the first ttasim driver instantiated
  and POCL_TTASIM1_PARAMETERS to the second one.
 
+- **POCL_DISCOVERY**
+
+ Used to enable or disable device discovery. See :ref:`remote-discovery-label`
+ for details on discovery.
+
 - **POCL_DRIVER_VERSION_OVERRIDE**
 
   Can be used to override the driver version reported by PoCL.
@@ -289,6 +282,13 @@ pocl.
  to be at most this number. For certain devices, this is can only be lower than
  their hardware limits.
 
+- **POCL_MAX_COMPUTE_UNITS**
+
+ Limits the maximum number of Compute Units for drivers which support limiting
+ the CU count. The default is for each driver to determine the CU count based
+ on hardware properties. If both this and driver specific env var are specified,
+ the driver specific variable takes precedence.
+
 - **POCL_MEMORY_LIMIT**
 
  Integer option, unit: gigabytes. Limits the total global memory size
@@ -317,10 +317,40 @@ pocl.
   * **POCL_PATH_LLVM_SPIRV** -- Path to the llvm-spirv executable.
   * **POCL_PATH_SPIRV_LINK** -- Path to the spirv-link executable.
 
-- **POCL_SIGFPE_HANDLER**
+- **POCL_ARGS_XXX**
 
- Defaults to 1. If set to 0, pocl will not install the SIGFPE handler.
- See :ref:`known-issues`
+ String. These variables can be used to pass additional arguments to executables
+ that pocl invokes during compilation, linking, etc. Multiple arguments can be
+ passed by separating them with a semicolon.
+
+ The following variables are available:
+
+  * **POCL_ARGS_CLANG** -- Additional arguments to pass to clang.
+
+- **POCL_PLATFORM_NAME_OVERRIDE**
+
+ Overrides the platform name reported by PoCL. For example, setting the platform
+ "PoCL (Intel OpenCL compat)" will allow running OneDNN applications, which will
+ fail to create a device if 'Intel' and 'OpenCL' are not in the platform string.
+
+- **POCL_PREGION_VALUE_REMAT**
+
+ Controls the CPU kernel compiler's value rematerialization, an optimization
+ where the value is recompute in the using parallel region instead of storing
+ it to the work-item context. Enabled by default.
+
+- **POCL_REMOTE_XXX**
+
+ These variables are used to configure different aspects of the remote driver
+ and daemon. See :ref:`remote_label` for details.
+
+  * **POCL_REMOTE_SEARCH_DOMAINS** -- To specify DNS domains for unicast-DNS-SD
+                                   based discovery queries.
+  * **POCL_REMOTE_DHT_PORT** -- To specify a port for the DHT node to operate.
+  * **POCL_REMOTE_DHT_BOOTSTRAP** -- To specify a bootstrap node to connect to
+                                  an existing DHT network.
+  * **POCL_REMOTE_DHT_KEY** -- To specify the common key for server and client
+                            nodes to use when publishing or listening.
 
 - **POCL_SIGUSR2_HANDLER**
 
@@ -383,6 +413,33 @@ pocl.
  When set to 1, prints out remarks produced by the loop vectorizer of LLVM
  during kernel compilation.
 
+- **POCL_VECTORIZER_FORCE_VECTOR_WIDTH**
+
+ Forces the LLVM loop vectorizer to use the specified vector width (expressed
+ as a number of **loop iterations**), overriding the default value determined
+ by the vectorizer's cost model.
+ The same vector width will be used by all loops in all kernels.
+ Setting the vector width to 1 disables vectorization.
+ If the requested vector width is higher than the machine's native vector
+ width, the vectorizer will also unroll the loop.
+
+- **POCL_VECTORIZER_PREFER_VECTOR_WIDTH**
+
+ Override the preferred vector width (expressed as a number of **bits**) for
+ x86 targets.
+ When set, the LLVM loop vectorizer will generate code using vector
+ instructions with the specified number of bits.
+ When not set, the LLVM loop vectorizer may limit itself to using 256-bit
+ vector instructions on some targets to avoid frequency penalties.
+
+.. note::
+   POCL_VECTORIZER_FORCE_VECTOR_WIDTH and POCL_VECTORIZER_PREFER_VECTOR_WIDTH
+   can be used together. For example, setting
+   POCL_VECTORIZER_FORCE_VECTOR_WIDTH=16
+   POCL_VECTORIZER_PREFER_VECTOR_WIDTH=512
+   will force the LLVM loop vectorizer to use a vector width of 16 and
+   generate 512-bit vector instructions.
+
 - **POCL_VULKAN_VALIDATE**
 
  When set to 1, and the Vulkan implementation has the validation layers,
@@ -428,3 +485,6 @@ pocl.
   The kernel command parameters PoCL currently specializes with include
   the local size, global offset zero or non-zero and maximum grid size.
   The specialization can be disabled by setting this environment variable to 0.
+
+.. include:: macos.rst
+.. include:: sycl_dpcpp.rst

@@ -29,6 +29,7 @@ add_definitions("-DSRCDIR=\"${CMAKE_CURRENT_SOURCE_DIR}\"")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c99 ${OPENCL_CFLAGS_STR}")
 
 ######################################################################
+
 add_executable("kernel" "kernel.c")
 target_link_libraries("kernel" ${POCLU_LINK_OPTIONS})
 
@@ -54,48 +55,7 @@ add_test_pocl(NAME "kernel/test_bitselect"
               COMMAND "kernel" "test_bitselect")
 
 add_test_pocl(NAME "kernel/test_hadd"
-              WORKITEM_HANDLER "loops;loopvec;cbs"
               COMMAND "kernel" "test_hadd")
-
-
-
-set(VARIANTS "loopvec;cbs")
-foreach(VARIANT ${VARIANTS})
-  set_tests_properties( "kernel/test_as_type_${VARIANT}" "kernel/test_bitselect_${VARIANT}"
-    "kernel/test_convert_type_1_${VARIANT}" "kernel/test_convert_type_2_${VARIANT}" "kernel/test_convert_type_4_${VARIANT}"
-    "kernel/test_convert_type_8_${VARIANT}" "kernel/test_convert_type_16_${VARIANT}"
-    "kernel/test_hadd_${VARIANT}"
-    PROPERTIES
-      COST 40.0
-      PROCESSORS 1
-      DEPENDS "pocl_version_check"
-      LABELS "kernel")
-endforeach()
-
-set_tests_properties( "kernel/test_hadd_loopvec"
-  PROPERTIES
-    COST 40.0
-    PROCESSORS 1
-    DEPENDS "pocl_version_check"
-    LABELS "internal;kernel")
-
-
-# convert_type_{4,8,16} on some machines takes >1 hour,
-# so only add convert_type_1/2 to internal tests to keep them reasonably fast.
-
-foreach(VARIANT ${VARIANTS})
-  set_tests_properties( "kernel/test_as_type_${VARIANT}" "kernel/test_bitselect_${VARIANT}"
-    "kernel/test_convert_type_1_${VARIANT}" "kernel/test_convert_type_2_${VARIANT}"
-    "kernel/test_hadd_${VARIANT}"
-    PROPERTIES
-      LABELS "internal;kernel")
-  # TODO: works on LLVM 15 but fails with LLVM 16, most likely reason:
-  # https://github.com/pocl/pocl/issues/1525
-  # https://github.com/grpc/grpc/issues/14587
-  if(APPLE AND ARM64)
-    set_tests_properties( "kernel/test_as_type_${VARIANT}" PROPERTIES DISABLED 1)
-  endif()
-endforeach()
 
 add_test_pocl(NAME "kernel/test_min_max"
               COMMAND "kernel" "test_min_max")
@@ -136,27 +96,54 @@ add_test_pocl(NAME "kernel/test_short16"
 add_test_pocl(NAME "kernel/test_frexp_modf"
               COMMAND "kernel" "test_frexp_modf")
 
+add_test_pocl(NAME "kernel/test_halfs"
+              COMMAND "kernel" "test_halfs")
+
+# convert_type_{4,8,16} + hadd/as_type/bitselect produce very large kernels
+# that can cause LLVM to spend extremely long time on optimization,
+# and Level Zero can timeout executing kernels.
+# enable the tests but add "long" label so ctest can skip easily
+
+set(VARIANTS "loopvec;cbs")
 foreach(VARIANT ${VARIANTS})
+  set_tests_properties( "kernel/test_as_type_${VARIANT}" "kernel/test_bitselect_${VARIANT}"
+    "kernel/test_convert_type_1_${VARIANT}" "kernel/test_convert_type_2_${VARIANT}" "kernel/test_convert_type_4_${VARIANT}"
+    "kernel/test_convert_type_8_${VARIANT}" "kernel/test_convert_type_16_${VARIANT}"
+    "kernel/test_hadd_${VARIANT}" "kernel/test_rotate_${VARIANT}"
+    PROPERTIES
+      COST 40.0
+      PROCESSORS 1
+      DEPENDS "pocl_version_check"
+      LABELS "cpu;kernel;long")
+endforeach()
+
+foreach(VARIANT ${VARIANTS})
+  # TODO: works on LLVM 15 but fails with LLVM 16, most likely reason:
+  # https://github.com/pocl/pocl/issues/1525
+  # https://github.com/grpc/grpc/issues/14587
+  unset(ENABLE_CPU_TESTS)
+  if(NOT (APPLE AND ARM64))
+    list(APPEND ENABLE_CPU_TESTS "kernel/test_as_type_${VARIANT}")
+  endif()
+
+  if(NOT (ENABLE_HOST_CPU_DEVICES AND RISCV))
+    list(APPEND ENABLE_CPU_TESTS "kernel/test_ilogb_${VARIANT}")
+  endif()
+
   set_tests_properties("kernel/test_min_max_${VARIANT}" "kernel/test_length_distance_${VARIANT}"
     "kernel/test_fmin_fmax_fma_${VARIANT}" "kernel/test_local_struct_array_${VARIANT}"
     "kernel/test_convert_sat_regression_${VARIANT}"   "kernel/test_fabs_${VARIANT}"
     "kernel/test_rotate_${VARIANT}" "kernel/test_copy_signbit_${VARIANT}" "kernel/test_ilogb_${VARIANT}"
     "kernel/test_ldexp_${VARIANT}" "kernel/test_isnan_${VARIANT}" "kernel/test_short16_${VARIANT}"
-    "kernel/test_frexp_modf_${VARIANT}"
+    "kernel/test_frexp_modf_${VARIANT}" ${ENABLE_CPU_TESTS}
     PROPERTIES
       COST 4.0
       PROCESSORS 1
       DEPENDS "pocl_version_check"
-      LABELS "internal;kernel")
+      LABELS "cpu;kernel")
 endforeach()
 
 ######################################################################
-if(MSVC)
-  set_source_files_properties( 
-    sampler_address_clamp.c image_query_funcs.c
-    test_shuffle.cc kernel.c PROPERTIES LANGUAGE CXX )
-endif(MSVC)
-
 add_executable("sampler_address_clamp" "sampler_address_clamp.c")
 target_link_libraries("sampler_address_clamp" ${POCLU_LINK_OPTIONS})
 
@@ -178,7 +165,7 @@ set_tests_properties( "kernel/test_sampler_address_clamp_${VARIANT}"
     SKIP_REGULAR_EXPRESSION "SKIP\n"
     PROCESSORS 1
     DEPENDS "pocl_version_check"
-    LABELS "internal;kernel")
+    LABELS "cpu;kernel")
 
 set_tests_properties( "kernel/test_image_query_funcs_${VARIANT}"
   PROPERTIES
@@ -187,7 +174,7 @@ set_tests_properties( "kernel/test_image_query_funcs_${VARIANT}"
     SKIP_REGULAR_EXPRESSION "SKIP\n"
     PROCESSORS 1
     DEPENDS "pocl_version_check"
-    LABELS "internal;kernel")
+    LABELS "cpu;kernel")
 endforeach()
 ######################################################################
 
@@ -238,6 +225,39 @@ add_test_pocl(NAME "kernel/test_printf_vectors"
               EXPECTED_OUTPUT "test_printf_vectors_expout.txt"
               COMMAND "kernel" "test_printf_vectors")
 
+add_test_pocl(NAME "kernel/test_printf_vectors_doublen"
+              EXPECTED_OUTPUT "test_printf_vectors_doublen_expout.txt"
+              COMMAND "kernel" "test_printf_vectors_doublen")
+
+add_test_pocl(NAME "kernel/test_printf_vectors_halfn"
+              EXPECTED_OUTPUT "test_printf_vectors_halfn_expout.txt"
+              COMMAND "kernel" "test_printf_vectors_halfn")
+
+if(HOST_CPU_ENABLE_CL_KHR_FP16)
+  foreach(VARIANT ${VARIANTS})
+  set_tests_properties("kernel/test_printf_vectors_halfn_${VARIANT}"
+    "kernel/test_shuffle_half_${VARIANT}" "kernel/test_halfs_${VARIANT}"
+    PROPERTIES
+      PROCESSORS 1
+      COST 120
+      DEPENDS "pocl_version_check"
+      LABELS "cpu;kernel")
+  endforeach()
+endif()
+unset(ADDITIONAL_CPU_TEST)
+
+if(HOST_CPU_ENABLE_CL_KHR_FP64)
+  foreach(VARIANT ${VARIANTS})
+  set_tests_properties("kernel/test_printf_vectors_doublen_${VARIANT}"
+    "kernel/test_shuffle_double_${VARIANT}"
+    PROPERTIES
+      PROCESSORS 1
+      COST 120
+      DEPENDS "pocl_version_check"
+      LABELS "cpu;kernel")
+  endforeach()
+endif()
+
 add_test_pocl(NAME "kernel/test_printf_vectors_ulongn"
               EXPECTED_OUTPUT "test_printf_vectors_ulongn_expout.txt"
               COMMAND "kernel" "test_printf_vectors_ulongn")
@@ -252,8 +272,7 @@ foreach(VARIANT ${VARIANTS})
     "kernel/test_shuffle_short_${VARIANT}" "kernel/test_shuffle_ushort_${VARIANT}"
     "kernel/test_shuffle_int_${VARIANT}" "kernel/test_shuffle_uint_${VARIANT}"
     "kernel/test_shuffle_long_${VARIANT}" "kernel/test_shuffle_ulong_${VARIANT}"
-    "kernel/test_shuffle_half_${VARIANT}" "kernel/test_shuffle_float_${VARIANT}"
-    "kernel/test_shuffle_double_${VARIANT}"
+    "kernel/test_shuffle_float_${VARIANT}"
     "kernel/test_ucharn_${VARIANT}"
     "kernel/test_printf_${VARIANT}"
     "kernel/test_printf_vectors_${VARIANT}"
@@ -264,8 +283,21 @@ foreach(VARIANT ${VARIANTS})
       PROCESSORS 1
       COST 120
       DEPENDS "pocl_version_check"
-      LABELS "internal;kernel")
+      LABELS "cpu;kernel")
+
+  set_property(TEST
+    "kernel/test_printf_${VARIANT}"
+    "kernel/test_printf_vectors_${VARIANT}"
+    "kernel/test_printf_vectors_ulongn_${VARIANT}"
+    APPEND PROPERTY LABELS "mingw_fail")
+
 endforeach()
+
+if(ENABLE_POCLCC)
+  add_test(NAME "kernel/test_ptr_compare_build"
+    COMMAND "${CMAKE_BINARY_DIR}/bin/poclcc" -o test_ptr_compare_build.out
+      "${CMAKE_CURRENT_SOURCE_DIR}/test_ptr_compare.cl")
+endif()
 
 ######################################################################
 
@@ -310,8 +342,6 @@ set_property(TEST
   APPEND PROPERTY LABELS "cuda")
 endif()
 
-set(EXTRA_TEST_VARIANT ${EXTRA_TESTS})
-list(TRANSFORM EXTRA_TEST_VARIANT APPEND "_loopvec")
 
 set_property(TEST
   "kernel/test_local_struct_array_loopvec"
@@ -324,7 +354,6 @@ set_property(TEST
   "kernel/test_shuffle_float_loopvec"
   "kernel/test_shuffle_long_loopvec"
   "kernel/test_shuffle_ulong_loopvec"
-  ${EXTRA_TEST_VARIANT}
   "kernel/test_as_type_loopvec"
   "kernel/test_convert_type_1_loopvec"
   "kernel/test_convert_type_2_loopvec"
@@ -396,3 +425,6 @@ set_property(TEST
   "kernel/test_ucharn_loopvec"
   "kernel/test_image_query_funcs_loopvec"
   APPEND PROPERTY LABELS "level0")
+
+add_symlink_to_built_opencl_dynlib(
+  kernel test_shuffle image_query_funcs sampler_address_clamp)

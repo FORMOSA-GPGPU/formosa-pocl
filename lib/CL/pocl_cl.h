@@ -32,6 +32,14 @@
 #include <errno.h>
 #include <stdio.h>
 
+#if defined(__FreeBSD__)
+#include <stdlib.h>
+#elif defined(_WIN32)
+#include <malloc.h>
+#else
+#include <alloca.h>
+#endif
+
 #ifdef ENABLE_VALGRIND
 #include <valgrind/helgrind.h>
 #endif
@@ -41,6 +49,7 @@
 #endif
 
 #include "pocl.h"
+
 #include "pocl_debug.h"
 #include "pocl_hash.h"
 #include "pocl_runtime_config.h"
@@ -50,10 +59,10 @@
 #  include "pocl_icd.h"
 #endif
 
-#include <CL/cl_egl.h>
-#include <CL/opencl.h>
 
-#if __STDC_VERSION__ < 199901L
+#include <CL/cl_egl.h>
+
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ < 199901L
 # if __GNUC__ >= 2
 #  define __func__ __PRETTY_FUNCTION__
 # else
@@ -85,22 +94,14 @@
  * inter-thread synchronisation event, but one which is invisible to Helgrind.
  *
  * ... this macro explicitly associates the cond var with the mutex, by
- * calling pthread_cond_wait with a short timeout (100 usec)
+ * calling pthread_cond_wait with a short timeout (10 usec)
  */
 
 #ifdef ENABLE_VALGRIND
 #define VG_ASSOC_COND_VAR(cond_var, mutex)                                    \
   do                                                                          \
     {                                                                         \
-      struct timespec time_to_wait;                                           \
-      clock_gettime (CLOCK_MONOTONIC, &time_to_wait);                         \
-      time_to_wait.tv_nsec += 100000;                                         \
-      if (time_to_wait.tv_nsec > 1000000000)                                  \
-        {                                                                     \
-          time_to_wait.tv_nsec -= 1000000000;                                 \
-          time_to_wait.tv_sec += 1;                                           \
-        }                                                                     \
-      POCL_TIMEDWAIT_COND (cond_var, mutex, time_to_wait);                    \
+      POCL_TIMEDWAIT_COND (cond_var, mutex, 10);                              \
     }                                                                         \
   while (0)
 #else
@@ -108,7 +109,7 @@
 #endif
 
 #ifdef __linux__
-#define ALIGN_CACHE(x) x __attribute__ ((aligned (HOST_CPU_CACHELINE_SIZE)))
+#define ALIGN_CACHE(x) POCL_ALIGNAS(HOST_CPU_CACHELINE_SIZE) x
 #else
 #define ALIGN_CACHE(x) x
 #endif
@@ -132,12 +133,12 @@
       (__OBJ__)->magic_2 = POCL_MAGIC_2;
 #define UNSET_VALIDITY_MARKERS(__OBJ__)                                       \
       (__OBJ__)->magic_1 = 0;                                                 \
-      (__OBJ__)->magic_2 = 0;
+      (__OBJ__)->magic_2 = 0
 #else
 #define IS_CL_OBJECT_VALID(__OBJ__)   ((__OBJ__) != NULL)
-#define CHECK_VALIDITY_MARKERS(__OBJ__)
-#define SET_VALIDITY_MARKERS(__OBJ__)
-#define UNSET_VALIDITY_MARKERS(__OBJ__)
+#define CHECK_VALIDITY_MARKERS(__OBJ__) do {} while(0)
+#define SET_VALIDITY_MARKERS(__OBJ__) do {} while(0)
+#define UNSET_VALIDITY_MARKERS(__OBJ__) do {} while(0)
 #endif
 
 #define POCL_LOCK_OBJ(__OBJ__)                                                \
@@ -265,7 +266,7 @@ extern pocl_obj_id_t last_object_id;
 #  define POsym(name)
 #  define POsymAlways(name)
 
-#elif defined(_WIN32)
+#elif defined(_WIN32) && !defined(__MINGW32__)
 /* Visual Studio does not support this magic either */
 #  define POname(name) name
 #  define POdeclsym(name)
@@ -374,8 +375,7 @@ typedef struct pocl_argument_info {
 
 /* Struct for storing information of a cl_mem that should
    be migrated to the device before executing a kernel. */
-typedef struct _pocl_buffer_migration_info
-  pocl_buffer_migration_info;
+/* typedef is in pocl.h */
 struct _pocl_buffer_migration_info
 {
   /* The buffer to migrate (can be a sub-buffer). */
@@ -517,6 +517,17 @@ struct pocl_device_ops {
    * Called after uninit; the first initialization is done by 'init'. May be
    * NULL */
   cl_int (*reinit) (unsigned j, cl_device_id device, const char *parameters);
+
+  /**
+   * Initialize discovery mechanism in the driver to dynamically find new
+   * devices
+   * \param add_discovered_device callback in runtime to init found devices
+   * \param pocl_dev_type_idx index for the device type in runtime's device
+   *                          handle.
+   */
+  cl_int (*init_discovery) (cl_int (*add_discovered_device) (const char *,
+                                                             unsigned),
+                            unsigned pocl_dev_type_idx);
 
   /****** Memory management APIs. */
 
@@ -761,8 +772,20 @@ struct pocl_device_ops {
   /** Optional: If the driver uses the default build_poclbinary implementation
    * from common_driver.c, that implementation calls this to compile a
    * "dynamic WG size" kernel. */
-  void (*compile_kernel) (_cl_command_node *cmd, cl_kernel kernel,
-                          cl_device_id device, int specialize);
+  int (*compile_kernel) (_cl_command_node *cmd,
+                         cl_kernel kernel,
+                         cl_device_id device,
+                         int specialize);
+
+  /** Optional: If the target can utilize the basic Clang-driven steps for
+   * other compilation steps, but the final linkage step, this function can be
+   * used to define them.
+   *
+   * \param final_binary The target filename for the finalized binary.
+   * \param wg_func_obj The binary for the generated work-group function.
+   * \return Non-zero on error.
+   */
+  int (*finalize_binary) (const char *final_binary, const char *wg_func_obj);
 
   /** Optional: The driver should free the content of "program->data" here,
    * if it fills it. */
@@ -794,7 +817,7 @@ struct pocl_device_ops {
    * Note: the attributes have been already validated by runtime at this point
    */
   int (*supports_dbk) (cl_device_id device,
-                       BuiltinKernelId kernel_id,
+                       cl_dbk_id_exp kernel_id,
                        const void *kernel_attributes);
 
   /** Optional: If the driver needs to use hardware resources
@@ -916,12 +939,22 @@ struct pocl_device_ops {
   /**
    * The device can override this function to perform driver-specific
    * optimizations to the local size dimensions, whenever the decision
-   * is left to the runtime. */
-  void (*compute_local_size) (cl_device_id dev, cl_kernel kernel,
+   * is left to the runtime.
+   *
+   * @param max_group_size The maximum total size of the WG; either
+   *        device->max_work_group_size, or if present:
+   *        kernel->meta->max_workgroup_size[device_i] (this can be smaller)
+   * */
+  void (*compute_local_size) (cl_device_id dev,
+                              cl_kernel kernel,
                               unsigned device_i,
-                              size_t global_x, size_t global_y,
-                              size_t global_z, size_t *local_x,
-                              size_t *local_y, size_t *local_z);
+                              size_t max_group_size,
+                              size_t global_x,
+                              size_t global_y,
+                              size_t global_z,
+                              size_t *local_x,
+                              size_t *local_y,
+                              size_t *local_z);
 
   /* verifies that the device can run the requested WG sizes/offsets.
    * better to do this at enqueueNDRange time, than handling
@@ -975,11 +1008,9 @@ struct pocl_device_ops {
   cl_int (*free_command_buffer) (cl_device_id device,
                                  cl_command_buffer_khr command_buffer);
 
-  cl_int (*run_command_buffer) (void *data, cl_command_buffer_khr cmd);
 };
 
 typedef struct pocl_global_mem_t {
-  pocl_lock_t pocl_lock;
   cl_ulong max_ever_allocated;
   cl_ulong currently_allocated;
   cl_ulong total_alloc_limit;
@@ -1007,7 +1038,7 @@ struct _cl_device_id {
 
   cl_uint max_work_item_dimensions;
   /* when enabled, Workgroup LLVM pass will replace all printf() calls
-   * with calls to __printf_alloc and recursively change functions to
+   * with calls to pocl_printf_alloc_stub and recursively change functions to
    * add printf buffer arguments from pocl_context.
    * Currently the pthread/basic devices require this; other devices
    * implement printf their own way. */
@@ -1082,11 +1113,19 @@ struct _cl_device_id {
      we need to generate work-item loops to execute all the work-items
      in the WG. For SPMD machines, the hardware spawns the WIs. */
   cl_bool spmd;
-  /* The device uses an HSA-like kernel ABI with a single argument buffer as
-     an input. */
+
+  /**
+   * The device uses an HSA-like kernel ABI with a single argument buffer as
+   * an input.
+   */
   cl_bool arg_buffer_launcher;
-  /* The device uses a GRID launcher */
+
+  /**
+   * The device uses a grid launcher which iterates through the whole
+   * index space.
+   */
   cl_bool grid_launcher;
+
   /* The Workgroup pass creates launcher functions and replaces work-item
      placeholder global variables (e.g. _local_size_, _global_offset_ etc) with
      loads from the context struct passed as a kernel argument. This flag
@@ -1095,14 +1134,24 @@ struct _cl_device_id {
   /* The program scope variable pass takes program-scope variables and replaces
      them by references into a buffer, and creates an initializer kernel. */
   cl_bool run_program_scope_variables_pass;
+  /* Some architectures (x86) trap when encountering undefined behavior (UB)
+   * of div/rem, and have no way to disable this behavior. ARM has optional
+   * trapping, and RISC-V has mandatory non-trapping. OpenCL explicitly
+   * forbids raising exceptions on division for any values that trigger UB.
+   * This pass adds checks of input operands to div/rem so that UB is
+   * never triggered. */
+  cl_bool run_sanitize_divrem_pass;
 
   /* If CL_TRUE, pocl_llvm_build_program will ignore pocl's OpenCL headers
    * that perform built-in renames during OpenCL C build and relies on
    * Clang's OpenCL header augmented with extra declarations in
    * _clang_opencl.h. For most drivers, this should default to CL_FALSE. */
   cl_bool use_only_clang_opencl_headers;
+  /* device supports command buffer execution natively, meaning pocl does
+   * not need to split the command buffer into individual commands in the
+   * clEnqueueCommandBuffer time. */
+  cl_bool native_command_buffers;
   cl_device_exec_capabilities execution_capabilities;
-  cl_command_queue_properties queue_properties;
   cl_platform_id platform;
   cl_uint max_sub_devices;
   size_t num_partition_properties;
@@ -1137,6 +1186,7 @@ struct _cl_device_id {
   const char* llvm_cpu; /* the llvm CPU variant to use */
   const char *llvm_abi; /* the ABI to use */
   const char* llvm_fp_contract_mode; /* the floating point contract mde to use */
+  /* function to replace intrinsic at linking stage */
   llvm_intrin_replace_fn llvm_intrin_replace;
 
   /* A running number (starting from zero) across all the device instances.
@@ -1164,6 +1214,16 @@ struct _cl_device_id {
      runtime/driver allocate the local space. */
   int device_alloca_locals;
 
+  /* Optional property. If the device uses stack for work-item context data and
+   * has limited stack size, this property can be used to guide the work-group
+   * size computation selection to take the stack size in account. It should
+   * be set to the maximum number of bytes that can be stored on the stack.
+   *
+   * If the property is zero, the work-group size computation is only limited
+   * by device's max_work_group_size property, and PoCL assumes the device's
+   * compiler can always handle the work-item context data correctly. */
+  size_t work_group_stack_size;
+
   /* If > 0, specialized versions of the work-group functions are generated
      which assume each grid dimension is of at most the given width. This
      assumption can be then taken in account in IR optimization and codegen
@@ -1178,7 +1238,6 @@ struct _cl_device_id {
      The flags will be added after the following command line:
      clang -o final.bin input.obj [flags]
   */
-
   const char **final_linkage_flags;
 
   /* Auxiliary functions required by the device binary which should
@@ -1248,8 +1307,12 @@ struct _cl_device_id {
   /* Device operations, shared among devices of the same type */
   struct pocl_device_ops *ops;
 
-  /* cl_khr_il_program / CL_DEVICE_IL_VERSION, this only includes SPIR-V */
+  /* cl_khr_il_program / CL_DEVICE_IL_VERSION, this only includes SPIR-V
+   * NOTE: this must be kept ordered from highest to lowest version */
   const char *supported_spir_v_versions;
+  /* list of supported SPIRV extensions in the form:
+   * +SPV_KHR_linkonce_odr,+SPV_KHR_shader_clock,... */
+  const char *supported_spirv_extensions;
 
   /* OpenCL 3.0 properties */
 
@@ -1300,6 +1363,12 @@ struct _cl_device_id {
 
   /* cl_khr_pci_bus_info */
   cl_device_pci_bus_info_khr pci_bus_info;
+
+  /* command buffer related properties */
+  cl_mutable_dispatch_fields_khr cmdbuf_mutable_dispatch_capabilities;
+  cl_command_queue_properties cmdbuf_supported_properties;
+  cl_command_queue_properties cmdbuf_required_properties;
+  cl_device_command_buffer_capabilities_khr cmdbuf_capabilities;
 
   struct _cl_device_id *next;
 };
@@ -1456,6 +1525,9 @@ struct _cl_context {
    * context. */
   cl_uint mem_base_addr_align;
 
+  /* True if none of devices support cl_ext_buffer_device_address */
+  cl_bool no_devices_support_bda;
+
 #ifdef ENABLE_LLVM
   void *llvm_context_data;
 #endif
@@ -1510,35 +1582,42 @@ struct _cl_command_queue {
 
 struct _cl_command_buffer_khr
 {
-  POCL_ICD_OBJECT;
+  POCL_ICD_OBJECT
   POCL_OBJECT;
-  POCL_FAST_LOCK_T mutex;
+  pocl_lock_t mutex;
 
-  /* Queues that this command buffer was created for */
-  cl_uint num_queues;
+  /** Queues that this command buffer was created for */
   cl_command_queue *queues;
+  cl_uint num_queues;
 
-  /* List of flags that this command buffer was created with */
+  /** Helper flag indicating whether the queues of this command buffer belong
+   * to different devices */
+  cl_int is_multi_device;
+
+  /** List of flags that this command buffer was created with */
   cl_uint num_properties;
   cl_command_buffer_properties_khr *properties;
 
-  /* recording / ready / pending (executing) / invalid */
+  /** recording / ready / pending (executing) / invalid */
   cl_command_buffer_state_khr state;
-  /* Number of currently in-flight instances of this command buffer */
+  /** Number of currently in-flight instances of this command buffer */
   cl_uint pending;
 
-  /* Number of currently allocated sync points in this command buffer.
+  /** Number of currently allocated sync points in this command buffer.
    * Used for generating the next sync point id and for validating sync point
    * wait lists when recording commands. */
   cl_uint num_syncpoints;
 
   _cl_command_node *cmds;
-};
+  cl_bool is_mutable;
+  cl_bool assert_no_more_wgs;
+  /* device-specific data */
+  void **data;
 
-struct _cl_mutable_command_khr
-{
-  /* Unused in cl_khr_command_buffer but required in public API and used by
-   * follow-up extensions. */
+  /** List of mem objects that have to be migrated before the buffer can be
+   * safely run. Does not account for migrations that need to happen between
+   * commands in the same buffer. */
+  pocl_buffer_migration_info *migr_infos;
 };
 
 #define POCL_ON_SUB_MISALIGN(mem, que, operation)                             \
@@ -1744,9 +1823,9 @@ struct _cl_mem {
 
   /* Tensor Properties */
   cl_uint tensor_rank;
-  cl_tensor_shape tensor_shape[CL_MEM_MAX_TENSOR_RANK];
-  cl_tensor_datatype tensor_dtype;
-  cl_tensor_layout_type tensor_layout_type;
+  cl_tensor_shape_exp tensor_shape[CL_MEM_MAX_TENSOR_RANK_EXP];
+  cl_tensor_datatype_exp tensor_dtype;
+  cl_tensor_layout_type_exp tensor_layout_type;
   void *tensor_layout;
   // properties
   char is_tensor;
@@ -1802,7 +1881,7 @@ typedef struct pocl_kernel_metadata_s
   /* per-device array of hashes */
   pocl_kernel_hash_t *build_hash;
 
-  /* enum BuiltinKernelId */
+  /* enum cl_dbk_id_exp */
   unsigned builtin_kernel_id;
   /* only for defined builtin kernels */
   void *builtin_kernel_attrs;
@@ -1852,7 +1931,7 @@ struct _cl_program {
   char **builtin_kernel_names;
   char *concated_builtin_names;
   // relevant only for DefinedBuiltinKernels:
-  BuiltinKernelId *builtin_kernel_ids;
+  cl_dbk_id_exp *builtin_kernel_ids;
   void **builtin_kernel_attributes;
 
   /* Poclcc binary format.  */

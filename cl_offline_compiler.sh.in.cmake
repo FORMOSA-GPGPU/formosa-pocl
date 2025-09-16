@@ -95,7 +95,7 @@ fi
 CL_IS_30=false
 CL_FAST_MATH=false
 CL_UNSAFE_MATH=false
-BUILD_OPTIONS=""
+BUILD_OPTIONS="-cl-opt-disable"
 CL_STD="-cl-std=CL1.2"
 
 for i in "$@"; do
@@ -219,12 +219,6 @@ if [ -e "${CL_DEV_INFO}" ]; then
   fi
   BUILD_OPTIONS="$BUILD_OPTIONS -D__OPENCL_C_VERSION__=${DEV_C_VER}"
 
-  if [ "$DEV_C_VER" -ge "200" ]; then
-    SPIRV_ENV="--spirv-target-env=CL2.0"
-  else
-    SPIRV_ENV="--spirv-target-env=CL1.2"
-  fi
-
   for EXT in $CL_DEVICE_EXTENSIONS ; do
     CL_EXT_DEFS="${CL_EXT_DEFS} -D${EXT}"
     CL_EXTS="${CL_EXTS},+${EXT}"
@@ -253,7 +247,13 @@ fi
 
 SOURCE_BASE=$(basename ${SOURCE})
 TEMP_BC_FILE=$(mktemp --tmpdir ${SOURCE_BASE}.XXXXXX.bc)
-TEMP_SPV_FILE=$(mktemp --tmpdir ${SOURCE_BASE}.XXXXXX.spv)
+TEMP_SPV_FINAL_FILE=$(mktemp --tmpdir ${SOURCE_BASE}.final.XXXXXX.spv)
+
+function cleanup {
+  rm -f "${TEMP_BC_FILE}" "${TEMP_SPV_FINAL_FILE}"
+}
+
+trap cleanup EXIT
 
 if [ "$DEBUG" = "true" ]; then
   echo "SOURCE: ${SOURCE}"
@@ -261,26 +261,20 @@ if [ "$DEBUG" = "true" ]; then
   echo "OUTPUT: ${OUTPUT}"
 fi
 
-if [ "$CL_OFFLINE_COMPILER_DISABLE_OPT" = "1" ]; then
-  BUILD_OPTIONS="${BUILD_OPTIONS} -cl-opt-disable"
-fi
+CLANG_OPTIONS="--target=${TARGET} -x cl ${CL_STD} ${BUILD_OPTIONS} -o ${TEMP_BC_FILE} -emit-llvm -c ${SOURCE}"
 
-ALL_OPTIONS="--target=${TARGET} -x cl ${CL_STD} ${BUILD_OPTIONS} -o ${TEMP_BC_FILE} -emit-llvm -c ${SOURCE}"
-
-LLVM_SPIRV_OPTIONS="--spirv-gen-kernel-arg-name-md --spirv-max-version=1.2 -o ${TEMP_SPV_FILE} ${TEMP_BC_FILE}"
+LLVM_SPIRV_OPTIONS="--spirv-gen-kernel-arg-name-md --spirv-max-version=1.2 -o ${TEMP_SPV_FINAL_FILE} ${TEMP_BC_FILE}"
 
 if [ "$DEBUG" = "true" ]; then
-  echo "Running @CLANG@ ${ALL_OPTIONS}"
+  echo "Running @CLANG@ ${CLANG_OPTIONS}"
 fi
-@CLANG@ ${ALL_OPTIONS} || exit 1
+@CLANG@ ${CLANG_OPTIONS} || exit 1
 
 if [ "$DEBUG" = "true" ]; then
   echo "Running @LLVM_SPIRV@ ${LLVM_SPIRV_OPTIONS}"
 fi
 @LLVM_SPIRV@ ${LLVM_SPIRV_OPTIONS} || exit 1
 
-mv -n ${TEMP_SPV_FILE} ${OUTPUT} || echo "output already exists, skipping write"
-
-rm -f ${TEMP_BC_FILE} ${TEMP_SPV_FILE}
+mv -n "${TEMP_SPV_FINAL_FILE}" "${OUTPUT}" || echo "output already exists, skipping write"
 
 exit 0

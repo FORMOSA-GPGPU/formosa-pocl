@@ -55,6 +55,12 @@ main (int _argc, char **_argv)
 
   ext.clCreateCommandBufferKHR = clGetExtensionFunctionAddressForPlatform (
       platform, "clCreateCommandBufferKHR");
+  if (ext.clCreateCommandBufferKHR == NULL)
+    {
+      printf ("Command buffers are not supported, skipping test\n");
+      return 77;
+    }
+
   ext.clCommandCopyBufferKHR = clGetExtensionFunctionAddressForPlatform (
       platform, "clCommandCopyBufferKHR");
   ext.clCommandCopyBufferRectKHR = clGetExtensionFunctionAddressForPlatform (
@@ -118,8 +124,18 @@ main (int _argc, char **_argv)
   CHECK_CL_ERROR (
       clSetKernelArg (kernel, 2, sizeof (buffer_res), &buffer_res));
 
-  cl_command_queue command_queue = clCreateCommandQueue (
-      context, device, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, &error);
+  cl_command_queue_properties props = 0;
+  cl_command_queue_properties supported = 0;
+  CHECK_CL_ERROR (clGetDeviceInfo (
+    device, CL_DEVICE_COMMAND_BUFFER_SUPPORTED_QUEUE_PROPERTIES_KHR,
+    sizeof (supported), &supported, NULL));
+  if (supported & CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE)
+    props = CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE;
+  else
+    props = 0;
+
+  cl_command_queue command_queue
+    = clCreateCommandQueue (context, device, props, &error);
   CHECK_CL_ERROR (error);
 
   cl_command_buffer_khr command_buffer
@@ -141,7 +157,7 @@ main (int _argc, char **_argv)
     {
       cl_sync_point_khr copy_sync_points[2];
       CHECK_CL_ERROR (ext.clCommandCopyBufferKHR (
-          command_buffer, NULL, buffer_src1, buffer_tile1,
+          command_buffer, NULL, NULL, buffer_src1, buffer_tile1,
           tile_index * tile_size, 0, tile_size, tile_sync_point ? 1 : 0,
           tile_sync_point ? &tile_sync_point : NULL, &copy_sync_points[0],
           NULL));
@@ -151,7 +167,7 @@ main (int _argc, char **_argv)
       size_t dst_origin[3] = { 0, 0, 0 };
       size_t tile_region[3] = { 8 * sizeof (cl_int), 8, 1 };
       CHECK_CL_ERROR (ext.clCommandCopyBufferRectKHR (
-          command_buffer, NULL, buffer_src2, buffer_tile2, src_origin,
+          command_buffer, NULL, NULL, buffer_src2, buffer_tile2, src_origin,
           dst_origin, tile_region, tile_region[0], 0, tile_region[0], 0,
           tile_sync_point ? 1 : 0, tile_sync_point ? &tile_sync_point : NULL,
           &copy_sync_points[1], NULL));
@@ -163,24 +179,24 @@ main (int _argc, char **_argv)
 
       cl_sync_point_khr res_copy_sync_point;
       CHECK_CL_ERROR (ext.clCommandCopyBufferKHR (
-          command_buffer, NULL, buffer_res, buffer_dst, 0,
+          command_buffer, NULL, NULL, buffer_res, buffer_dst, 0,
           tile_index * tile_size, tile_size, 1, &nd_sync_point,
           &res_copy_sync_point, NULL));
 
       char zero = 0;
       cl_sync_point_khr fill_sync_points[2];
       CHECK_CL_ERROR (ext.clCommandFillBufferKHR (
-          command_buffer, NULL, buffer_tile1, &zero, sizeof (zero), 0,
+          command_buffer, NULL, NULL, buffer_tile1, &zero, sizeof (zero), 0,
           tile_size, 1, &nd_sync_point, &fill_sync_points[0], NULL));
       CHECK_CL_ERROR (ext.clCommandFillBufferKHR (
-          command_buffer, NULL, buffer_tile2, &zero, sizeof (zero), 0,
+          command_buffer, NULL, NULL, buffer_tile2, &zero, sizeof (zero), 0,
           tile_size, 1, &nd_sync_point, &fill_sync_points[1], NULL));
 
       cl_sync_point_khr barrier_deps[4]
           = { nd_sync_point, res_copy_sync_point, fill_sync_points[0],
               fill_sync_points[1] };
       CHECK_CL_ERROR (ext.clCommandBarrierWithWaitListKHR (
-          command_buffer, NULL, 4, barrier_deps, &tile_sync_point, NULL));
+          command_buffer, NULL, NULL, 4, barrier_deps, &tile_sync_point, NULL));
     }
 
   CHECK_CL_ERROR (ext.clFinalizeCommandBufferKHR (command_buffer));
@@ -191,8 +207,8 @@ main (int _argc, char **_argv)
       sizeof (cl_command_buffer_state_khr), &cmdbuf_state, NULL));
   TEST_ASSERT (cmdbuf_state == CL_COMMAND_BUFFER_STATE_EXECUTABLE_KHR);
 
-  cl_int src1[frame_elements];
-  cl_int src2[frame_elements];
+  cl_int *src1 = malloc (frame_elements * sizeof (cl_int));
+  cl_int *src2 = malloc (frame_elements * sizeof (cl_int));
   for (size_t frame_index = 0; frame_index < frame_count; frame_index++)
     {
       for (size_t i = 0; i < frame_elements; ++i)
@@ -218,9 +234,9 @@ main (int _argc, char **_argv)
           sizeof (cl_int) * frame_elements, 1, &command_buf_event, NULL, &err);
       CHECK_OPENCL_ERROR_IN ("clEnqueueMapBuffer");
 
-      for (size_t i = 0; i < frame_elements; ++i)
+      for (cl_int i = 0; i < (int)frame_elements; ++i)
         {
-          TEST_ASSERT (buf_map[i] == (2 * (i + frame_index) + 1));
+          TEST_ASSERT (buf_map[i] == (2 * (i + (int)frame_index) + 1));
         }
       CHECK_CL_ERROR (clEnqueueUnmapMemObject (command_queue, buffer_dst,
                                                buf_map, 0, NULL, NULL));
@@ -248,6 +264,8 @@ main (int _argc, char **_argv)
 
   CHECK_CL_ERROR (clUnloadPlatformCompiler (platform));
 
+  free (src1);
+  free (src2);
   printf ("OK\n");
   return EXIT_SUCCESS;
 #else

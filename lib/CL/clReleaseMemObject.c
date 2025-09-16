@@ -31,10 +31,6 @@
 #include "pocl_rdma.h"
 #endif
 
-extern unsigned long buffer_c;
-
-extern unsigned long image_c;
-
 static void free_sub_buffer_data (cl_mem memobj);
 
 CL_API_ENTRY cl_int CL_API_CALL
@@ -99,8 +95,13 @@ POname(clReleaseMemObject)(cl_mem memobj) CL_API_SUFFIX__VERSION_1_0
         {
           /* Free the backing buffer for the Image1D object. */
           cl_mem b = memobj->buffer;
+          cl_context c = b->context;
           assert (b);
+          /* there is a retain on both the parent and the context */
           err = POname (clReleaseMemObject) (b);
+          assert (err == CL_SUCCESS);
+          POCL_MEM_FREE (memobj->device_supports_this_image);
+          err = POname (clReleaseContext) (c);
           POCL_MEM_FREE (memobj);
           return err;
         }
@@ -157,7 +158,7 @@ POname(clReleaseMemObject)(cl_mem memobj) CL_API_SUFFIX__VERSION_1_0
                 memobj->mem_host_ptr = NULL;
               else
                 {
-                  POCL_MEM_FREE (memobj->mem_host_ptr);
+                  pocl_aligned_free (memobj->mem_host_ptr);
                 }
             }
         }

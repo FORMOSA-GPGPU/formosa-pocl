@@ -116,8 +116,8 @@ static bool addInnerLoopBarrier(llvm::Loop &L,
 
     /* Add a barrier both to the beginning of the entry and to the very end
        to nicely isolate the parallel region. */
-    Barrier::create(brexit->getTerminator());
-    Barrier::create(loopEntry->getFirstNonPHI());
+    Barrier::createAtEnd(brexit);
+    Barrier::createAtStart(loopEntry);
 
 #ifdef DEBUG_ILOOP_BARRIERS
     std::cerr << "### added an inner-loop barrier to the loop" << std::endl << std::endl;
@@ -187,7 +187,7 @@ ImplicitLoopBarriers::run(llvm::Loop &L, llvm::LoopAnalysisManager &AM,
     assert(0 && "missing cached result WIH for ImplicitLoopBarriers");
   }
 
-  if (!pocl_get_bool_option("POCL_FORCE_PARALLEL_OUTER_LOOP", 0) &&
+  if (!pocl_get_bool_option("POCL_FORCE_PARALLEL_OUTER_LOOP", 1) &&
       !hasWorkgroupBarriers(*K)) {
 #ifdef DEBUG_ILOOP_BARRIERS
     std::cerr

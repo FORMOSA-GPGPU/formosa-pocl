@@ -72,8 +72,6 @@ IGNORE_COMPILER_WARNING("-Wunused-parameter")
 #include "pocl_llvm_api.h"
 #include "pocl_runtime_config.h"
 
-#include <unistd.h>
-
 using namespace llvm;
 
 #include <string>
@@ -207,7 +205,7 @@ const struct kernellib_features {
 } kernellib_feature_map[] = {
 // order the entries s.t. if a cpu matches multiple entries, the "best" match
 // comes last
-#if defined(__i386__)
+#if defined(__i386__) || defined(_M_IX86)
     "i386",
     "i386",
     {NULL},
@@ -222,7 +220,8 @@ const struct kernellib_features {
     "pentium3",
     {"sse", NULL},
 #endif
-#if defined(__i386__) || defined(__x86_64__)
+#if defined(__i386__) || defined(_M_IX86) || \
+    defined(__x86_64__) || defined(_M_X64)
     "sse2",
     "x86-64",
     {"sse2", NULL},
@@ -257,7 +256,8 @@ const struct kernellib_features {
 const char *pocl_get_distro_kernellib_variant() {
   StringMap<bool> Features;
 
-#if defined(__i386__) || defined(__x86_64__)
+#if defined(__i386__) || defined(_M_IX86) || \
+    defined(__x86_64__) || defined(_M_X64)
 
 #if LLVM_MAJOR < 19
   if (!llvm::sys::getHostCPUFeatures(Features)) {
@@ -301,7 +301,9 @@ const char *pocl_get_distro_kernellib_variant() {
 const char *pocl_get_distro_cpu_name(const char *kernellib_variant) {
   StringMap<bool> Features;
 
-#if defined(__i386__) || defined(__x86_64__)
+#if defined(__i386__) || defined(_M_IX86) || \
+    defined(__x86_64__) || defined(_M_X64)
+
 #if LLVM_MAJOR < 19
   if (!llvm::sys::getHostCPUFeatures(Features)) {
     POCL_MSG_WARN("LLVM can't get host CPU flags!\n");
@@ -362,14 +364,26 @@ void cpu_setup_vector_widths(cl_device_id dev) {
   Features = llvm::sys::getHostCPUFeatures();
 #endif
 
-  unsigned lane_width = 1;
+  // set the minimum vec size to word size
+#if HOST_DEVICE_ADDRESS_BITS == 64
+  unsigned lane_width = 8;
+#else
+  unsigned lane_width = 4;
+#endif
   if (Res) {
-    if ((Features["sse"]) || (Features["neon"]))
+#if defined(__arm__) || defined(__aarch64__)
+    if (Features["sve"] || Features["sve2"] || Features["neon"])
+      lane_width = 16;
+#endif
+#if defined(__i386__) || defined(_M_IX86) || \
+    defined(__x86_64__) || defined(_M_X64)
+    if (Features["sse"])
       lane_width = 16;
     if (Features["avx"])
       lane_width = 32;
     if (Features["avx512f"])
       lane_width = 64;
+#endif
   }
   dev->native_vector_width_in_bits = lane_width * 8;
 
@@ -398,9 +412,14 @@ void cpu_setup_vector_widths(cl_device_id dev) {
   }
 }
 
-int pocl_llvm_remove_file_on_signal(const char *file) {
+int pocl_llvm_remove_file_on_signal_create(const char *file) {
   return llvm::sys::RemoveFileOnSignal(
             StringRef(file)) ? 0 : -1;
+}
+
+int pocl_llvm_remove_file_on_signal_destroy(const char *file) {
+  llvm::sys::RunInterruptHandlers();
+  return 0;
 }
 
 /*
@@ -518,12 +537,34 @@ void InitializeLLVM() {
         O->addOccurrence(1, StringRef("pass-remarks"),
                          StringRef("loop-vectorize"), false);
       }
+
+      // Force the loop vectorizer to use the same width for all loops.
+      if (int VecWidth =
+              pocl_get_int_option("POCL_VECTORIZER_FORCE_VECTOR_WIDTH", 0)) {
+        O = opts["force-vector-width"];
+        assert(O && "could not find LLVM option 'force-vector-width'");
+        O->addOccurrence(1, StringRef("force-vector-width"),
+                         StringRef(std::to_string(VecWidth)), false);
+      }
     }
     if (pocl_get_bool_option("POCL_DEBUG_LLVM_PASSES", 0) == 1) {
       O = opts["debug"];
       assert(O && "could not find LLVM option 'debug'");
       O->addOccurrence(1, StringRef("debug"), StringRef("true"), false);
+#if 0
+      O = opts["debug-only"];
+      assert(O && "could not find LLVM option 'debug'");
+      O->addOccurrence(1, StringRef("debug-only"), StringRef("inline"), false);
+#endif
     }
+    O = opts["inline-threshold"];
+    assert(O && "inline-threshold not found");
+    O->addOccurrence(1, StringRef("inline-threshold"), StringRef("1200"));
+#if 0
+    O = opts["inline-enable-cost-benefit-analysis"];
+    assert(O && "inline-enable-cost-benefit-analysis not found");
+    O->addOccurrence(1, StringRef("inline-enable-cost-benefit-analysis"), StringRef("true"));
+#endif
   }
 }
 
@@ -593,31 +634,35 @@ void pocl_llvm_release_context(cl_context ctx) {
   if (data == NULL)
     return;
 
-  if (LLVMUseGlobalContext) {
-    --GlobalLLVMContextRefcount;
-    if (GlobalLLVMContextRefcount > 0)
+  {
+    PoclCompilerMutexGuard LockGuard(&data->Lock);
+    if (data->number_of_IRs > 0) {
+      POCL_MSG_ERR("still have IR references - can't release LLVM context !\n");
       return;
+    }
+
+    if (LLVMUseGlobalContext) {
+      --GlobalLLVMContextRefcount;
+      if (GlobalLLVMContextRefcount > 0)
+        return;
+    }
+
+    delete data->poclDiagPrinter;
+    delete data->poclDiagStream;
+    delete data->poclDiagString;
+
+    assert(data->kernelLibraryMap);
+    // void cleanKernelLibrary(cl_context ctx) {
+    for (auto i = data->kernelLibraryMap->begin(),
+              e = data->kernelLibraryMap->end();
+         i != e; ++i) {
+      delete (llvm::Module *)i->second;
+    }
+    data->kernelLibraryMap->clear();
+    delete data->kernelLibraryMap;
   }
 
-  if (data->number_of_IRs > 0) {
-    POCL_ABORT("still have references to IRs - can't release LLVM context !\n");
-  }
-
-  delete data->poclDiagPrinter;
-  delete data->poclDiagStream;
-  delete data->poclDiagString;
-
-  assert(data->kernelLibraryMap);
-  // void cleanKernelLibrary(cl_context ctx) {
-  for (auto i = data->kernelLibraryMap->begin(),
-            e = data->kernelLibraryMap->end();
-       i != e; ++i) {
-    delete (llvm::Module *)i->second;
-  }
-  data->kernelLibraryMap->clear();
-  delete data->kernelLibraryMap;
   POCL_DESTROY_LOCK(data->Lock);
-
   delete data->Context;
   delete data;
   ctx->llvm_context_data = nullptr;

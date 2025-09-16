@@ -38,6 +38,9 @@
 #  include "vccompat.hpp"
 #endif
 
+#include <thread>
+#include <chrono>
+
 #define WORK_ITEMS 1
 
 static char
@@ -120,9 +123,16 @@ main(void)
 
         std::cout << "OK" << std::endl;
 
-        /* Force exit of the process regardless of the running kernel thread
-           by replacing the process with a dummy process. */
+        std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+
+        // Force exit of the process regardless of the running kernel thread
+        // by replacing the process with a dummy process.
+#if __cplusplus >= 201103L && /* C++11 */                                      \
+    !defined(__APPLE__) && !(defined(__MINGW64__))
+        std::quick_exit(EXIT_SUCCESS);
+#else
         execlp("true", "true", NULL);
+#endif
     } 
     catch (cl::Error &err) {
          std::cerr
@@ -132,7 +142,9 @@ main(void)
              << err.err()
              << ")"
              << std::endl;
+         return EXIT_FAILURE;
     }
-
+    std::cerr << "UNREACHABLE. Perhaps there was an uncaught STL exception."
+              << std::endl;
     return EXIT_FAILURE;
 }

@@ -1,11 +1,14 @@
 ---
-name: Mac OS X test matrix
+name: Mac OS X / CPU tests
 
 permissions:
   contents: read
 
 on:
   push:
+    branches:
+      - 'main'
+      - 'release*'
   workflow_dispatch:
   pull_request:
     paths-ignore:
@@ -15,12 +18,17 @@ on:
       - 'CREDITS'
       - 'LICENSE'
       - 'README.*'
+      - 'tools/docker/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref || github.run_id }}
+  cancel-in-progress: true
 
 env:
   POCL_CACHE_DIR: "/tmp/GH_POCL_CACHE"
   CTEST_FLAGS: "--output-on-failure --test-output-size-failed 128000 --test-output-size-passed 128000"
   POCL_KERNEL_CACHE: "0"
-  POCL_MAX_WORK_GROUP_SIZE: "1024"
+  POCL_MAX_WORK_GROUP_SIZE: "2048"
   POCL_MEMORY_LIMIT: "2"
 
 jobs:
@@ -30,8 +38,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 16 is disabled because it fails with the new printf implementation
-        llvm: [15]
+        llvm: [17, 18]
         # basic = simplest pthread build
         # devel = with devel options
         # cts_spirv = cts with SPIR-V
@@ -41,9 +48,9 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - uses: conda-incubator/setup-miniconda@a4260408e20b96e80095f42ff7f1a15b27dd94ca
+      - uses: conda-incubator/setup-miniconda@505e6394dae86d6a5c7fbb6e3fb8938e3e863830
         with:
           miniforge-version: latest
           mamba-version: "*"
@@ -75,7 +82,7 @@ jobs:
           rm -rf ${{ github.workspace }}/build
           mkdir ${{ github.workspace }}/build
           if [ "${{ matrix.config }}" == "basic" ]; then
-            runCMake -DENABLE_ICD=1
+            runCMake -DENABLE_ICD=0
           elif [ "${{ matrix.config }}" == "devel" ]; then
             runCMake -DENABLE_ICD=0 -DENABLE_EXTRA_VALIDITY_CHECKS=1 -DENABLE_RELOCATION=0
           else
@@ -108,9 +115,9 @@ jobs:
           rm -rf ${{ env.POCL_CACHE_DIR }}
           mkdir ${{ env.POCL_CACHE_DIR }}
           if [ "${{ matrix.config }}" == "basic" ]; then
-            runCTest -L internal
+            runCTest -L cpu
           elif [ "${{ matrix.config }}" == "devel" ]; then
-            runCTest -L internal
+            runCTest -L cpu
           elif [ "${{ matrix.config }}" == "cts_spirv" ]; then
             runCTest -L conformance_suite_micro_spirv
           elif [ "${{ matrix.config }}" == "tier1" ]; then

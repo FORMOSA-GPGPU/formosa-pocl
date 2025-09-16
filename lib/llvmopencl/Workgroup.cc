@@ -3,7 +3,7 @@
 //
 // Copyright (c) 2011 Universidad Rey Juan Carlos
 //               2012-2022 Pekka Jääskeläinen / Parform Oy
-//               2023 Pekka Jääskeläinen / Intel Finland Oy
+//               2023-2025 Pekka Jääskeläinen / Intel Finland Oy
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -49,6 +49,7 @@ POP_COMPILER_DIAGS
 #include "Barrier.h"
 #include "BarrierTailReplication.h"
 #include "CanonicalizeBarriers.h"
+#include "DebugHelpers.h"
 #include "KernelCompilerUtils.h"
 #include "LLVMUtils.h"
 #include "ProgramScopeVariables.h"
@@ -56,13 +57,15 @@ POP_COMPILER_DIAGS
 #include "Workgroup.h"
 #include "WorkitemHandlerChooser.h"
 
+#include "pocl_file_util.h"
 #include "pocl_llvm_api.h"
 
 #include <iostream>
 #include <map>
 #include <sstream>
+#include <string>
 
-#if _MSC_VER
+#if _WIN32
 #  include "vccompat.hpp"
 #endif
 
@@ -84,14 +87,17 @@ enum PoclContextStructFields {
   PC_PRINTF_BUFFER_POSITION,
   PC_PRINTF_BUFFER_CAPACITY,
   PC_GLOBAL_VAR_BUFFER,
-  PC_WORK_DIM
+  PC_WORK_DIM,
+  PC_EXECUTION_FAILED
 };
 
 using FunctionVec = std::vector<llvm::Function *>;
 
+using PtrAndType = std::pair<llvm::Value *, llvm::Type *>;
+
 class WorkgroupImpl {
 public:
-  bool runOnModule(Module &M, FunctionVec &OldKernels);
+  bool runOnModule(Module &M, llvm::FunctionAnalysisManager &FAM);
 
 private:
   llvm::Function *createWrapper(llvm::Function *F,
@@ -104,7 +110,6 @@ private:
                                                    std::string KernName);
 
   void createDefaultWorkgroupLauncher(llvm::Function *F);
-  void createFastWorkgroupLauncher(llvm::Function *F);
 
   std::vector<llvm::Value *> globalHandlesToContextStructLoads(
       llvm::IRBuilder<> &Builder,
@@ -113,14 +118,22 @@ private:
   void addPlaceHolder(llvm::IRBuilder<> &Builder, llvm::Value *Value,
                       const std::string TypeStr);
 
-  void privatizeGlobals(llvm::Function *F, llvm::IRBuilder<> &Builder,
-                        const std::vector<std::string> &&GlobalHandleNames,
-                        std::vector<llvm::Value *> PrivateValues);
+  void privatizeGlobalLoads(llvm::Function *F, llvm::IRBuilder<> &Builder,
+                            const std::vector<std::string> &&GlobalHandleNames,
+                            std::vector<llvm::Value *> PrivateValues);
+
+  void privatizeGlobalStores(llvm::Function *F, llvm::IRBuilder<> &Builder,
+                             const std::vector<std::string> &&GlobalHandleNames,
+                             std::vector<PtrAndType> PrivatePointers);
 
   void privatizeContext(llvm::Function *F);
 
   llvm::Value *createLoadFromContext(llvm::IRBuilder<> &Builder,
-                                     int StructFieldIndex, int FieldIndex);
+                                     int StructFieldIndex, int FieldIndex,
+                                     std::string Name);
+
+  PtrAndType getPtrAndTypeForContextVar(IRBuilder<> &Builder,
+                                        int StructFieldIndex, int FieldIndex);
 
   void addGEPs(llvm::IRBuilder<> &Builder, int StructFieldIndex,
                const char *FormatStr);
@@ -137,7 +150,7 @@ private:
                                    LLVMValueRef ArgBufferPtr,
                                    uint64_t *ArgBufferOffsets,
                                    LLVMContextRef Ctx, LLVMValueRef F,
-                                   unsigned ParamIndex);
+                                   unsigned ParamIndex, std::string Name);
 
   llvm::Value *getRequiredSubgroupSize(llvm::Function &F);
 
@@ -183,7 +196,54 @@ private:
   unsigned long DeviceMaxWItemSizes[3];
 };
 
-bool WorkgroupImpl::runOnModule(Module &M, FunctionVec &OldKernels) {
+/// Convert address space casts through integer casts to proper address space
+/// cast instructions.
+///
+/// At least the HIP/CUDA frontend since LLVM 19 seems to produce AS casts
+/// between generic and global ASs through ptrtoint - inttoptr conversion chains
+/// when targeting SPIR-V. It confuses the alias analyzer and leads to lack of
+/// utilization of "restrict" pointer information. It should be fixed upstream,
+/// but while that happens, let's just peephole convert it.
+static bool cleanupAddressSpaceCasts(Function &F) {
+
+  bool Changed = false;
+  llvm::IRBuilder<> Builder(F.getContext());
+  for (auto &BB : F) {
+    for (BasicBlock::iterator BI = BB.begin(), BE = BB.end(); BI != BE;) {
+
+      // The casts look like this:
+      // %55 = ptrtoint ptr addrspace(1) %7 to i64
+      // %56 = inttoptr i64 %55 to ptr addrspace(4)
+
+      PtrToIntInst *PtrToInt = dyn_cast<PtrToIntInst>(&*BI);
+      if (PtrToInt != nullptr &&
+          (PtrToInt->getPointerAddressSpace() == SPIR_ADDRESS_SPACE_GLOBAL ||
+           PtrToInt->getPointerAddressSpace() == SPIR_ADDRESS_SPACE_GENERIC) &&
+          PtrToInt->hasOneUse()) {
+        IntToPtrInst *User =
+            dyn_cast<IntToPtrInst>(*PtrToInt->users().begin());
+        if (User == nullptr ||
+            (User->getAddressSpace() != SPIR_ADDRESS_SPACE_GLOBAL &&
+             User->getAddressSpace() != SPIR_ADDRESS_SPACE_GENERIC))
+          break;
+        Builder.SetInsertPoint(PtrToInt);
+        AddrSpaceCastInst *AddrSpaceCast =
+            cast<AddrSpaceCastInst>(Builder.CreatePointerBitCastOrAddrSpaceCast(
+                PtrToInt->getPointerOperand(), User->getType()));
+        User->replaceAllUsesWith(AddrSpaceCast);
+        User->eraseFromParent();
+        PtrToInt->eraseFromParent();
+        BI = AddrSpaceCast->getIterator();
+        BE = BB.end();
+        Changed = true;
+      }
+      ++BI;
+    }
+  }
+  return Changed;
+}
+
+bool WorkgroupImpl::runOnModule(Module &M, llvm::FunctionAnalysisManager &FAM) {
 
   this->M = &M;
   this->C = &M.getContext();
@@ -232,7 +292,8 @@ bool WorkgroupImpl::runOnModule(Module &M, FunctionVec &OldKernels) {
       PointerType::get(Int32T, DeviceGlobalASid), // PRINTF_BUFFER_POSITION
       Int32T,                                     // PRINTF_BUFFER_CAPACITY
       PointerType::get(Int8T, DeviceGlobalASid),  // GLOBAL_VAR_BUFFER
-      Int32T);                                    // WORK_DIM
+      Int32T,                                     // WORK_DIM
+      Int32T);                                    // EXECUTION_FAILED
 
   LauncherFuncT = FunctionType::get(
       Type::getVoidTy(*C),
@@ -249,8 +310,17 @@ bool WorkgroupImpl::runOnModule(Module &M, FunctionVec &OldKernels) {
     // linker's switch --wrap=symbol, where calls to the "symbol" are replaced
     // with "__wrap_symbol" at link time.  These functions may not be referenced
     // until final link and being deleted by LLVM optimizations before it.
-    if (!i->isDeclaration() && !i->getName().starts_with("__wrap_"))
+    // Also, if there's a main aux function, we want to keep it as it will be
+    // likely used in the kernel command functionality for the device.
+    if (!i->isDeclaration() && !i->getName().starts_with("__wrap_") &&
+        i->getName() != "main")
       i->setLinkage(Function::InternalLinkage);
+  }
+
+  for (Function &F : M.functions()) {
+    if (F.isDeclaration())
+      continue;
+    cleanupAddressSpaceCasts(F);
   }
 
   // Store the new and old kernel pairs in order to regenerate
@@ -262,9 +332,13 @@ bool WorkgroupImpl::runOnModule(Module &M, FunctionVec &OldKernels) {
   // extra printf arguments.
   FunctionMapping PrintfCache;
 
+  // TODO perhaps pass "-cl-opt-disable" build opt as bool module metadata
+  bool IsDebugEnabled = false;
   for (Module::iterator i = M.begin(), e = M.end(); i != e; ++i) {
     Function &OrigKernel = *i;
     if (!isKernelToProcess(OrigKernel)) continue;
+    if (OrigKernel.hasMetadata("dbg"))
+      IsDebugEnabled = true;
     Function *L = createWrapper(&OrigKernel, PrintfCache);
     KernelsMap[&OrigKernel] = L;
 
@@ -273,8 +347,6 @@ bool WorkgroupImpl::runOnModule(Module &M, FunctionVec &OldKernels) {
     if (DeviceUsingArgBufferLauncher) {
       Function *WGLauncher =
         createArgBufferWorkgroupLauncher(L, OrigKernel.getName().str());
-      L->addFnAttr(Attribute::NoInline);
-      L->removeFnAttr(Attribute::AlwaysInline);
 
       WGLauncher->addFnAttr(Attribute::AlwaysInline);
       WGLauncher->removeFnAttr(Attribute::OptimizeNone);
@@ -285,11 +357,6 @@ bool WorkgroupImpl::runOnModule(Module &M, FunctionVec &OldKernels) {
       // call/handle the single-WI kernel function directly.
     } else {
       createDefaultWorkgroupLauncher(L);
-#ifdef TCE_AVAILABLE
-      // This is used only by TCE anymore. TODO: Replace all with the
-      // ArgBuffer one.
-      createFastWorkgroupLauncher(L);
-#endif
     }
   }
 
@@ -305,7 +372,183 @@ bool WorkgroupImpl::runOnModule(Module &M, FunctionVec &OldKernels) {
     Function *NewKernel = i->second;
     // this should not happen
     assert(OldKernel != NewKernel);
-    OldKernels.push_back(OldKernel);
+    FAM.clear(*OldKernel, "parallel.bc");
+    OldKernel->eraseFromParent();
+  }
+
+  // remove all functions that call the old printf. They should be
+  // cloned with the new printf calls at this point, and they refer
+  // to global variables
+  Function *NewPrintfAlloc = M.getFunction("pocl_printf_alloc");
+  Function *OldPrintfAlloc = M.getFunction("pocl_printf_alloc_stub");
+
+  if (NewPrintfAlloc && OldPrintfAlloc) {
+    // add functions that call OldPrintfAlloc but are not used anywhere
+    // to PrintfCache; this can happen e.g. b/c of inlining
+    std::set<llvm::Function *> Removed;
+    for (auto U : OldPrintfAlloc->users()) {
+      if (Instruction *I = dyn_cast<Instruction>(U)) {
+        auto OldF = I->getParent()->getParent();
+        if (OldF == nullptr)
+          continue;
+        if (OldF->getNumUses() != 0)
+          continue;
+        if (PrintfCache.find(OldF) == PrintfCache.end()) {
+          PrintfCache.insert(std::make_pair(OldF, OldF));
+        }
+      }
+    }
+
+    // remove the old functions that were cloned
+    bool AtLeastOneRemoved;
+    do {
+      AtLeastOneRemoved = false;
+      for (auto [OldF, NewF] : PrintfCache) {
+        if (Removed.count(OldF))
+          continue;
+        if (OldF->getNumUses() == 0) {
+          FAM.clear(*OldF, "parallel.bc");
+          OldF->eraseFromParent();
+          Removed.insert(OldF);
+          AtLeastOneRemoved = true;
+        }
+      }
+    } while (AtLeastOneRemoved);
+
+    if (OldPrintfAlloc->getNumUses() == 0) {
+      OldPrintfAlloc->eraseFromParent();
+    } else {
+      // if we still have users, at least replace the body
+      // with ret nullptr. This allows us to erase
+      // the global variables
+
+      // drop all BBs
+      while (!OldPrintfAlloc->empty())
+        OldPrintfAlloc->back().eraseFromParent();
+
+      // create BB with "ret nullptr"
+      BasicBlock *BB =
+          BasicBlock::Create(M.getContext(), "entry", OldPrintfAlloc);
+      auto PtrTy = cast<PointerType>(OldPrintfAlloc->getReturnType());
+      ConstantPointerNull *NullPtr = ConstantPointerNull::get(PtrTy);
+
+      llvm::IRBuilder<> Builder(M.getContext());
+      Builder.SetInsertPoint(BB);
+      Builder.CreateRet(NullPtr);
+    }
+    // remove the global variables
+    GlobalVariable *GV;
+    GV = M.getGlobalVariable("_printf_buffer");
+    if (GV && GV->getNumUses() == 0)
+      GV->eraseFromParent();
+    GV = M.getGlobalVariable("_printf_buffer_position");
+    if (GV && GV->getNumUses() == 0)
+      GV->eraseFromParent();
+    GV = M.getGlobalVariable("_printf_buffer_capacity");
+    if (GV && GV->getNumUses() == 0)
+      GV->eraseFromParent();
+  }
+
+  // Remove all WI-related functions and global variables;
+  // all of these should be privatized now. Functions first because
+  // they still refer to the global variables
+  for (auto Name : WIFuncNameVec) {
+    Function *F = M.getFunction(Name);
+    if (F && F->getNumUses() == 0) {
+      FAM.clear(*F, "parallel.bc");
+      F->eraseFromParent();
+    }
+  }
+
+  for (auto Name : WorkgroupVariablesVector) {
+    GlobalVariable *GV = M.getGlobalVariable(Name);
+    if (GV && GV->getNumUses() == 0)
+      GV->eraseFromParent();
+  }
+
+  // remove the declaration of the pocl.barrier placeholder
+  if (auto *F = M.getFunction(BARRIER_FUNCTION_NAME)) {
+    FAM.clear(*F, "parallel.bc");
+    F->eraseFromParent();
+  }
+
+  // Unify some attributes among all functions; this is necessary because
+  // -O0 compiled builtin library has many attributes setup differently than
+  // -O2 compiled user code, and the inliner will check&refuse to inline.
+  // See hasCompatibleFnAttrs in llvm/include/llvm/IR/Attributes.inc
+  // and getAttributeBasedInliningDecision in llvm/lib/Analysis/InlineCost.cpp
+  std::string TargetCPU;
+  std::string TargetFeatures;
+  for (Function &F : M) {
+    if (TargetCPU.empty() && F.hasFnAttribute("target-cpu")) {
+      TargetCPU = F.getFnAttribute("target-cpu").getValueAsString().str();
+    }
+    if (TargetFeatures.empty() && F.hasFnAttribute("target-features")) {
+      TargetFeatures =
+          F.getFnAttribute("target-features").getValueAsString().str();
+    }
+  }
+
+  for (Function &F : M.functions()) {
+    if (F.isDeclaration())
+      continue;
+
+    // removes optnone/noinline/alwaysinline from F & its callsites
+    markFunctionAlwaysInline(&F);
+    F.removeFnAttr(Attribute::AlwaysInline);
+
+    // these are checked in LLVM's areInlineCompatible -> hasCompatibleFnArgs
+    F.removeFnAttr(Attribute::SafeStack);
+    F.removeFnAttr(Attribute::ShadowCallStack);
+    F.removeFnAttr(Attribute::NoProfile);
+    F.removeFnAttr(Attribute::StackProtect);
+    F.removeFnAttr(Attribute::StackProtectReq);
+    F.removeFnAttr(Attribute::StackProtectStrong);
+    // denorm & strictFP must be compatible
+    // TODO strictfp should depend on program's build opts
+    // denormals are handled by the driver / execution environment
+    F.removeFnAttr(Attribute::StrictFP);
+    F.removeFnAttr("denormal-fp-math");
+    F.removeFnAttr("denormal-fp-math-f32");
+    // prevents vectorizing/inlining of functions with builtins (llvm.sin.f32 etc)
+    F.removeFnAttr("no-builtins");
+    F.addFnAttr("no-trapping-math", "true");
+    // required because the InlineCost -> areInlineCompatible also calls
+    // TTI->areInlineCompatible; X86TTIImpl::areInlineCompatible checks CPU
+    // features; this might require even more attrs (target-abi?) for RISC-V
+    if (!TargetCPU.empty())
+      F.addFnAttr("target-cpu", TargetCPU);
+    if (!TargetFeatures.empty())
+      F.addFnAttr("target-features", TargetFeatures);
+
+    // the following settings are not necessary for inlining,
+    // but should improve optimization
+    F.removeFnAttr("use-sample-profile");
+    F.removeFnAttr("stack-protector-buffer-size");
+    if (IsDebugEnabled)
+      F.addFnAttr("frame-pointer", "all");
+    else
+      F.removeFnAttr("frame-pointer");
+
+    // these should be safe to enable
+    F.addFnAttr(Attribute::NoFree);
+    // recursion forbidden by OpenCL
+    F.addFnAttr(Attribute::NoRecurse);
+    // no exceptions or return by callback
+    F.addFnAttr(Attribute::NoCallback);
+    F.addFnAttr(Attribute::NoUnwind);
+#if 0
+    // It appears OpenCL follows C99 in which they are NOT UB.
+    // This breaks infinite for loops when enabled.
+    F.addFnAttr(Attribute::WillReturn);
+#endif
+
+    // Override the preferred vector width on x86 targets.
+    // By default, clang uses 256-bit even if a processor supports 512-bit SIMD.
+    if (int VecWidth =
+            pocl_get_int_option("POCL_VECTORIZER_PREFER_VECTOR_WIDTH", 0)) {
+      F.addFnAttr("prefer-vector-width", std::to_string(VecWidth));
+    }
   }
 
   return true;
@@ -411,35 +654,24 @@ void WorkgroupImpl::addRangeMetadataForPCField(llvm::Instruction *Instr,
   return;
 }
 
-// Creates a load from the hidden context structure argument for
-// the given element.
-llvm::Value *WorkgroupImpl::createLoadFromContext(IRBuilder<> &Builder,
-                                                  int StructFieldIndex,
-                                                  int FieldIndex = -1) {
-
+// Computes the Pointer and the Type of a PoclContext variable
+PtrAndType WorkgroupImpl::getPtrAndTypeForContextVar(IRBuilder<> &Builder,
+                                                     int StructFieldIndex,
+                                                     int FieldIndex = -1) {
   Value *GEP, *Ptr;
   GEP = Builder.CreateStructGEP(PoclContextT, ContextArg, StructFieldIndex);
   Type *GEPType = PoclContextT->getStructElementType(StructFieldIndex);
 
-  llvm::LoadInst *Load = nullptr;
   if (SizeTWidth == 64) {
     if (FieldIndex == -1)
-      Ptr = Builder.CreateConstGEP1_64(
-          GEPType,
-          GEP, 0);
+      Ptr = Builder.CreateConstGEP1_64(GEPType, GEP, 0);
     else
-      Ptr = Builder.CreateConstGEP2_64(
-          GEPType,
-          GEP, 0, FieldIndex);
+      Ptr = Builder.CreateConstGEP2_64(GEPType, GEP, 0, FieldIndex);
   } else {
     if (FieldIndex == -1)
-      Ptr = Builder.CreateConstGEP1_32(
-          GEPType,
-          GEP, 0);
+      Ptr = Builder.CreateConstGEP1_32(GEPType, GEP, 0);
     else
-      Ptr = Builder.CreateConstGEP2_32(
-          GEPType,
-          GEP, 0, FieldIndex);
+      Ptr = Builder.CreateConstGEP2_32(GEPType, GEP, 0, FieldIndex);
   }
 
   Type *FinalType = GEPType;
@@ -450,9 +682,20 @@ llvm::Value *WorkgroupImpl::createLoadFromContext(IRBuilder<> &Builder,
     FinalType = AT->getArrayElementType();
   }
 
-  Load = Builder.CreateLoad(
-      FinalType,
-      Ptr);
+  return PtrAndType{Ptr, FinalType};
+}
+
+// Creates a load from the hidden context structure argument for
+// the given element.
+llvm::Value *WorkgroupImpl::createLoadFromContext(IRBuilder<> &Builder,
+                                                  int StructFieldIndex,
+                                                  int FieldIndex = -1,
+                                                  std::string Name = "") {
+
+  llvm::LoadInst *Load = nullptr;
+  PtrAndType PT =
+      getPtrAndTypeForContextVar(Builder, StructFieldIndex, FieldIndex);
+  Load = Builder.CreateLoad(PT.second, PT.first, Name.c_str());
   addRangeMetadataForPCField(Load, StructFieldIndex, FieldIndex);
   return Load;
 }
@@ -472,9 +715,11 @@ static bool callsPrintf(Function *F) {
       if (callee->getName() == "llvm.")
         continue;
 
-      if (callee->getName() == "__printf_alloc")
+      if (callee->getName() == "pocl_printf_alloc_stub")
         return true;
-      if (callee->getName() == "__printf_flush_buffer")
+      if (callee->getName() == "pocl_printf_alloc")
+        return true;
+      if (callee->getName() == "pocl_flush_printf_buffer")
         return true;
       if (callsPrintf(callee))
         return true;
@@ -501,7 +746,7 @@ static Function *cloneFunctionWithPrintfArgs(Value *pb, Value *pbp, Value *pbc,
   FunctionType *FT =
       FunctionType::get(F->getReturnType(), Parameters, F->isVarArg());
   Function *NewF = Function::Create(FT, F->getLinkage(), "", M);
-  NewF->takeName(F);
+  NewF->setName(F->getName() + ".with_printf");
 
   ValueToValueMapTy VV;
   Function::arg_iterator j = NewF->arg_begin();
@@ -529,15 +774,16 @@ static Function *cloneFunctionWithPrintfArgs(Value *pb, Value *pbp, Value *pbc,
   return NewF;
 }
 
-// Recursively replace __printf_alloc calls with __pocl_printf_alloc calls,
+// Recursively replace pocl_printf_alloc_stub calls with pocl_printf_alloc calls,
 // while propagating the required pocl_context->printf_buffer arguments.
 static void replacePrintfCalls(Value *pb, Value *pbp, Value *pbc, bool isKernel,
-                               Function *poclPrintfAlloc, Module &M,
+                               Function *NewPrintfAlloc,
+                               Function *ReplacedPrintfAlloc, Module &M,
                                Function *L, FunctionMapping &printfCache) {
 
   // If none of the kernels use printf(), it will not be linked into the
   // module.
-  if (poclPrintfAlloc == nullptr) {
+  if (NewPrintfAlloc == nullptr || ReplacedPrintfAlloc == nullptr) {
     return;
   }
 
@@ -572,7 +818,7 @@ static void replacePrintfCalls(Value *pb, Value *pbp, Value *pbc, bool isKernel,
       if (oldF == nullptr)
         continue;
 
-      if (oldF->getName() == "__printf_alloc") {
+      if (oldF == ReplacedPrintfAlloc) {
         ops.clear();
         ops.push_back(pb);
         ops.push_back(pbp);
@@ -584,8 +830,8 @@ static void replacePrintfCalls(Value *pb, Value *pbp, Value *pbc, bool isKernel,
           ops.push_back(Operand);
         }
 
-        CallInst *NewCI = CallInst::Create(poclPrintfAlloc, ops);
-        NewCI->setCallingConv(poclPrintfAlloc->getCallingConv());
+        CallInst *NewCI = CallInst::Create(NewPrintfAlloc, ops);
+        NewCI->setCallingConv(NewPrintfAlloc->getCallingConv());
         auto *CB = dyn_cast<CallBase>(CallInstr);
         NewCI->setTailCall(CB->isTailCall());
 
@@ -605,7 +851,11 @@ static void replacePrintfCalls(Value *pb, Value *pbp, Value *pbc, bool isKernel,
 
     // LLVM may modify the result type of the called function to void.
     if (CI->getType()->isVoidTy()) {
+#if LLVM_MAJOR < 20
       newCI->insertBefore(CI);
+#else
+      newCI->insertBefore(CI->getIterator());
+#endif
       CI->eraseFromParent();
     } else {
       CI->replaceAllUsesWith(newCI);
@@ -632,8 +882,8 @@ static void replacePrintfCalls(Value *pb, Value *pbp, Value *pbc, bool isKernel,
       needsPrintf = callsPrintf(oldF);
       if (needsPrintf) {
         newF = cloneFunctionWithPrintfArgs(pb, pbp, pbc, oldF, &M);
-        replacePrintfCalls(nullptr, nullptr, nullptr, false, poclPrintfAlloc, M,
-                           newF, printfCache);
+        replacePrintfCalls(nullptr, nullptr, nullptr, false, NewPrintfAlloc,
+                           ReplacedPrintfAlloc, M, newF, printfCache);
 
         printfCache.insert(
             std::pair<llvm::Function *, llvm::Function *>(oldF, newF));
@@ -665,7 +915,8 @@ static void replacePrintfCalls(Value *pb, Value *pbp, Value *pbc, bool isKernel,
   }
 }
 
-// Create a wrapper for the kernel and add pocl-specific hidden arguments.
+// Create a wrapper named "_pocl_kernel_<original-kernel-name>"
+// for the kernel and add pocl-specific hidden arguments.
 // Also inlines the wrapped function to the wrapper.
 Function *WorkgroupImpl::createWrapper(Function *F,
                                        FunctionMapping &PrintfCache) {
@@ -747,9 +998,12 @@ Function *WorkgroupImpl::createWrapper(Function *F,
   Value *PrintfBuf, *PrintfBufPos, *PrintfBufCapa;
   PrintfBuf = PrintfBufPos = PrintfBufCapa = nullptr;
   if (DeviceSidePrintf) {
-    PrintfBuf = createLoadFromContext(Builder, PC_PRINTF_BUFFER);
-    PrintfBufPos = createLoadFromContext(Builder, PC_PRINTF_BUFFER_POSITION);
-    PrintfBufCapa = createLoadFromContext(Builder, PC_PRINTF_BUFFER_CAPACITY);
+    PrintfBuf =
+        createLoadFromContext(Builder, PC_PRINTF_BUFFER, -1, "printf_buffer");
+    PrintfBufPos = createLoadFromContext(Builder, PC_PRINTF_BUFFER_POSITION, -1,
+                                         "printf_buffer_write_pos");
+    PrintfBufCapa = createLoadFromContext(Builder, PC_PRINTF_BUFFER_CAPACITY,
+                                          -1, "printf_buffer_capacity");
   }
 
   CallInst *CI = Builder.CreateCall(F, ArrayRef<Value *>(FuncArgs));
@@ -760,21 +1014,6 @@ Function *WorkgroupImpl::createWrapper(Function *F,
                                           F->getSubprogram()->getLine(), 0,
                                           L->getSubprogram(), nullptr, true));
   }
-  // needed for printf
-  InlineFunctionInfo IFI;
-  InlineFunction(*CI, IFI);
-
-  if (DeviceSidePrintf) {
-
-    Function *PoclPrintfFun = M->getFunction("__pocl_printf_alloc");
-    if (PoclPrintfFun) {
-      replacePrintfCalls(PrintfBuf, PrintfBufPos, PrintfBufCapa, true,
-                         PoclPrintfFun, *M, L, PrintfCache);
-      PoclPrintfFun->removeFnAttr(Attribute::NoInline);
-      PoclPrintfFun->removeFnAttr(Attribute::OptimizeNone);
-      PoclPrintfFun->addFnAttr(Attribute::AlwaysInline);
-    }
-  }
 
   // SPMD machines might need a special calling convention to mark the
   // kernels that should be executed in SPMD fashion. For MIMD/CPU,
@@ -782,6 +1021,20 @@ Function *WorkgroupImpl::createWrapper(Function *F,
   // function.
   if (DeviceIsSPMD)
     L->setCallingConv(F->getCallingConv());
+
+  // needed for printf
+  InlineFunctionInfo IFI;
+  InlineFunction(*CI, IFI);
+
+  if (DeviceSidePrintf) {
+    Function *NewPrintfAlloc = M->getFunction("pocl_printf_alloc");
+    Function *OldPrintfAlloc = M->getFunction("pocl_printf_alloc_stub");
+    if (NewPrintfAlloc && OldPrintfAlloc) {
+      replacePrintfCalls(PrintfBuf, PrintfBufPos, PrintfBufCapa, true,
+                         NewPrintfAlloc, OldPrintfAlloc, *M, L, PrintfCache);
+      markFunctionAlwaysInline(NewPrintfAlloc);
+    }
+  }
 
   return L;
 }
@@ -805,9 +1058,9 @@ std::vector<llvm::Value *> WorkgroupImpl::globalHandlesToContextStructLoads(
   return StructLoads;
 }
 
-// Converts uses of the given pseudo variable handles (magic external global
-// variables) to use the given function-private values instead.
-void WorkgroupImpl::privatizeGlobals(
+// Converts Load uses of the given pseudo variable handles (magic external
+// global variables) to Load from the given function-private values instead.
+void WorkgroupImpl::privatizeGlobalLoads(
     llvm::Function *F, llvm::IRBuilder<> &Builder,
     const std::vector<std::string> &&GlobalHandleNames,
     std::vector<llvm::Value *> PrivateValues) {
@@ -824,24 +1077,66 @@ void WorkgroupImpl::privatizeGlobals(
         if (!isa<llvm::LoadInst>(ii)) {
           continue;
         }
-        llvm::LoadInst *L = cast<llvm::LoadInst>(ii);
         llvm::GlobalValue *GlobalHandle =
-          M->getGlobalVariable(GlobalHandleNames.at(j));
-
+            M->getGlobalVariable(GlobalHandleNames.at(j));
         if (GlobalHandle == nullptr)
           continue;
 
+        llvm::LoadInst *L = cast<llvm::LoadInst>(ii);
         if (L->getPointerOperand()->stripPointerCasts() != GlobalHandle)
           continue;
-
-        llvm::Value *Cast =
-          Builder.CreateTruncOrBitCast(PrivateValues[j], L->getType());
+        llvm::Value *Cast = PrivateValues[j];
+        if (L->getType() != PrivateValues[j]->getType())
+          Cast = Builder.CreateTruncOrBitCast(PrivateValues[j], L->getType());
         ii->replaceAllUsesWith(Cast);
         ii->eraseFromParent();
         break;
       }
     }
   }
+}
+
+// Converts Store uses of the given pseudo variable handles (magic external
+// global variables) to Store into the given function-private pointers instead.
+void WorkgroupImpl::privatizeGlobalStores(
+    llvm::Function *F, llvm::IRBuilder<> &Builder,
+    const std::vector<std::string> &&GlobalHandleNames,
+    std::vector<PtrAndType> PrivatePointers) {
+
+  for (Function::iterator i = F->begin(), e = F->end(); i != e; ++i) {
+    for (BasicBlock::iterator ii = i->begin(), ee = i->end(), Next = ii;
+         ii != ee; ii = Next) {
+      Next = std::next(ii);
+      for (size_t j = 0; j < GlobalHandleNames.size(); ++j) {
+        if (PrivatePointers[j].first == nullptr) {
+          continue;
+        }
+        if (!isa<llvm::StoreInst>(ii)) {
+          continue;
+        }
+        llvm::GlobalValue *GlobalHandle =
+            M->getGlobalVariable(GlobalHandleNames.at(j));
+        if (GlobalHandle == nullptr)
+          continue;
+
+        llvm::StoreInst *S = cast<llvm::StoreInst>(ii);
+        if (S->getPointerOperand()->stripPointerCasts() != GlobalHandle)
+          continue;
+        llvm::Value *StoredVal = S->getValueOperand();
+        if (S->getValueOperand()->getType() != PrivatePointers[j].second)
+          StoredVal = Builder.CreateTruncOrBitCast(StoredVal,
+                                                   PrivatePointers[j].second);
+
+        Builder.SetInsertPoint(ii->getParent(), ii->getIterator());
+        Builder.CreateStore(StoredVal, PrivatePointers[j].first);
+        ii->eraseFromParent();
+
+        break;
+      }
+    }
+  }
+  // restore the insertion point for Loads
+  Builder.SetInsertPoint(&F->front(), F->front().getFirstInsertionPt());
 }
 
 /**
@@ -856,7 +1151,7 @@ void WorkgroupImpl::privatizeContext(Function *F) {
   // Privatize _global_id_* to private allocas.
   // They are referred to by WorkItemLoops to fetch the global id directly.
 
-  IRBuilder<> Builder(F->getEntryBlock().getFirstNonPHI());
+  CreateBuilder(Builder, F->getEntryBlock());
 
   // For replace the global_ids with local allocas for easier
   // data flow analysis.
@@ -930,11 +1225,12 @@ void WorkgroupImpl::privatizeContext(Function *F) {
     }
   }
 
+  StoreInst *LocalSizeXStore = nullptr;
   if (WGDynamicLocalSize) {
     if (LocalSizeAllocas[0] != nullptr)
-      Builder.CreateStore(
-        createLoadFromContext(Builder, PC_LOCAL_SIZE, 0),
-        LocalSizeAllocas[0]);
+      LocalSizeXStore =
+          Builder.CreateStore(createLoadFromContext(Builder, PC_LOCAL_SIZE, 0),
+                              LocalSizeAllocas[0]);
 
     if (LocalSizeAllocas[1] != nullptr)
       Builder.CreateStore(
@@ -947,10 +1243,10 @@ void WorkgroupImpl::privatizeContext(Function *F) {
       LocalSizeAllocas[2]);
   } else {
     if (LocalSizeAllocas[0] != nullptr)
-      Builder.CreateStore(
-        ConstantInt::get(
-          LocalSizeAllocas[0]->getAllocatedType(), WGLocalSizeX, 0),
-        LocalSizeAllocas[0]);
+      LocalSizeXStore = Builder.CreateStore(
+          ConstantInt::get(LocalSizeAllocas[0]->getAllocatedType(),
+                           WGLocalSizeX, 0),
+          LocalSizeAllocas[0]);
 
     if (LocalSizeAllocas[1] != nullptr)
       Builder.CreateStore(
@@ -965,17 +1261,17 @@ void WorkgroupImpl::privatizeContext(Function *F) {
         LocalSizeAllocas[2]);
   }
 
-  privatizeGlobals(
-    F, Builder, {"_group_id_x", "_group_id_y", "_group_id_z"}, GroupIdArgs);
+  privatizeGlobalLoads(
+      F, Builder, {"_group_id_x", "_group_id_y", "_group_id_z"}, GroupIdArgs);
 
   if (WGAssumeZeroGlobalOffset) {
-    privatizeGlobals(
+    privatizeGlobalLoads(
         F, Builder,
         {"_global_offset_x", "_global_offset_y", "_global_offset_z"},
         {ConstantInt::get(SizeT, 0), ConstantInt::get(SizeT, 0),
          ConstantInt::get(SizeT, 0)});
   } else {
-    privatizeGlobals(
+    privatizeGlobalLoads(
         F, Builder,
         {"_global_offset_x", "_global_offset_y", "_global_offset_z"},
         globalHandlesToContextStructLoads(
@@ -984,47 +1280,52 @@ void WorkgroupImpl::privatizeContext(Function *F) {
             PC_GLOBAL_OFFSET));
   }
 
-  privatizeGlobals(
-    F, Builder, {"_work_dim"},
-    globalHandlesToContextStructLoads(Builder, {"_work_dim"}, PC_WORK_DIM));
+  privatizeGlobalLoads(
+      F, Builder, {"_work_dim"},
+      {createLoadFromContext(Builder, PC_WORK_DIM, -1, "_work_dim")});
 
-  privatizeGlobals(F, Builder, {PoclGVarBufferName},
-                   globalHandlesToContextStructLoads(
-                       Builder, {PoclGVarBufferName}, PC_GLOBAL_VAR_BUFFER));
+  privatizeGlobalStores(
+      F, Builder, {"__pocl_context_unreachable"},
+      {getPtrAndTypeForContextVar(Builder, PC_EXECUTION_FAILED)});
 
-  privatizeGlobals(
-    F, Builder, {"_num_groups_x", "_num_groups_y", "_num_groups_z"},
-    globalHandlesToContextStructLoads(
-      Builder, {"_num_groups_x", "_num_groups_y", "_num_groups_z"},
-      PC_NUM_GROUPS));
+  privatizeGlobalLoads(F, Builder, {PoclGVarBufferName},
+                       globalHandlesToContextStructLoads(Builder,
+                                                         {PoclGVarBufferName},
+                                                         PC_GLOBAL_VAR_BUFFER));
 
-  // Privatize the subgroup size (for CPUs), if referred.
+  privatizeGlobalLoads(
+      F, Builder, {"_num_groups_x", "_num_groups_y", "_num_groups_z"},
+      globalHandlesToContextStructLoads(
+          Builder, {"_num_groups_x", "_num_groups_y", "_num_groups_z"},
+          PC_NUM_GROUPS));
+
+  // Initialize the SG size global and privatize it.
   if (M->getGlobalVariable("_pocl_sub_group_size") != nullptr) {
     Value *SGSize = getRequiredSubgroupSize(*F);
     if (SGSize == nullptr) {
+      Builder.SetInsertPoint(LocalSizeXStore->getNextNode());
       SGSize = Builder.CreateLoad(LocalSizeAllocas[0]->getAllocatedType(),
                                   LocalSizeAllocas[0]);
     }
     assert(SGSize != nullptr);
-    privatizeGlobals(F, Builder, {"_pocl_sub_group_size"}, {SGSize});
+    privatizeGlobalLoads(F, Builder, {"_pocl_sub_group_size"}, {SGSize});
   }
 
   if (DeviceSidePrintf) {
     // Privatize _printf_buffer
-    privatizeGlobals(
-      F, Builder, {"_printf_buffer"}, {
-        createLoadFromContext(
-          Builder, PC_PRINTF_BUFFER)});
+    privatizeGlobalLoads(F, Builder, {"_printf_buffer"},
+                         {createLoadFromContext(Builder, PC_PRINTF_BUFFER, -1,
+                                                "printf_buffer")});
 
-    privatizeGlobals(
-      F, Builder, {"_printf_buffer_position"}, {
-        createLoadFromContext(
-          Builder, PC_PRINTF_BUFFER_POSITION)});
+    privatizeGlobalLoads(
+        F, Builder, {"_printf_buffer_position"},
+        {createLoadFromContext(Builder, PC_PRINTF_BUFFER_POSITION, -1,
+                               "printf_buffer_pos")});
 
-    privatizeGlobals(
-      F, Builder, {"_printf_buffer_capacity"}, {
-        createLoadFromContext(
-          Builder, PC_PRINTF_BUFFER_CAPACITY)});
+    privatizeGlobalLoads(
+        F, Builder, {"_printf_buffer_capacity"},
+        {createLoadFromContext(Builder, PC_PRINTF_BUFFER_CAPACITY, -1,
+                               "printf_buffer_capacity")});
   }
 }
 
@@ -1033,7 +1334,8 @@ void WorkgroupImpl::privatizeContext(Function *F) {
 // actual buffers and that scalar data is loaded from the default memory.
 void WorkgroupImpl::createDefaultWorkgroupLauncher(llvm::Function *F) {
 
-  IRBuilder<> Builder(M->getContext());
+  LLVMContext &C = F->getContext();
+  IRBuilder<> Builder(C);
 
   std::string FuncName = "";
   FuncName = F->getName().str();
@@ -1041,6 +1343,23 @@ void WorkgroupImpl::createDefaultWorkgroupLauncher(llvm::Function *F) {
   FunctionCallee fc =
       M->getOrInsertFunction(FuncName + "_workgroup", LauncherFuncT);
   Function *WorkGroup = dyn_cast<Function>(fc.getCallee());
+  // copy only the function attributes (not the param/ret attributes)
+  AttributeSet KernelFnAttrSet = F->getAttributes().getFnAttrs();
+  AttributeList WorkgAttrL = WorkGroup->getAttributes();
+  AttributeList WorkTempL = WorkgAttrL.removeAttributesAtIndex(
+      C, AttributeList::AttrIndex::FunctionIndex);
+  AttrBuilder AtB(C, KernelFnAttrSet);
+  AttributeList NewWorkL = WorkTempL.addAttributesAtIndex(
+      C, AttributeList::AttrIndex::FunctionIndex, AtB);
+  WorkGroup->setAttributes(NewWorkL);
+
+  WorkGroup->setLinkage(Function::ExternalLinkage);
+  Triple TT(F->getParent()->getTargetTriple());
+  if (TT.getEnvironment() == llvm::Triple::MSVC) {
+    // dllexport is needed for exposing the symbol in the kernel module
+    // when MSVC-based toolchain is used.
+    WorkGroup->setDLLStorageClass(GlobalValue::DLLExportStorageClass);
+  }
 
   // Propagate the DISubprogram to the launcher so we get debug data emitted
   // in case the kernel is inlined to it.
@@ -1058,6 +1377,7 @@ void WorkgroupImpl::createDefaultWorkgroupLauncher(llvm::Function *F) {
 
   SmallVector<Value *, 8> Arguments;
   size_t i = 0;
+  const DataLayout &DL = M->getDataLayout();
   for (Function::const_arg_iterator ii = F->arg_begin(), ee = F->arg_end();
        ii != ee; ++ii) {
 
@@ -1084,10 +1404,9 @@ void WorkgroupImpl::createDefaultWorkgroupLauncher(llvm::Function *F) {
       // The size is passed directly instead of the pointer.
       PointerType *ParamType = dyn_cast<PointerType>(ArgType);
       assert(ParamType != nullptr);
-      const DataLayout &DL = M->getDataLayout();
 
       uint64_t ParamByteSize = DL.getTypeStoreSize(ParamType);
-      Type *SizeIntType = IntegerType::get(*C, ParamByteSize * 8);
+      Type *SizeIntType = IntegerType::get(C, ParamByteSize * 8);
       Value *LocalArgByteSize = Builder.CreatePointerCast(Pointer, SizeIntType);
 
 #ifdef LLVM_OPAQUE_POINTERS
@@ -1106,13 +1425,40 @@ void WorkgroupImpl::createDefaultWorkgroupLauncher(llvm::Function *F) {
                                  MAX_EXTENDED_ALIGNMENT),
                                  "local_arg", Block);
     } else {
-      // If it's a pass by value pointer argument, we just pass the pointer
-      // as is to the function, no need to load from it first.
       if (ii->hasByValAttr()) {
-        Arg = Builder.CreatePointerCast(Pointer, ArgType);
+
+        // If it's a pass-by-value pointer argument, we can pass the pointer
+        // as is to the function, but only if the alignment of the arg is
+        // <= than preferred alignment; otherwise it could crash
+        // (chipStar test tests/runtime/TestAlignAttrRuntime)
+        //
+        // this can also be solved by inlining the WG func into launcher
+        auto ArgAlign = ii->getParamAlign().valueOrOne();
+        Type *BVType = ii->getParamByValType();
+        auto PrefAlign = DL.getPrefTypeAlign(BVType);
+
+        if (ArgAlign <= PrefAlign) {
+          Arg = Builder.CreatePointerCast(Pointer, ArgType);
+        } else {
+#ifdef DEBUG_WORK_GROUP_GEN
+          std::cerr << "WORKGROUP: arg alignment is larger, creating load\n";
+#endif
+          uint64_t ArgTypeSize = DL.getTypeStoreSize(BVType);
+          Value *Src = Builder.CreatePointerCast(Pointer, ArgType);
+          unsigned AddrSp = DL.getAllocaAddrSpace();
+          AllocaInst *AI = new AllocaInst(BVType, AddrSp, nullptr, ArgAlign);
+          Builder.Insert(AI);
+          Builder.CreateMemCpy(AI, Align(1), Src, Align(1), ArgTypeSize);
+          Arg = AI;
+        }
       } else {
+#ifdef LLVM_OPAQUE_POINTERS
+        Arg = Pointer;
+#else
         Arg = Builder.CreatePointerCast(Pointer, ArgType->getPointerTo());
-        Arg = Builder.CreateLoad(ArgType, Arg);
+#endif
+        Arg = Builder.CreateAlignedLoad(ArgType, Arg,
+                                        DL.getPrefTypeAlign(ArgType));
       }
     }
 
@@ -1137,6 +1483,14 @@ void WorkgroupImpl::createDefaultWorkgroupLauncher(llvm::Function *F) {
   }
 
   Builder.CreateRetVoid();
+
+  Function *Callee = CI->getCalledFunction();
+
+  InlineFunctionInfo IFI;
+  InlineFunction(*CI, IFI);
+
+  if (Callee->getNumUses() == 0)
+    Callee->eraseFromParent();
 }
 
 static inline uint64_t
@@ -1170,23 +1524,6 @@ static size_t getArgumentSize(llvm::Argument &Arg) {
   return DL.getTypeStoreSize(TypeInBuf);
 }
 
-// Tofix: Why this is duplicated here? pocl_utils.c should be used?
-static uint64_t pocl_size_ceil2_64(uint64_t x) {
-  /* Rounds up to the next highest power of two without branching and
-   * is as fast as a BSR instruction on x86, see:
-   *
-   * http://graphics.stanford.edu/~seander/bithacks.html#RoundUpPowerOf2
-   */
-  --x;
-  x |= x >> 1;
-  x |= x >> 2;
-  x |= x >> 4;
-  x |= x >> 8;
-  x |= x >> 16;
-  x |= x >> 32;
-  return ++x;
-}
-
 static void computeArgBufferOffsets(LLVMValueRef F,
                                     uint64_t *ArgBufferOffsets) {
 
@@ -1199,7 +1536,12 @@ static void computeArgBufferOffsets(LLVMValueRef F,
     // TODO: This is a target specific type? We would like to get the
     // natural size or the "packed size" instead...
     uint64_t ByteSize = getArgumentSize(cast<Argument>(*unwrap(Param)));
-    uint64_t Alignment = pocl_size_ceil2_64(ByteSize);
+
+    // Always align each argument by the max extended alignment so we can push
+    // structs and vectors to the buffer without needing to inspect the
+    // content/alignment preferences of the structs. This naturally is a bit
+    // wasteful, but should not matter in the big picture.
+    uint64_t Alignment = MAX_EXTENDED_ALIGNMENT;
 
     assert(ByteSize > 0 && "Arg type size is zero?");
     Offset = align64(Offset, Alignment);
@@ -1252,7 +1594,7 @@ LLVMValueRef WorkgroupImpl::createAllocaMemcpyForStruct(
     args[2] = Size;
 
     LLVMTypeRef FnTy = LLVMGetCalledFunctionType(MemCpy4);
-    LLVMValueRef Call4 = LLVMBuildCall2(Builder, FnTy, MemCpy4, args, 3, "");
+    LLVMBuildCall2(Builder, FnTy, MemCpy4, args, 3, "");
   } else {
     LLVMTypeRef i8PtrAS0 = LLVMPointerType(Int8Type, 0);
     LLVMTypeRef i8PtrAS1 = LLVMPointerType(Int8Type, DeviceArgsASid);
@@ -1267,18 +1609,25 @@ LLVMValueRef WorkgroupImpl::createAllocaMemcpyForStruct(
     args[2] = Size;
 
     LLVMTypeRef FnTy = LLVMGetCalledFunctionType(MemCpy1);
-    LLVMValueRef Call1 = LLVMBuildCall2(Builder, FnTy, MemCpy1, args, 3, "");
+    LLVMBuildCall2(Builder, FnTy, MemCpy1, args, 3, "");
   }
 
   return LocalArgAlloca;
 }
 
-LLVMValueRef WorkgroupImpl::createArgBufferLoad(LLVMBuilderRef Builder,
-                                                LLVMValueRef ArgBufferPtr,
-                                                uint64_t *ArgBufferOffsets,
-                                                LLVMContextRef Ctx,
-                                                LLVMValueRef F,
-                                                unsigned ParamIndex) {
+/// Creates a load to get an argument from an argument buffer.
+///
+/// \param Builder The LLVM IR builder to use.
+/// \param ArgBufferPtr The LLVM IR Value pointing to the arg buffer.
+/// \param ArgBufferOffsets The offsets of arguments in the buffer.
+/// \param Ctx LLVM Context to use.
+/// \param F The function with the arguments.
+/// \param ParamIndex The index of the argument.
+/// \param Name The name to give for the load (for IR readability).
+LLVMValueRef WorkgroupImpl::createArgBufferLoad(
+    LLVMBuilderRef Builder, LLVMValueRef ArgBufferPtr,
+    uint64_t *ArgBufferOffsets, LLVMContextRef Ctx, LLVMValueRef F,
+    unsigned ParamIndex, std::string Name) {
 
   LLVMValueRef Param = LLVMGetParam(F, ParamIndex);
   LLVMTypeRef ParamType = LLVMTypeOf(Param);
@@ -1322,29 +1671,31 @@ LLVMValueRef WorkgroupImpl::createArgBufferLoad(LLVMBuilderRef Builder,
     LLVMValueRef ArgOffsetBitcast =
         LLVMBuildPointerCast(Builder, ArgByteOffset, DestTy, "arg_ptr");
     LLVMTypeRef LoadTy = ParamType;
-    return LLVMBuildLoad2(Builder, LoadTy, ArgOffsetBitcast, "");
+    return LLVMBuildLoad2(Builder, LoadTy, ArgOffsetBitcast, Name.c_str());
   }
 }
 
-/**
- * Creates a work group launcher with all the argument data passed
- * in a single argument buffer.
- *
- * All argument values, including pointers are stored directly in the
- * argument buffer with natural alignment. The rules for populating the
- * buffer are those of the HSA kernel calling convention. The name of
- * the generated function is KERNELNAME_workgroup_argbuffer.
- */
+/// Creates a work group launcher with all the argument data passed
+/// in a single argument buffer.
+///
+/// All argument values, including pointers are stored directly in the
+/// argument buffer with natural alignment. The rules for populating the
+/// buffer are those of the HSA kernel calling convention. The name of
+/// the generated function is KERNELNAME_workgroup_argbuffer.
+///
+/// \param Func The kernel to generate the launcher for.
+/// \param KernName The prefix for the launcher function's name, which will
+/// be called 'KernName_workgroup_argbuffer'.
 Function *
 WorkgroupImpl::createArgBufferWorkgroupLauncher(Function *Func,
                                                 std::string KernName) {
 
   LLVMValueRef F = wrap(Func);
   uint64_t ArgCount = LLVMCountParams(F);
-  uint64_t ArgBufferOffsets[ArgCount];
+  std::vector<uint64_t> ArgBufferOffsets(ArgCount);
   LLVMModuleRef M = wrap(this->M);
 
-  computeArgBufferOffsets(F, ArgBufferOffsets);
+  computeArgBufferOffsets(F, ArgBufferOffsets.data());
 
   LLVMContextRef LLVMContext = LLVMGetModuleContext(M);
 
@@ -1386,7 +1737,7 @@ WorkgroupImpl::createArgBufferWorkgroupLauncher(Function *Func,
 
   LLVMPositionBuilderAtEnd(Builder, Block);
 
-  LLVMValueRef Args[ArgCount];
+  std::vector<LLVMValueRef> Args(ArgCount);
   LLVMValueRef ArgBuffer = LLVMGetParam(WrapperKernel, 0);
   size_t i = 0;
   for (; i < ArgCount - HiddenArgs; ++i) {
@@ -1445,8 +1796,9 @@ WorkgroupImpl::createArgBufferWorkgroupLauncher(Function *Func,
           "local_arg", unwrap(Block)));
       Args[i] = LocalArgAlloca;
     } else {
-      Args[i] = createArgBufferLoad(Builder, ArgBuffer, ArgBufferOffsets,
-                                    LLVMContext, F, i);
+      Args[i] = createArgBufferLoad(
+          Builder, ArgBuffer, ArgBufferOffsets.data(), LLVMContext, F, i,
+          std::string("kernel_arg_") + std::to_string(i));
     }
   }
 
@@ -1466,24 +1818,30 @@ WorkgroupImpl::createArgBufferWorkgroupLauncher(Function *Func,
   assert (i == ArgCount);
 
   LLVMTypeRef FnTy = wrap(Func->getFunctionType());
-  LLVMValueRef Call = LLVMBuildCall2(Builder, FnTy, F, Args, ArgCount, "");
+  LLVMValueRef Call =
+      LLVMBuildCall2(Builder, FnTy, F, Args.data(), ArgCount, "");
   LLVMBuildRetVoid(Builder);
 
   llvm::CallInst *CallI = llvm::dyn_cast<llvm::CallInst>(llvm::unwrap(Call));
   CallI->setCallingConv(Func->getCallingConv());
 
+  InlineFunctionInfo IFI;
+  InlineFunction(*dyn_cast<CallInst>(llvm::unwrap(Call)), IFI);
+
   LLVMDisposeBuilder(Builder);
   return llvm::dyn_cast<llvm::Function>(llvm::unwrap(WrapperKernel));
 }
 
-/**
- * Creates a launcher function that executes all work-items in the grid by
- * launching a given work-group function for all work-group ids.
- *
- * The function adheres to the PHSA calling convention where the first two
- * arguments are for PHSA's context data, and the third one is the argument
- * buffer. The name will be phsa_kernel.KERNELNAME_grid_launcher.
- */
+/// Creates a launcher function that executes all work-items in the grid by
+/// launching a given work-group function for all work-group ids.
+///
+/// The function adheres to the PHSA calling convention where the first two
+/// arguments are for PHSA's context data, and the third one is the argument
+/// buffer. The name will be phsa_kernel.KERNELNAME_grid_launcher.
+///
+/// \param KernFunc The kernel function to generate the launcher for.
+/// \param WGFunc The work-group function.
+/// \param KernName The (original) name of the kernel.
 void WorkgroupImpl::createGridLauncher(Function *KernFunc, Function *WGFunc,
                                        std::string KernName) {
 
@@ -1524,139 +1882,49 @@ void WorkgroupImpl::createGridLauncher(Function *KernFunc, Function *WGFunc,
   LLVMValueRef RunnerFunc = LLVMGetNamedFunction(M, "_pocl_run_all_wgs");
   assert (RunnerFunc != nullptr);
 
-  LLVMTypeRef ArgTypes[] = {
-    LLVMTypeOf(LLVMGetParam(RunnerFunc, 0)),
-    LLVMTypeOf(LLVMGetParam(RunnerFunc, 1)),
-    LLVMTypeOf(LLVMGetParam(RunnerFunc, 2))};
+  LLVMTypeRef RunnerArgTypes[] = {LLVMTypeOf(LLVMGetParam(RunnerFunc, 0)),
+                                  LLVMTypeOf(LLVMGetParam(RunnerFunc, 1)),
+                                  LLVMTypeOf(LLVMGetParam(RunnerFunc, 2)),
+                                  LLVMTypeOf(LLVMGetParam(RunnerFunc, 3))};
 
   uint64_t KernArgCount = LLVMCountParams(Kernel);
-  uint64_t KernArgBufferOffsets[KernArgCount];
-  computeArgBufferOffsets(Kernel, KernArgBufferOffsets);
+  std::vector<uint64_t> KernArgBufferOffsets(KernArgCount);
+  computeArgBufferOffsets(Kernel, KernArgBufferOffsets.data());
 
   // The second argument in the native phsa interface is auxiliary
-  // driver-specific data that is passed as the last argument to
-  // the grid launcher.
+  // driver-specific data that is passed as the last argument to the grid
+  // launcher.
   LLVMValueRef AuxParam = LLVMGetParam(Launcher, 1);
   LLVMValueRef ArgBuffer = LLVMGetParam(Launcher, 2);
 
-  // Load the pointer to the pocl context (in global memory),
-  // assuming it is stored as the 4th last argument in the kernel.
-  LLVMValueRef PoclCtx =
-      createArgBufferLoad(Builder, ArgBuffer, KernArgBufferOffsets, LLVMContext,
-                          Kernel, KernArgCount - HiddenArgs);
+  // Load the pointer to the pocl context (in global memory), assuming it is
+  // stored as the 4th last argument in the kernel.
+  LLVMValueRef PoclCtx = createArgBufferLoad(
+      Builder, ArgBuffer, KernArgBufferOffsets.data(), LLVMContext, Kernel,
+      KernArgCount - HiddenArgs, "pocl_context");
 
   LLVMValueRef Args[4] = {
-      LLVMBuildPointerCast(Builder, WGF, ArgTypes[0], "wg_func"),
-      LLVMBuildPointerCast(Builder, ArgBuffer, ArgTypes[1], "args"),
-      LLVMBuildPointerCast(Builder, PoclCtx, ArgTypes[2], "ctx"),
-      LLVMBuildPointerCast(Builder, AuxParam, ArgTypes[1], "aux")};
+      LLVMBuildPointerCast(Builder, WGF, RunnerArgTypes[0], "wg_func"),
+      LLVMBuildPointerCast(Builder, ArgBuffer, RunnerArgTypes[1], "args"),
+      LLVMBuildPointerCast(Builder, PoclCtx, RunnerArgTypes[2], "ctx"),
+      LLVMBuildPointerCast(Builder, AuxParam, RunnerArgTypes[3], "aux")};
 
-  LLVMTypeRef FnTy = LLVMGetCalledFunctionType(RunnerFunc);
-  LLVMValueRef Call = LLVMBuildCall2(Builder, FnTy, RunnerFunc, Args, 4, "");
+  LLVMTypeRef RunnerFnTy = LLVMFunctionType(VoidType, RunnerArgTypes, 4, 0);
+  LLVMValueRef Call =
+      LLVMBuildCall2(Builder, RunnerFnTy, RunnerFunc, Args, 4, "");
   LLVMBuildRetVoid(Builder);
 
   InlineFunctionInfo IFI;
   InlineFunction(*dyn_cast<CallInst>(llvm::unwrap(Call)), IFI);
-}
 
-/**
- * Creates a work group launcher more suitable for the heterogeneous
- * host-device setup  (called KERNELNAME_workgroup_fast).
- *
- * 1) Pointer arguments are stored directly as pointers to the
- *    buffers in the argument buffer.
- *
- * 2) Scalar values are loaded from the global memory address
- *    space.
- *
- * This should minimize copying of data and memory allocation
- * at the device.
- */
-void WorkgroupImpl::createFastWorkgroupLauncher(llvm::Function *F) {
-
-  IRBuilder<> Builder(M->getContext());
-
-  std::string funcName = "";
-  funcName = F->getName().str();
-
-  FunctionCallee fc = M->getOrInsertFunction(
-                         funcName + "_workgroup_fast", LauncherFuncT);
-  Function *WorkGroup = dyn_cast<Function>(fc.getCallee());
-  assert(WorkGroup != NULL);
-
-  Builder.SetInsertPoint(BasicBlock::Create(M->getContext(), "", WorkGroup));
-
-  Function::arg_iterator ai = WorkGroup->arg_begin();
-  Argument *AI = &*ai;
-
-  SmallVector<Value*, 8> arguments;
-  size_t i = 0;
-  for (Function::const_arg_iterator ii = F->arg_begin(), ee = F->arg_end();
-       ii != ee; ++ii, ++i) {
-
-    if (i == F->arg_size() - 4)
-      break;
-
-    Value *V;
-    Type *T = ii->getType();
-    Type* I32Ty = Type::getInt32Ty(M->getContext());
-
-#ifndef LLVM_OPAQUE_POINTERS
-    Value *GEP = Builder.CreateGEP(AI->getType()->getPointerElementType(), AI,
-                                   ConstantInt::get(I32Ty, i));
-    Value *Pointer =
-        Builder.CreateLoad(GEP->getType()->getPointerElementType(), GEP);
-#else
-    Type *I8Ty = Type::getInt8Ty(M->getContext());
-    Type *I8PtrTy = I8Ty->getPointerTo(AI->getType()->getPointerAddressSpace());
-    Value *GEP = Builder.CreateGEP(I8PtrTy, AI, ConstantInt::get(I32Ty, i));
-    Value *Pointer = Builder.CreateLoad(I8PtrTy, GEP);
-#endif
-
-    if (T->isPointerTy()) {
-      if (!ii->hasByValAttr()) {
-        // Assume the pointer is directly in the arg array.
-        V = Builder.CreatePointerCast(Pointer, T);
-        arguments.push_back(V);
-        continue;
-      } else {
-        // It's a pass by value pointer argument, use the underlying
-        // element type in subsequent load.
-#if LLVM_MAJOR < 15
-        T = T->getPointerElementType();
-#else
-        T = ii->getParamByValType();
-#endif
-      }
-    }
-
-    // If it's a pass by value pointer argument, we just pass the pointer
-    // as is to the function, no need to load from it first.
-
-    if (ii->hasByValAttr() && (((PointerType *)T)->getAddressSpace() != DeviceGlobalASid)) {
-      V = Builder.CreatePointerCast(Pointer, T->getPointerTo());
-    } else {
-      V = Builder.CreatePointerCast(Pointer, T->getPointerTo(DeviceGlobalASid));
-    }
-
-    if (!ii->hasByValAttr()) {
-      V = Builder.CreateLoad(T, V);
-    }
-
-    arguments.push_back(V);
+  // Add a fixed name global variable which points to the generated grid
+  // launcher, if there is a declaration by that name. If there is, we
+  // have a device main that refers to it.
+  LLVMValueRef GridLauncherGlobal = LLVMGetNamedGlobal(M, "pocl_grid_launcher");
+  if (GridLauncherGlobal != nullptr) {
+    LLVMSetExternallyInitialized(GridLauncherGlobal, false);
+    LLVMSetInitializer(GridLauncherGlobal, Launcher);
   }
-
-  ++ai;
-  arguments.push_back(&*ai);
-  ++ai;
-  arguments.push_back(&*ai);
-  ++ai;
-  arguments.push_back(&*ai);
-  ++ai;
-  arguments.push_back(&*ai);
-
-  Builder.CreateCall(F, ArrayRef<Value *>(arguments));
-  Builder.CreateRetVoid();
 }
 
 // The subgroup size is currently defined for the CPU implementations
@@ -1682,49 +1950,12 @@ llvm::PreservedAnalyses Workgroup::run(llvm::Module &M,
   PAChanged.preserve<VariableUniformityAnalysis>();
 
   auto &FAM = AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
-  FunctionVec OldKernels;
-  bool Ret = WGI.runOnModule(M, OldKernels);
-  for (auto K : OldKernels) {
-    FAM.clear(*K, "parallel.bc");
-    K->eraseFromParent();
-  }
+  bool Ret = WGI.runOnModule(M, FAM);
 
-  // remove the declaration of the pocl.barrier because it's invalid.
-  for (auto &Func : M.functions()) {
-    if (!Func.isDeclaration())
-      continue;
-    if (!Func.hasName())
-      continue;
-    if (Func.getName() == BARRIER_FUNCTION_NAME) {
-      FAM.clear(Func, "parallel.bc");
-      Func.eraseFromParent();
-      break;
-    }
-  }
-
-  std::vector<llvm::GlobalVariable *> GVarsToDelete;
-  // remove the declarations of global variables
-  for (auto &GV : M.globals()) {
-    llvm::GlobalVariable *GVar = &GV;
-
-    if (!GVar->hasName()) {
-      continue;
-    }
-
-    if (std::find(WorkgroupVariablesVector.begin(), WorkgroupVariablesVector.end(),
-                  GVar->getName().str()) == WorkgroupVariablesVector.end()) {
-      continue;
-    }
-    if (GVar->getNumUses() > 0) {
-      continue;
-    }
-
-    GVarsToDelete.push_back(GVar);
-  }
-
-  for (llvm::GlobalVariable *GVar : GVarsToDelete) {
-    GVar->eraseFromParent();
-  }
+#ifdef DEBUG_WORK_GROUP_GEN
+  std::cerr << "### After Workgroup:\n";
+  M.dump();
+#endif
 
   return Ret ? PAChanged : PreservedAnalyses::all();
 }

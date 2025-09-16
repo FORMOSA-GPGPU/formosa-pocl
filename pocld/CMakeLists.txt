@@ -24,7 +24,7 @@
 #
 #=============================================================================
 
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.0...4.0)
 project(pocld)
 
 add_definitions(-DCL_TARGET_OPENCL_VERSION=${OPENCL_HEADER_VERSION}
@@ -36,14 +36,24 @@ set(SOURCES pocld.cc daemon.hh daemon.cc cmdline.h cmdline.c
             ../lib/CL/pocl_debug.c ../lib/CL/pocl_debug.h
             ../lib/CL/pocl_threads.c ../lib/CL/pocl_threads.h
             ../lib/CL/pocl_timing.c ../lib/CL/pocl_timing.h
+            ../lib/CL/pocl_run_command.c ../lib/CL/pocl_run_command.h
             ../lib/CL/devices/spirv_parser.hh ../lib/CL/devices/spirv_parser.cc
+            ../lib/CL/devices/pocl_spirv_utils.hh ../lib/CL/devices/pocl_spirv_utils.cc
             ../lib/CL/devices/bufalloc.h ../lib/CL/devices/bufalloc.c
             ../lib/CL/pocl_networking.c ../lib/CL/pocl_networking.h
             ../lib/CL/pocl_runtime_config.c
+            ../lib/CL/pocl_builtin_kernels.c
+            ../lib/CL/pocl_tensor_util.c
+            ../lib/CL/pocl_cl_half_util.c
+            ../lib/CL/pocl_compiler_macros.h
+            ../lib/CL/dbk/pocl_dbk_khr_jpeg_shared.c
+            ../lib/CL/dbk/pocl_dbk_khr_onnxrt_shared.c
+            ../lib/CL/dbk/pocl_dbk_khr_img_shared.c
+            ../lib/CL/dbk/pocl_dbk_khr_dnn_utils_shared.c
             shared_cl_context.cc shared_cl_context.hh
             virtual_cl_context.cc virtual_cl_context.hh
             cmd_queue.cc cmd_queue.hh common.cc common.hh
-            request.hh request.cc
+            connection.hh connection.cc request.hh request.cc
             reply_th.cc reply_th.hh request_th.cc request_th.hh
             peer_handler.cc peer_handler.hh
             peer.cc peer.hh tracing.h traffic_monitor.hh traffic_monitor.cc)
@@ -52,16 +62,13 @@ set(SOURCES pocld.cc daemon.hh daemon.cc cmdline.h cmdline.c
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 unset(P_INCLUDE_DIRECTORIES)
-set(P_COMPILE_OPTIONS "-DPOCL_DEBUG_LOG_PREFIX=\"PoCL-D\"")
+set(P_COMPILE_OPTIONS "-DPOCL_DEBUG_LOG_PREFIX=\"PoCL-D\""  "-DBUILDING_POCLD")
 unset(P_LINK_LIST)
 
 ############################################
 ############################################
 
 option(QUEUE_PROFILING "Enable profiling on server queues. Enabled by default" ON)
-
-# CL/opencl.hpp
-list(APPEND P_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../include/hpp")
 
 # messages.h + pocl_remote.h
 list(APPEND P_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../include")
@@ -71,9 +78,22 @@ list(APPEND P_INCLUDE_DIRECTORIES ${CMAKE_CURRENT_SOURCE_DIR})
 list(APPEND P_INCLUDE_DIRECTORIES ${CMAKE_BINARY_DIR})
 # pocl_debug.h + dependencies
 list(APPEND P_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../lib/CL")
-# spirv_parser.hh
+# spirv_parser.hh pocl_spirv_utils.hh
 list(APPEND P_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../lib/CL/devices")
 
+############################################
+if(ENABLE_REMOTE_ADVERTISEMENT_AVAHI)
+  list(APPEND SOURCES avahi_advertise.cc avahi_advertise.hh)
+  find_library(AVAHI_COMMON_LIB NAMES avahi-common REQUIRED)
+  find_library(AVAHI_CLIENT_LIB NAMES avahi-client REQUIRED)
+  list(APPEND P_LINK_LIST ${AVAHI_COMMON_LIB} ${AVAHI_CLIENT_LIB})
+endif()
+
+if(ENABLE_REMOTE_ADVERTISEMENT_DHT)
+  list(APPEND SOURCES dht_advertise.cc dht_advertise.hh)
+  find_library(DHT_LIB NAMES opendht REQUIRED)
+  list(APPEND P_LINK_LIST ${DHT_LIB})
+endif()
 ############################################
 
 if(RDMA_USE_SVM)
@@ -129,6 +149,14 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   message(STATUS "Linking pocld against this libOpenCL: ${OPENCL}")
 
   find_package(Threads REQUIRED)
+
+  find_file(
+    HAVE_LINUX_VSOCK_H
+    NAMES
+      linux/vm_sockets.h
+    PATHS
+      /usr/include
+  )
 
   list(APPEND P_LINK_LIST ${OPENCL} Threads::Threads)
 
@@ -190,7 +218,5 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set_property(TARGET pocld PROPERTY CXX_STANDARD 17)
 
 if (STANDALONE EQUAL 0)
-  install(TARGETS pocld RUNTIME
-        DESTINATION "${POCL_INSTALL_PUBLIC_BINDIR}")
+  install(TARGETS pocld RUNTIME DESTINATION "${POCL_INSTALL_PUBLIC_BINDIR_REL}")
 endif()
-

@@ -112,6 +112,7 @@ extern "C"
     MessageType_BuildProgramFromSource,
     MessageType_BuildProgramFromBinary,
     MessageType_BuildProgramWithBuiltins,
+    MessageType_BuildProgramWithDefinedBuiltins,
     // Special message type for SPIR-V IL for now. No support for
     // vendor-specific ILs.
     MessageType_BuildProgramFromSPIRV,
@@ -120,9 +121,14 @@ extern "C"
     MessageType_LinkProgram,
     MessageType_FreeProgram,
 
+    MessageType_CreateCommandBuffer,
+    MessageType_FreeCommandBuffer,
+
     // ***********************************************
 
     MessageType_MigrateD2D,
+
+    MessageType_Barrier,
 
     MessageType_ReadBuffer,
     MessageType_WriteBuffer,
@@ -141,6 +147,7 @@ extern "C"
     MessageType_FillImageRect,
 
     MessageType_RunKernel,
+    MessageType_RunCommandBuffer,
 
     MessageType_NotifyEvent,
     MessageType_RdmaBufferRegistration,
@@ -178,6 +185,9 @@ extern "C"
     MessageType_BuildProgramReply,
     MessageType_FreeProgramReply,
 
+    MessageType_CreateCommandBufferReply,
+    MessageType_FreeCommandBufferReply,
+
     // ***********************************************
 
     MessageType_MigrateD2DReply,
@@ -195,47 +205,53 @@ extern "C"
     MessageType_FillImageRectReply,
 
     MessageType_RunKernelReply,
+    MessageType_RunCommandBufferReply,
 
     MessageType_Failure
   };
 
-  typedef struct __attribute__ ((packed, aligned (8))) ImgFormatType_s
+  typedef struct __attribute__ ((packed)) ImgFormatType_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint32_t channel_order;
     uint32_t channel_data_type;
   } ImgFormatType_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) ImgFormatInfo_s
+  typedef struct __attribute__ ((packed)) ImgFormatInfo_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint32_t memobj_type;
     uint32_t num_formats;
     ImgFormatType_t formats[MAX_IMAGE_FORMAT_TYPES];
   } ImgFormatInfo_t;
 
-  typedef struct __attribute__ ((packed, aligned (8)))
+  typedef struct __attribute__ ((packed))
   CreateOrAttachSessionMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint64_t peer_id;
     uint16_t peer_port;
     uint8_t use_rdma;
     uint8_t fast_socket;
   } CreateOrAttachSessionMsg_t;
 
-  typedef struct __attribute__ ((packed, aligned (8)))
+  typedef struct __attribute__ ((packed))
   CreateOrAttachSessionReply_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint64_t session;
     uint8_t authkey[AUTHKEY_LENGTH];
     uint16_t peer_port;
     uint8_t use_rdma;
   } CreateOrAttachSessionReply_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) DeviceInfo_s
+  typedef struct __attribute__ ((packed)) DeviceInfo_s
   {
 
     /* ######## device properties ############## */
 
     /* Offsets to the strings-section. */
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint64_t name;
     uint64_t opencl_c_version;
     uint64_t device_version;
@@ -244,6 +260,10 @@ extern "C"
     uint64_t extensions;
     uint64_t builtin_kernels;
     uint64_t supported_spir_v_versions;
+    uint64_t on_host_queue_props;
+    uint64_t cmdbuf_capabilities;
+    uint64_t cmdbuf_required_properties;
+    uint64_t cmdbuf_supported_properties;
 
     uint32_t vendor_id;
     //  uint32_t device_id;
@@ -351,8 +371,9 @@ extern "C"
     uint32_t specific_info_size;
   } DeviceInfo_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) ConnectPeerMsg_s
+  typedef struct __attribute__ ((packed)) ConnectPeerMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint16_t port;
     uint64_t session;
     uint8_t authkey[AUTHKEY_LENGTH];
@@ -366,8 +387,9 @@ extern "C"
   /* ########################## */
   /* ########################## */
 
-  typedef struct __attribute__ ((packed, aligned (8))) MigrateD2DMsg_s
+  typedef struct __attribute__ ((packed)) MigrateD2DMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint64_t size;
     uint32_t source_pid;
     uint32_t source_did;
@@ -381,8 +403,9 @@ extern "C"
     uint32_t depth;
   } MigrateD2DMsg_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) CreateBufferMsg_s
+  typedef struct __attribute__ ((packed)) CreateBufferMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint64_t size;
     uint32_t flags;
     /* If non-zero, a previously allocated SVM pointer to be wrapped as
@@ -396,29 +419,33 @@ extern "C"
     uint64_t origin;
   } CreateBufferMsg_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) CreateBufferReply_s
+  typedef struct __attribute__ ((packed)) CreateBufferReply_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint64_t device_addr;
   } CreateBufferReply_t;
 
 #ifdef ENABLE_RDMA
-  typedef struct __attribute__ ((packed, aligned (8))) CreateRdmaBufferReply_s
+  typedef struct __attribute__ ((packed)) CreateRdmaBufferReply_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint64_t server_vaddr;
     uint32_t server_rkey;
   } CreateRdmaBufferReply_t;
 #endif
 
-  typedef struct __attribute__ ((packed, aligned (8))) FreeBufferMsg_s
+  typedef struct __attribute__ ((packed)) FreeBufferMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint64_t padding;
     /* If set to 1, the id of the buffer is the device side SVM allocation
        address to free, otherwise a cl_mem id.*/
     unsigned char is_svm;
   } FreeBufferMsg_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) ReadBufferMsg_s
+  typedef struct __attribute__ ((packed)) ReadBufferMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint64_t src_offset;
     uint64_t size;
     uint64_t content_size;
@@ -433,8 +460,9 @@ extern "C"
     unsigned char is_svm;
   } ReadBufferMsg_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) WriteBufferMsg_s
+  typedef struct __attribute__ ((packed)) WriteBufferMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint64_t dst_offset;
     uint64_t size;
     uint64_t content_size;
@@ -444,8 +472,9 @@ extern "C"
     unsigned char is_svm;
   } WriteBufferMsg_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) CopyBufferMsg_s
+  typedef struct __attribute__ ((packed)) CopyBufferMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint32_t src_buffer_id;
     uint32_t dst_buffer_id;
     uint32_t size_buffer_id;
@@ -454,15 +483,17 @@ extern "C"
     uint64_t size;
   } CopyBufferMsg_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) FillBufferMsg_s
+  typedef struct __attribute__ ((packed)) FillBufferMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint64_t dst_offset;
     uint64_t size;
     uint64_t pattern_size;
   } FillBufferMsg_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) ReadBufferRectMsg_s
+  typedef struct __attribute__ ((packed)) ReadBufferRectMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     vec3_t buffer_origin;
     vec3_t region;
 
@@ -476,8 +507,9 @@ extern "C"
 #endif
   } ReadBufferRectMsg_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) WriteBufferRectMsg_s
+  typedef struct __attribute__ ((packed)) WriteBufferRectMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     vec3_t buffer_origin;
     vec3_t region;
 
@@ -487,8 +519,9 @@ extern "C"
     uint64_t host_bytes;
   } WriteBufferRectMsg_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) CopyBufferRectMsg_s
+  typedef struct __attribute__ ((packed)) CopyBufferRectMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint32_t src_buffer_id;
     uint32_t dst_buffer_id;
 
@@ -503,8 +536,9 @@ extern "C"
 
   } CopyBufferRectMsg_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) CreateImageMsg_s
+  typedef struct __attribute__ ((packed)) CreateImageMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint32_t flags;
     // format
     uint32_t channel_order;
@@ -521,15 +555,17 @@ extern "C"
     //    cl_uint                 num_samples;
   } CreateImageMsg_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) CreateSamplerMsg_s
+  typedef struct __attribute__ ((packed)) CreateSamplerMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint32_t normalized;
     uint32_t address_mode;
     uint32_t filter_mode;
   } CreateSamplerMsg_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) CopyImage2ImageMsg_s
+  typedef struct __attribute__ ((packed)) CopyImage2ImageMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint32_t src_image_id;
     uint32_t dst_image_id;
 
@@ -539,8 +575,9 @@ extern "C"
 
   } CopyImg2ImgMsg_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) CopyBuf2ImgMsg_s
+  typedef struct __attribute__ ((packed)) CopyBuf2ImgMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     vec3_t origin;
     vec3_t region;
 
@@ -548,8 +585,9 @@ extern "C"
     uint64_t src_offset;
   } CopyBuf2ImgMsg_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) CopyImg2BufMsg_s
+  typedef struct __attribute__ ((packed)) CopyImg2BufMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     vec3_t origin;
     vec3_t region;
 
@@ -557,8 +595,9 @@ extern "C"
     uint64_t dst_offset;
   } CopyImg2BufMsg_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) ReadImageRectMsg_s
+  typedef struct __attribute__ ((packed)) ReadImageRectMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     vec3_t origin;
     vec3_t region;
 
@@ -569,23 +608,26 @@ extern "C"
 #endif
   } ReadImageRectMsg_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) WriteImageRectMsg_s
+  typedef struct __attribute__ ((packed)) WriteImageRectMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     vec3_t origin;
     vec3_t region;
 
     uint64_t host_bytes;
   } WriteImageRectMsg_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) FillImageRectMsg_s
+  typedef struct __attribute__ ((packed)) FillImageRectMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     vec3_t origin;
     vec3_t region;
 
   } FillImageRectMsg_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) BuildProgramMsg_s
+  typedef struct __attribute__ ((packed)) BuildProgramMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint64_t payload_size;
     uint64_t options_len;
     // nonzero, if the program's memory accesses should be offset-adjusted
@@ -598,19 +640,22 @@ extern "C"
     // options: char*
   } BuildProgramMsg_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) CreateKernelMsg_s
+  typedef struct __attribute__ ((packed)) CreateKernelMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint64_t name_len;
     uint32_t prog_id;
   } CreateKernelMsg_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) FreeKernelMsg_s
+  typedef struct __attribute__ ((packed)) FreeKernelMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint32_t prog_id;
   } FreeKernelMsg_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) RunKernelMsg_s
+  typedef struct __attribute__ ((packed)) RunKernelMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     vec3_t global;
     vec3_t local;
     vec3_t offset;
@@ -622,24 +667,36 @@ extern "C"
     uint64_t pod_arg_size;
   } RunKernelMsg_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) DeviceInfoMsg_s
+  typedef struct __attribute__ ((packed)) DeviceInfoMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     /* If non-zero, the client has requested a specific device info
        instead of all standard ones at once. */
     cl_device_info id;
   } DeviceInfoMsg_t;
 
+  typedef struct __attribute__ ((packed, aligned (8))) CreateCommandBufferMsg_s
+  {
+    uint64_t num_queues;
+    uint64_t queues_offset;
+    uint64_t num_commands;
+    uint64_t commands_offset;
+    uint64_t commands_size;
+  } CreateCommandBufferMsg_t;
+
   /* ########################## */
 
-  typedef struct __attribute__ ((packed, aligned (8))) PeerHandshake_s
+  typedef struct __attribute__ ((packed)) PeerHandshake_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint64_t peer_id;
   } PeerHandshake_t;
 
   /* ########################## */
 
-  typedef struct __attribute__ ((packed, aligned (8))) RequestMsg_s
+  typedef struct __attribute__ ((packed)) RequestMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint64_t session;
     uint8_t authkey[AUTHKEY_LENGTH];
     uint64_t msg_id;
@@ -689,6 +746,7 @@ extern "C"
       RunKernelMsg_t run_kernel;
 
       DeviceInfoMsg_t device_info;
+      CreateCommandBufferMsg_t create_cmdbuf;
     } m;
   } RequestMsg_t;
 
@@ -708,8 +766,9 @@ extern "C"
     Local
   } PoclRemoteArgType;
 
-  typedef struct __attribute__ ((packed, aligned (8))) ArgumentInfo_s
+  typedef struct __attribute__ ((packed)) ArgumentInfo_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     STRING_TYPE (name);
     STRING_TYPE (type_name);
     uint32_t address_qualifier;
@@ -743,8 +802,9 @@ extern "C"
     uint64_t completed;
   } EventTiming_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) KernelMetaInfo_s
+  typedef struct __attribute__ ((packed)) KernelMetaInfo_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     STRING_TYPE (name);
     STRING_TYPE (attributes);
     vec3_t reqd_wg_size;
@@ -752,8 +812,9 @@ extern "C"
     uint32_t num_args;
   } KernelMetaInfo_t;
 
-  typedef struct __attribute__ ((packed, aligned (8))) ReplyMsg_s
+  typedef struct __attribute__ ((packed)) ReplyMsg_s
   {
+    POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint64_t msg_id;
     // this is the Platform ID on remote side
     uint32_t pid;
@@ -836,8 +897,13 @@ extern "C"
       case MessageType_CompileProgramFromSource:
       case MessageType_CompileProgramFromSPIRV:
       case MessageType_BuildProgramWithBuiltins:
+      case MessageType_BuildProgramWithDefinedBuiltins:
       case MessageType_LinkProgram:
         body = sizeof (BuildProgramMsg_t);
+        break;
+
+      case MessageType_CreateCommandBuffer:
+        body = sizeof (CreateCommandBufferMsg_t);
         break;
 
       case MessageType_MigrateD2D:

@@ -57,6 +57,7 @@ add_subdirectory("poclcc")
 add_subdirectory("scalarwave")
 add_subdirectory("trig")
 add_subdirectory("vecadd")
+add_subdirectory("vecbuiltin")
 add_subdirectory("matadd")
 add_subdirectory("boxadd")
 add_subdirectory("EinsteinToolkit")
@@ -68,14 +69,15 @@ endif()
 
 # TODO:   opencl-book-samples
 set(ALL_TESTSUITES
-    AMD AMDSDK2.9 AMDSDK3.0
+    AMDSDK3.0
     ASL arrayfire clBLAS CLBlast clFFT chipStar
-    conformance CloverLeaf Halide IntelSVM
+    conformance CloverLeaf Glow Halide IntelSVM
     intel-compute-samples oneapi-samples
     simple-sycl-samples dpcpp-book-samples
     opencl-book-samples OpenCV
     Parboil piglit PyOpenCL
-    Rodinia shoc VexCL ViennaCL Glow)
+    Rodinia shoc VexCL ViennaCL
+    UnitCL)
 
 if("${ENABLE_TESTSUITES}" STREQUAL "all")
   set(ENABLE_TESTSUITES ${ALL_TESTSUITES})

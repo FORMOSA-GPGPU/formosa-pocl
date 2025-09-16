@@ -403,10 +403,10 @@ cl_int pocl_almaif_init(unsigned j, cl_device_id dev, const char *parameters) {
 
   if (D->Dev->isDBDevice()) {
 #ifdef HAVE_DBDEVICE
-    std::vector<BuiltinKernelId> bik_list =
+    std::vector<cl_dbk_id_exp> bik_list =
         ((DBDevice *)(D->Dev))->supportedBuiltinKernels();
 
-    for (const BuiltinKernelId &kernelId : bik_list) {
+    for (const cl_dbk_id_exp &kernelId : bik_list) {
 
       bool found = false;
       for (size_t i = 0; i < BIKERNELS; ++i) {
@@ -430,7 +430,7 @@ cl_int pocl_almaif_init(unsigned j, cl_device_id dev, const char *parameters) {
   } else {
     while ((paramToken = strtok_r(NULL, ",", &savePtr))) {
       auto token = strtoul(paramToken, NULL, 0);
-      BuiltinKernelId kernelId = static_cast<BuiltinKernelId>(token);
+      cl_dbk_id_exp kernelId = static_cast<cl_dbk_id_exp>(token);
 
       bool found = false;
       for (size_t i = 0; i < BIKERNELS; ++i) {
@@ -723,7 +723,7 @@ bool only_custom_device_events_left(cl_event event) {
 
 void pocl_almaif_submit(_cl_command_node *Node, cl_command_queue /*CQ*/) {
 
-  Node->ready = 1;
+  Node->state = POCL_COMMAND_READY;
 
   struct AlmaifData *D = (AlmaifData *)Node->device->data;
   cl_event E = Node->sync.event.event;
@@ -794,12 +794,25 @@ void pocl_almaif_notify(cl_device_id Device, cl_event Event, cl_event Finished) 
   _cl_command_node *volatile Node = Event->command;
 
   if (Finished->status < CL_COMPLETE) {
-    pocl_update_event_failed(Event);
+    /* Unlock the finished event in order to prevent a lock order violation
+     * with the command queue that will be locked during
+     * pocl_update_event_failed.
+     */
+    pocl_unlock_events_inorder(Event, Finished);
+    pocl_update_event_failed(CL_FAILED, NULL, 0, Event, NULL);
+    /* Lock events in this order to avoid a lock order violation between
+     * the finished/notifier and event/wait events.
+     */
+    pocl_lock_events_inorder(Finished, Event);
     return;
   }
 
-  if (!Node->ready)
+  if (Node->state != POCL_COMMAND_READY) {
+    POCL_MSG_PRINT_EVENTS(
+        "almaif: command related to the notified event %lu not ready\n",
+        Event->id);
     return;
+  }
 
   if (Event->command->type != CL_COMMAND_NDRANGE_KERNEL) {
     if (pocl_command_is_ready(Event)) {
@@ -858,9 +871,9 @@ void scheduleNDRange(AlmaifData *data, _cl_command_node *cmd, size_t arg_size,
 #ifdef HAVE_DBDEVICE
   if (data->Dev->isDBDevice()) {
     ((DBDevice *)(data->Dev))
-        ->programBIKernelBitstream((BuiltinKernelId)kernelID);
+        ->programBIKernelBitstream((cl_dbk_id_exp)kernelID);
     ((DBDevice *)(data->Dev))
-        ->programBIKernelFirmware((BuiltinKernelId)kernelID);
+        ->programBIKernelFirmware((cl_dbk_id_exp)kernelID);
   }
 #endif
 

@@ -21,8 +21,6 @@
    IN THE SOFTWARE.
 */
 
-#include <CL/cl_ext.h>
-
 #include "pocl_cl.h"
 
 CL_API_ENTRY cl_int CL_API_CALL
@@ -59,7 +57,8 @@ POname (clFinalizeCommandBufferKHR) (cl_command_buffer_khr command_buffer)
         continue;
 
       int errcode = CL_SUCCESS;
-      if ((*q)->device->ops->create_finalized_command_buffer)
+      if ((!command_buffer->is_multi_device)
+          && (*q)->device->ops->create_finalized_command_buffer)
         errcode = (*q)->device->ops->create_finalized_command_buffer (
             (*q)->device, command_buffer);
       if (errcode != CL_SUCCESS)

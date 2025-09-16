@@ -21,18 +21,6 @@
 #include "pocl_llvm.h"
 #include "pocl_util.h"
 
-extern unsigned long buffer_c;
-extern unsigned long svm_buffer_c;
-extern unsigned long usm_buffer_c;
-extern unsigned long queue_c;
-extern unsigned long context_c;
-extern unsigned long image_c;
-extern unsigned long kernel_c;
-extern unsigned long program_c;
-extern unsigned long sampler_c;
-extern unsigned long uevent_c;
-extern unsigned long event_c;
-
 static struct sigaction sigusr2_action, old_sigusr2_action;
 
 #define FORMATTED_ULONG_MAX_LEN 20
@@ -100,7 +88,7 @@ pocl_install_sigusr2_handler ()
   assert (res == 0);
 }
 
-/* This ugly hack is required because:
+/* This ugly hack is an (optional, partial) solution to the problem
  *
  * OpenCL 1.2 specification, 6.3 Operators :
  *
@@ -112,9 +100,10 @@ pocl_install_sigusr2_handler ()
  * FPU exceptions are masked by default on x86 linux, but integer divide
  * is not and there doesn't seem any sane way to mask it.
  *
- * This *might* be possible to fix with a LLVM pass (either check divisor
- * for 0, or perhaps some vector extension has a suitable instruction), but
- * it's likely to ruin the performance.
+ * This solution only works on Linux (possibly BSD) with SIGFPE handler.
+ *
+ * More platform-independent solution exists in LLVM pass
+ * lib/llvmopencl/SanitizeUBofDivRem.cc
  */
 
 #ifdef __x86_64__
@@ -170,7 +159,7 @@ sigfpe_signal_handler (int signo, siginfo_t *si, void *data)
       /* SIGFPE is delivered to the thread that caused the div-by-zero.
        * check if the thread is on the list of threads we should ignore.
        */
-      pocl_thread_t ID = POCL_THREAD_SELF ();
+      pocl_thread_t ID = POCL_THREAD_SELF();
       int found = 0;
       unsigned max_threads
           = __atomic_load_n (&num_ignored_threads, __ATOMIC_SEQ_CST);
@@ -242,6 +231,8 @@ sigfpe_signal_handler (int signo, siginfo_t *si, void *data)
 
 #endif
 
+static char signal_empty_file[POCL_MAX_PATHNAME_LENGTH];
+
 void
 pocl_install_sigfpe_handler ()
 {
@@ -257,9 +248,8 @@ pocl_install_sigfpe_handler ()
    * Registering our handlers before LLVM creates its sigaltstack
    * leads to interesting crashes & bugs later.
    */
-  char random_empty_file[POCL_MAX_PATHNAME_LENGTH];
-  pocl_cache_tempname (random_empty_file, NULL, NULL);
-  pocl_llvm_remove_file_on_signal (random_empty_file);
+  pocl_cache_tempname (signal_empty_file, NULL, NULL);
+  pocl_llvm_remove_file_on_signal_create (signal_empty_file);
 #endif
 
   POCL_MSG_PRINT_GENERAL ("Installing SIGFPE handler...\n");
@@ -268,5 +258,16 @@ pocl_install_sigfpe_handler ()
   sigfpe_action.sa_sigaction = sigfpe_signal_handler;
   int res = sigaction (SIGFPE, &sigfpe_action, &old_sigfpe_action);
   assert (res == 0);
+#else
+  // this should be handled by CMake
+  assert (0 && "this code path should not be possible");
+#endif
+}
+
+void
+pocl_destroy_sigfpe_handler ()
+{
+#ifdef ENABLE_LLVM
+  pocl_llvm_remove_file_on_signal_destroy (signal_empty_file);
 #endif
 }

@@ -25,11 +25,14 @@
 
 if(ENABLE_SPIRV)
 
-add_compile_options( -Wno-deprecated -Wno-deprecated-declarations)
+if(NOT MSVC)
+  add_compile_options( -Wno-deprecated -Wno-deprecated-declarations)
+endif()
 
 add_definitions("-DSRCDIR=\"${CMAKE_CURRENT_SOURCE_DIR}\"")
 
 add_executable("spirv_printf" printf.cc)
+add_symlink_to_built_opencl_dynlib("spirv_printf")
 
 target_link_libraries("spirv_printf" ${POCLU_LINK_OPTIONS})
 
@@ -40,12 +43,12 @@ set_tests_properties( "spirv/printf"
     COST 4.0
     PROCESSORS 1
     PASS_REGULAR_EXPRESSION "OK"
-    LABELS "internal;spirv"
+    LABELS "spirv"
     DEPENDS "pocl_version_check")
 
 # crashing for unknown reason on Mac OS X
-if(APPLE AND ARM64)
-  set_tests_properties( "spirv/printf" PROPERTIES DISABLED 1)
+if(NOT (APPLE AND ARM64) AND HOST_CPU_ENABLE_SPIRV)
+  set_property(TEST "spirv/printf" APPEND PROPERTY LABELS "cpu")
 endif()
 
 endif()

@@ -25,15 +25,158 @@
 
 #include <string.h>
 
+#include "CL/cl.h"
+#include "config2.h"
+
 #include "common.h"
 #include "common_utils.h"
 #include "cpuinfo.h"
 #include "pocl_builtin_kernels.h"
+#ifdef ENABLE_LLVM
+#include "pocl_llvm.h"
+#endif
 #include "pocl_mem_management.h"
 #include "pocl_runtime_config.h"
 #include "pocl_tensor_util.h"
 #include "topology/pocl_topology.h"
 #include "utlist.h"
+
+#if defined(__i386__) || defined(_M_IX86) || \
+    defined(__x86_64__) || defined(_M_X64)
+#define POCL_ON_X86
+#include <immintrin.h>
+#endif
+
+void
+pocl_restore_ftz (unsigned ftz)
+{
+#if defined(POCL_ON_X86)
+
+#ifdef _MM_FLUSH_ZERO_ON
+  if (ftz & _MM_FLUSH_ZERO_ON)
+    _MM_SET_FLUSH_ZERO_MODE (_MM_FLUSH_ZERO_ON);
+  else
+    _MM_SET_FLUSH_ZERO_MODE (_MM_FLUSH_ZERO_OFF);
+#endif
+#ifdef _MM_DENORMALS_ZERO_ON
+  if (ftz & _MM_DENORMALS_ZERO_ON)
+    _MM_SET_DENORMALS_ZERO_MODE (_MM_DENORMALS_ZERO_ON);
+  else
+    _MM_SET_DENORMALS_ZERO_MODE (_MM_DENORMALS_ZERO_OFF);
+#endif
+
+#endif
+}
+
+unsigned
+pocl_save_ftz ()
+{
+#if defined(POCL_ON_X86)
+
+  unsigned s = 0;
+#ifdef _MM_FLUSH_ZERO_ON
+  if (_MM_GET_FLUSH_ZERO_MODE ())
+    s |= _MM_FLUSH_ZERO_ON;
+  else
+    s &= (~_MM_FLUSH_ZERO_ON);
+#endif
+#ifdef _MM_DENORMALS_ZERO_ON
+  if (_MM_GET_DENORMALS_ZERO_MODE ())
+    s |= _MM_DENORMALS_ZERO_ON;
+  else
+    s &= (~_MM_DENORMALS_ZERO_ON);
+#endif
+  return s;
+
+#else
+  return 0;
+#endif
+}
+
+void
+pocl_set_ftz (unsigned ftz)
+{
+#if defined(POCL_ON_X86)
+  if (ftz)
+    {
+#ifdef _MM_FLUSH_ZERO_ON
+      _MM_SET_FLUSH_ZERO_MODE (_MM_FLUSH_ZERO_ON);
+#endif
+
+#ifdef _MM_DENORMALS_ZERO_ON
+      _MM_SET_DENORMALS_ZERO_MODE (_MM_DENORMALS_ZERO_ON);
+#endif
+    }
+  else
+    {
+#ifdef _MM_FLUSH_ZERO_OFF
+      _MM_SET_FLUSH_ZERO_MODE (_MM_FLUSH_ZERO_OFF);
+#endif
+
+#ifdef _MM_DENORMALS_ZERO_OFF
+      _MM_SET_DENORMALS_ZERO_MODE (_MM_DENORMALS_ZERO_OFF);
+#endif
+    }
+#endif
+}
+
+void
+pocl_set_default_rm ()
+{
+#if defined(POCL_ON_X86) && defined(_MM_ROUND_NEAREST)
+  unsigned rm = _MM_GET_ROUNDING_MODE ();
+  if (rm != _MM_ROUND_NEAREST)
+    _MM_SET_ROUNDING_MODE (_MM_ROUND_NEAREST);
+#endif
+}
+
+unsigned
+pocl_save_rm ()
+{
+#if defined(POCL_ON_X86) && defined(_MM_ROUND_NEAREST)
+  return _MM_GET_ROUNDING_MODE ();
+#else
+  return 0;
+#endif
+}
+
+void
+pocl_restore_rm (unsigned rm)
+{
+#if defined(POCL_ON_X86) && defined(_MM_ROUND_NEAREST)
+  _MM_SET_ROUNDING_MODE (rm);
+#endif
+}
+
+void
+pocl_cpu_save_rm_and_ftz (unsigned *rm, unsigned *ftz)
+{
+  *rm = pocl_save_rm ();
+  *ftz = pocl_save_ftz ();
+}
+
+void
+pocl_cpu_restore_rm_and_ftz (unsigned rm, unsigned ftz)
+{
+  pocl_restore_rm (rm);
+  pocl_restore_ftz (ftz);
+}
+
+void
+pocl_cpu_setup_rm_and_ftz (cl_device_id dev, cl_program prog)
+{
+  /* Flush to zero is only set once at start of kernel (because FTZ is
+   * a compilation option) */
+  cl_device_fp_config supports_any_denorms
+    = (dev->half_fp_config | dev->single_fp_config | dev->double_fp_config)
+      & CL_FP_DENORM;
+  if (supports_any_denorms)
+    pocl_set_ftz (prog->flush_denorms);
+  else
+    pocl_set_ftz (1);
+  /* Rounding mode change is deprecated & only supported by OpenCL 1.0 */
+  pocl_set_default_rm ();
+}
 
 #ifdef HAVE_LIBXSMM
 #include <libxsmm.h>
@@ -111,18 +254,81 @@ align_ptr (char *p)
 
 #define FALLBACK_MAX_THREAD_COUNT 8
 
-/* Initializes CPU-specific device info default, that cannot / should
-   not be initialized in pocl_init_default_device_infos()
-*/
+static const char *final_ld_flags[] = { HOST_LD_FLAGS_ARRAY, NULL };
+
+/** Initializes device info defaults for CPU (host) devices.
+ *
+ * pocl_init_default_device_infos() can be called instead
+ * for non-CPU (host) devices.
+ */
 cl_int
 pocl_cpu_init_common (cl_device_id device)
 {
   int ret = CL_SUCCESS;
 
+#ifdef ENABLE_LLVM
+  device->llvm_target_triplet = OCL_KERNEL_TARGET;
+
+#ifdef KERNELLIB_HOST_DISTRO_VARIANTS
+  const char* kernellib_variant = pocl_get_distro_kernellib_variant ();
+  device->llvm_cpu = pocl_get_distro_cpu_name (kernellib_variant);
+#else
+  device->llvm_cpu = OCL_KERNEL_TARGET_CPU;
+  if (device->llvm_cpu == NULL)
+    device->llvm_cpu = pocl_get_llvm_cpu_name ();
+#endif
+
+  char kernellib[POCL_MAX_PATHNAME_LENGTH] = "kernel-";
+  char kernellib_fallback[POCL_MAX_PATHNAME_LENGTH];
+  strcat(kernellib, device->llvm_target_triplet);
+  strcat(kernellib, "-");
+
+#ifdef KERNELLIB_HOST_DISTRO_VARIANTS
+  strcpy(kernellib_fallback, kernellib);
+  strcat(kernellib_fallback, "generic");
+  strcat(kernellib, kernellib_variant);
+#elif defined(HOST_CPU_FORCED)
+  strcat(kernellib, OCL_KERNEL_TARGET_CPU);
+#else
+  strncpy (kernellib_fallback, kernellib, POCL_MAX_PATHNAME_LENGTH);
+  strncat (kernellib_fallback, OCL_KERNEL_TARGET_CPU,
+           POCL_MAX_PATHNAME_LENGTH - strlen (kernellib));
+  strncat (kernellib, device->llvm_cpu,
+           POCL_MAX_PATHNAME_LENGTH - strlen (kernellib)
+             - strlen (OCL_KERNEL_TARGET_CPU));
+#endif
+  device->kernellib_fallback_name = strdup(kernellib_fallback);
+  device->kernellib_name = strdup(kernellib);
+  if (device->kernellib_subdir == NULL)
+    device->kernellib_subdir = "host";
+  device->llvm_abi = pocl_get_llvm_cpu_abi ();
+
+#ifndef ENABLE_SIGFPE_HANDLER
+  if (strstr (OCL_KERNEL_TARGET, "x86") != NULL)
+    device->run_sanitize_divrem_pass = CL_TRUE;
+#endif
+
+#endif
+
   pocl_init_default_device_infos (device, HOST_DEVICE_EXTENSIONS);
 
-  SETUP_DEVICE_CL_VERSION (device, HOST_DEVICE_CL_VERSION_MAJOR,
-                           HOST_DEVICE_CL_VERSION_MINOR)
+#ifdef HOST_CPU_ENABLE_SPIRV
+  device->supported_spirv_extensions = "+SPV_KHR_no_integer_wrap_decoration"
+                                       ",+SPV_INTEL_fp_fast_math_mode"
+                                       ",+SPV_EXT_shader_atomic_float_add"
+                                       ",+SPV_INTEL_memory_access_aliasing"
+                                       ",+SPV_INTEL_inline_assembly";
+
+#if LLVM_MAJOR >= 20
+  device->supported_spir_v_versions
+    = "SPIR-V_1.5 SPIR-V_1.4 SPIR-V_1.3 SPIR-V_1.2 SPIR-V_1.1 SPIR-V_1.0";
+#elif LLVM_MAJOR >= 19
+  device->supported_spir_v_versions
+    = "SPIR-V_1.4 SPIR-V_1.3 SPIR-V_1.2 SPIR-V_1.1 SPIR-V_1.0";
+#else
+  device->supported_spir_v_versions = "SPIR-V_1.2 SPIR-V_1.1 SPIR-V_1.0";
+#endif
+#endif
 
   if (strstr (HOST_DEVICE_EXTENSIONS, "cl_khr_subgroup") != NULL)
     {
@@ -146,21 +352,34 @@ pocl_cpu_init_common (cl_device_id device)
                   "org.khronos.openvx.scale_image.nn.u8;"
                   "org.khronos.openvx.scale_image.bl.u8;"
                   "org.khronos.openvx.tensor_convert_depth.wrap.u8.f32;"
+                  "img_color_convert_exp;"
 #ifdef HAVE_LIBXSMM
-                  "exp_gemm;"
-                  "exp_matmul;"
+                  "gemm_exp;"
+                  "matmul_exp;"
 #endif
 #ifdef HAVE_LIBJPEG_TURBO
-                  "exp_jpeg_encode;"
-                  "exp_jpeg_decode;"
+                  "jpeg_encode_exp;"
+                  "jpeg_decode_exp;"
+#endif
+#ifdef HAVE_ONNXRT
+                  "onnx_inference_exp;"
+#endif
+#ifdef HAVE_OPENCV
+                  "nms_box_exp;"
 #endif
         );
-      device->num_builtin_kernels = 4
+      device->num_builtin_kernels = 5
 #ifdef HAVE_LIBXSMM
                                     + 2
 #endif
 #ifdef HAVE_LIBJPEG_TURBO
                                     + 2
+#endif
+#ifdef HAVE_ONNXRT
+                                    + 1
+#endif
+#ifdef HAVE_OPENCV
+                                    + 1
 #endif
         ;
     }
@@ -168,14 +387,46 @@ pocl_cpu_init_common (cl_device_id device)
   /* 0 is the host memory shared with all drivers that use it */
   device->global_mem_id = 0;
 
-  device->version_of_latest_passed_cts = HOST_DEVICE_LATEST_CTS_PASS;
+#ifndef HOST_CPU_ENABLE_DENORMS
+  if (device->single_fp_config)
+    device->single_fp_config = device->single_fp_config & (~CL_FP_DENORM);
+  if (device->half_fp_config)
+    device->half_fp_config = device->half_fp_config & (~CL_FP_DENORM);
+#ifndef ENABLE_CONFORMANCE
+  /* denorm is mandatory for FP64, but when conformance=OFF
+   * we can disable it also for FP64 */
+  if (device->double_fp_config)
+    device->double_fp_config = device->double_fp_config & (~CL_FP_DENORM);
+#endif
+#endif
+
+  device->version_of_latest_passed_cts = "v2024-08-08-00";
   device->extensions = HOST_DEVICE_EXTENSIONS;
 
   device->features = HOST_DEVICE_FEATURES_30;
-  device->run_program_scope_variables_pass = CL_TRUE;
+  if (strstr (HOST_DEVICE_FEATURES_30, "__opencl_c_program_scope_global_variables") != NULL)
+    device->run_program_scope_variables_pass = CL_TRUE;
   device->generic_as_support = CL_TRUE;
   device->wg_collective_func_support = CL_TRUE;
   device->device_side_printf = CL_TRUE;
+
+  if (strstr (HOST_DEVICE_EXTENSIONS, "cl_ext_float_atomics") != NULL)
+    {
+      device->single_fp_atomic_caps = device->double_fp_atomic_caps
+        = CL_DEVICE_GLOBAL_FP_ATOMIC_ADD_EXT
+          | CL_DEVICE_GLOBAL_FP_ATOMIC_MIN_MAX_EXT
+          | CL_DEVICE_LOCAL_FP_ATOMIC_ADD_EXT
+          | CL_DEVICE_LOCAL_FP_ATOMIC_MIN_MAX_EXT;
+      device->features
+        = HOST_DEVICE_FEATURES_30 " __opencl_c_ext_fp32_global_atomic_add"
+                                  " __opencl_c_ext_fp64_global_atomic_add"
+                                  " __opencl_c_ext_fp32_local_atomic_add"
+                                  " __opencl_c_ext_fp64_local_atomic_add"
+                                  " __opencl_c_ext_fp32_global_atomic_min_max"
+                                  " __opencl_c_ext_fp64_global_atomic_min_max"
+                                  " __opencl_c_ext_fp32_local_atomic_min_max"
+                                  " __opencl_c_ext_fp64_local_atomic_min_max";
+    }
 
   pocl_setup_opencl_c_with_version (device, CL_TRUE);
   pocl_setup_features_with_version (device);
@@ -193,18 +444,14 @@ pocl_cpu_init_common (cl_device_id device)
      || (defined(ENABLE_CONFORMANCE) && (HOST_DEVICE_CL_VERSION_MAJOR >= 3)))
   /* full memory consistency model for atomic memory and fence operations
   https://www.khronos.org/registry/OpenCL/specs/3.0-unified/html/OpenCL_API.html#opencl-3.0-backwards-compatibility*/
-  device->atomic_memory_capabilities = CL_DEVICE_ATOMIC_ORDER_RELAXED
-                                       | CL_DEVICE_ATOMIC_ORDER_ACQ_REL
-                                       | CL_DEVICE_ATOMIC_ORDER_SEQ_CST
-                                       | CL_DEVICE_ATOMIC_SCOPE_WORK_GROUP 
-                                       | CL_DEVICE_ATOMIC_SCOPE_DEVICE
-                                       | CL_DEVICE_ATOMIC_SCOPE_ALL_DEVICES;
-  device->atomic_fence_capabilities = CL_DEVICE_ATOMIC_ORDER_RELAXED
-                                       | CL_DEVICE_ATOMIC_ORDER_ACQ_REL
-                                       | CL_DEVICE_ATOMIC_ORDER_SEQ_CST
-                                       | CL_DEVICE_ATOMIC_SCOPE_WORK_ITEM 
-                                       | CL_DEVICE_ATOMIC_SCOPE_WORK_GROUP 
-                                       | CL_DEVICE_ATOMIC_SCOPE_DEVICE;
+  device->atomic_memory_capabilities
+    = CL_DEVICE_ATOMIC_ORDER_RELAXED | CL_DEVICE_ATOMIC_ORDER_ACQ_REL
+      | CL_DEVICE_ATOMIC_ORDER_SEQ_CST | CL_DEVICE_ATOMIC_SCOPE_WORK_GROUP
+      | CL_DEVICE_ATOMIC_SCOPE_DEVICE | CL_DEVICE_ATOMIC_SCOPE_ALL_DEVICES;
+  device->atomic_fence_capabilities
+    = CL_DEVICE_ATOMIC_ORDER_RELAXED | CL_DEVICE_ATOMIC_ORDER_ACQ_REL
+      | CL_DEVICE_ATOMIC_ORDER_SEQ_CST | CL_DEVICE_ATOMIC_SCOPE_WORK_ITEM
+      | CL_DEVICE_ATOMIC_SCOPE_WORK_GROUP | CL_DEVICE_ATOMIC_SCOPE_DEVICE;
 
   device->svm_allocation_priority = 1;
 
@@ -213,18 +460,6 @@ pocl_cpu_init_common (cl_device_id device)
                      | CL_DEVICE_SVM_FINE_GRAIN_BUFFER
                      | CL_DEVICE_SVM_FINE_GRAIN_SYSTEM
                      | CL_DEVICE_SVM_ATOMICS;
-
-  if (strstr (HOST_DEVICE_EXTENSIONS, "cl_ext_float_atomics") != NULL)
-    {
-      device->single_fp_atomic_caps = device->double_fp_atomic_caps
-          = CL_DEVICE_GLOBAL_FP_ATOMIC_LOAD_STORE_EXT
-            | CL_DEVICE_GLOBAL_FP_ATOMIC_ADD_EXT
-            | CL_DEVICE_GLOBAL_FP_ATOMIC_MIN_MAX_EXT
-            | CL_DEVICE_LOCAL_FP_ATOMIC_LOAD_STORE_EXT
-            | CL_DEVICE_LOCAL_FP_ATOMIC_ADD_EXT
-            | CL_DEVICE_LOCAL_FP_ATOMIC_MIN_MAX_EXT;
-    }
-
 #endif
 
   if (strstr (HOST_DEVICE_EXTENSIONS, "cl_intel_unified_shared_memory")
@@ -260,23 +495,34 @@ pocl_cpu_init_common (cl_device_id device)
 
   /* old env variable */
   int max_threads = pocl_get_int_option ("POCL_MAX_PTHREAD_COUNT", 0);
-
   if (max_threads <= 0)
-    max_threads = pocl_get_int_option ("POCL_CPU_MAX_CU_COUNT", fallback);
-
-  /* old env variable */
-  int min_threads = pocl_get_int_option ("POCL_PTHREAD_MIN_THREADS", 0);
-  if (min_threads <= 0)
-    min_threads = pocl_get_int_option ("POCL_CPU_MIN_CU_COUNT", 1);
+    max_threads = pocl_get_int_option ("POCL_CPU_MAX_CU_COUNT", 0);
+  if (max_threads <= 0)
+    max_threads = pocl_get_int_option ("POCL_MAX_COMPUTE_UNITS", fallback);
 
   device->max_compute_units
-      = max ((unsigned)max_threads, (unsigned)min_threads);
+      = max ((unsigned)max_threads, (unsigned)1);
 
   pocl_cpuinfo_detect_device_info (device);
   pocl_set_buffer_image_limits (device);
 
   device->local_mem_size = pocl_get_int_option ("POCL_CPU_LOCAL_MEM_SIZE",
                                                 device->local_mem_size);
+  device->final_linkage_flags = final_ld_flags;
+
+#ifndef ENABLE_CONFORMANCE
+  device->cmdbuf_capabilities
+    = CL_COMMAND_BUFFER_CAPABILITY_SIMULTANEOUS_USE_KHR
+      | CL_COMMAND_BUFFER_CAPABILITY_KERNEL_PRINTF_KHR
+      | CL_COMMAND_BUFFER_CAPABILITY_MULTIPLE_QUEUE_KHR;
+  device->cmdbuf_required_properties = 0;
+  device->cmdbuf_supported_properties = device->on_host_queue_props;
+  /* TBD: arguments, in particular buffers, require more work
+   * because of migration commands */
+  device->cmdbuf_mutable_dispatch_capabilities
+    = CL_MUTABLE_DISPATCH_GLOBAL_SIZE_KHR | CL_MUTABLE_DISPATCH_LOCAL_SIZE_KHR
+      | CL_MUTABLE_DISPATCH_GLOBAL_OFFSET_KHR;
+#endif
 
   return ret;
 }
@@ -292,10 +538,8 @@ pocl_setup_kernel_arg_array (kernel_run_command *k)
   cl_uint i;
   void **arguments;
   void **arguments2;
-  k->arguments = arguments
-      = pocl_aligned_malloc (MAX_EXTENDED_ALIGNMENT, ARGS_SIZE);
-  k->arguments2 = arguments2
-      = pocl_aligned_malloc (MAX_EXTENDED_ALIGNMENT, ARGS_SIZE);
+  k->arguments = arguments = malloc (ARGS_SIZE);
+  k->arguments2 = arguments2 = malloc (ARGS_SIZE);
 
   for (i = 0; i < meta->num_args; ++i)
     {
@@ -333,7 +577,7 @@ pocl_setup_kernel_arg_array (kernel_run_command *k)
         }
       else if (meta->arg_info[i].type == POCL_ARG_TYPE_IMAGE)
         {
-          dev_image_t di;
+          dev_image_t di = { NULL };
           pocl_fill_dev_image_t (&di, al, k->device);
           void *devptr = pocl_aligned_malloc (MAX_EXTENDED_ALIGNMENT,
                                               sizeof (dev_image_t));
@@ -360,10 +604,12 @@ pocl_setup_kernel_arg_array (kernel_run_command *k)
  *
  * they're set up by 1) memcpy from kernel_run_command, 2) all
  * local args are set to thread-local "local memory" storage. */
-void
-pocl_setup_kernel_arg_array_with_locals (void **arguments, void **arguments2,
-                                    kernel_run_command *k, char *local_mem,
-                                    size_t local_mem_size)
+int
+pocl_setup_kernel_arg_array_with_locals (void **arguments,
+                                         void **arguments2,
+                                         kernel_run_command *k,
+                                         char *local_mem,
+                                         size_t local_mem_size)
 {
   pocl_kernel_metadata_t *meta = k->kernel->meta;
   cl_uint i;
@@ -426,16 +672,18 @@ pocl_setup_kernel_arg_array_with_locals (void **arguments, void **arguments2,
                 {
                   total_auto_local_size += meta->local_sizes[j];
                 }
-              POCL_ABORT (
+              POCL_MSG_ERR (
                   "PoCL detected an OpenCL program error: "
-                  "%d automatic local buffer(s) with total size %lu "
-                  "bytes doesn't fit to the local memory of size %lu\n",
+                  "%d automatic local buffer(s) with total size %zu "
+                  "bytes doesn't fit to the local memory of size %zu\n",
                   meta->num_locals, total_auto_local_size, local_mem_size);
+              return CL_FAILED;
             }
           start += size;
           start = align_ptr (start);
         }
     }
+  return CL_SUCCESS;
 }
 
 /* called from kernel teardown code.
@@ -465,7 +713,7 @@ pocl_free_kernel_arg_array (kernel_run_command *k)
         }
       else if (meta->arg_info[i].type == POCL_ARG_TYPE_IMAGE)
         {
-          POCL_MEM_FREE (arguments2[i]);
+          pocl_aligned_free (arguments2[i]);
         }
     }
 
@@ -504,38 +752,35 @@ pocl_free_kernel_arg_array_with_locals (void **arguments, void **arguments2,
 #ifdef HAVE_LIBXSMM
 
 static libxsmm_datatype
-pocl_convert_to_libxsmm_type (cl_tensor_datatype T)
+pocl_convert_to_libxsmm_type (cl_tensor_datatype_exp T)
 {
   switch (T)
     {
-    case CL_TENSOR_DTYPE_FP64:
+    case CL_TENSOR_DTYPE_FP64_EXP:
       return LIBXSMM_DATATYPE_F64;
-    case CL_TENSOR_DTYPE_FP32:
+    case CL_TENSOR_DTYPE_FP32_EXP:
       return LIBXSMM_DATATYPE_F32;
-    case CL_TENSOR_DTYPE_FP16:
+    case CL_TENSOR_DTYPE_FP16_EXP:
       return LIBXSMM_DATATYPE_F16;
-    case CL_TENSOR_DTYPE_FP8:
-      return LIBXSMM_DATATYPE_HF8;
-
-    case CL_TENSOR_DTYPE_INT64:
+    case CL_TENSOR_DTYPE_INT64_EXP:
       return LIBXSMM_DATATYPE_I64;
-    case CL_TENSOR_DTYPE_UINT64:
+    case CL_TENSOR_DTYPE_UINT64_EXP:
       return LIBXSMM_DATATYPE_U64;
-    case CL_TENSOR_DTYPE_INT32:
+    case CL_TENSOR_DTYPE_INT32_EXP:
       return LIBXSMM_DATATYPE_I32;
-    case CL_TENSOR_DTYPE_UINT32:
+    case CL_TENSOR_DTYPE_UINT32_EXP:
       return LIBXSMM_DATATYPE_U32;
-    case CL_TENSOR_DTYPE_INT16:
+    case CL_TENSOR_DTYPE_INT16_EXP:
       return LIBXSMM_DATATYPE_I16;
-    case CL_TENSOR_DTYPE_UINT16:
+    case CL_TENSOR_DTYPE_UINT16_EXP:
       return LIBXSMM_DATATYPE_U16;
-    case CL_TENSOR_DTYPE_INT8:
+    case CL_TENSOR_DTYPE_INT8_EXP:
       return LIBXSMM_DATATYPE_I8;
-    case CL_TENSOR_DTYPE_UINT8:
+    case CL_TENSOR_DTYPE_UINT8_EXP:
       return LIBXSMM_DATATYPE_U8;
-    case CL_TENSOR_DTYPE_INT4:
+    case CL_TENSOR_DTYPE_INT4_EXP:
       return LIBXSMM_DATATYPE_IMPLICIT;
-    case CL_TENSOR_DTYPE_UINT4:
+    case CL_TENSOR_DTYPE_UINT4_EXP:
       return LIBXSMM_DATATYPE_IMPLICIT;
 
     default:
@@ -546,12 +791,12 @@ pocl_convert_to_libxsmm_type (cl_tensor_datatype T)
 int
 pocl_cpu_validate_khr_gemm (cl_bool TransA,
                             cl_bool TransB,
-                            const cl_tensor_desc *TenA,
-                            const cl_tensor_desc *TenB,
-                            const cl_tensor_desc *TenCIOpt,
-                            const cl_tensor_desc *TenCOut,
-                            const cl_tensor_datatype_value *Alpha,
-                            const cl_tensor_datatype_value *Beta)
+                            const cl_tensor_desc_exp *TenA,
+                            const cl_tensor_desc_exp *TenB,
+                            const cl_tensor_desc_exp *TenCIOpt,
+                            const cl_tensor_desc_exp *TenCOut,
+                            const cl_tensor_datatype_value_exp *Alpha,
+                            const cl_tensor_datatype_value_exp *Beta)
 {
   /* TODO: We probably need to have support for mixed input/output
    * precisions to be able to fit results of large, low precision input
@@ -565,39 +810,41 @@ pocl_cpu_validate_khr_gemm (cl_bool TransA,
    * initial validation (pocl_validate_khr_gemm) */
 
   /* currently FP 16-64 and INT 8-64 are supported */
-  POCL_RETURN_ERROR_ON ((TenA->dtype == CL_TENSOR_DTYPE_FP8
-                         || TenA->dtype == CL_TENSOR_DTYPE_INT4
-                         || TenCOut->dtype == CL_TENSOR_DTYPE_FP8
-                         || TenCOut->dtype == CL_TENSOR_DTYPE_INT4),
-                        CL_INVALID_TENSOR_DATATYPE,
+  /* FIXME: This check does not scale well. convert this into
+            whitelisted check. */
+  POCL_RETURN_ERROR_ON ((TenA->dtype == CL_TENSOR_DTYPE_FP8E4M3_EXP
+                         || TenA->dtype == CL_TENSOR_DTYPE_FP8E5M2_EXP
+                         || TenA->dtype == CL_TENSOR_DTYPE_INT4_EXP
+                         || TenCOut->dtype == CL_TENSOR_DTYPE_INT4_EXP),
+                        CL_INVALID_TENSOR_DATATYPE_EXP,
                         "Datatype support not yet implemented. CPU supports "
                         "only FP16/32/64 and INT8/16/32/64 currently\n");
 
   /* type mixing check */
   POCL_RETURN_ERROR_ON ((pocl_tensor_type_is_int (TenA->dtype)
                          != pocl_tensor_type_is_int (TenCOut->dtype)),
-                        CL_INVALID_TENSOR_DATATYPE,
+                        CL_INVALID_TENSOR_DATATYPE_EXP,
                         "Datatype mixing (INT/FP) not supported");
 
   POCL_RETURN_ERROR_ON ((pocl_tensor_type_size (TenA->dtype)
                          > pocl_tensor_type_size (TenCOut->dtype)),
-                        CL_INVALID_TENSOR_DATATYPE,
+                        CL_INVALID_TENSOR_DATATYPE_EXP,
                         "Datatype of C is smaller than A");
 
-  const cl_tensor_properties P = TenA->properties[0];
+  const cl_tensor_properties_exp P = TenA->properties[0];
   if (P != 0)
     {
-      POCL_RETURN_ERROR_ON ((P == CL_TENSOR_PROPERTY_MUTABLE_DTYPE),
-                            CL_INVALID_TENSOR_PROPERTY,
+      POCL_RETURN_ERROR_ON ((P == CL_TENSOR_PROPERTY_MUTABLE_DTYPE_EXP),
+                            CL_INVALID_TENSOR_PROPERTY_EXP,
                             "CPU driver does not "
-                            "support CL_TENSOR_PROPERTY_MUTABLE_DTYPE\n");
-      POCL_RETURN_ERROR_ON ((P == CL_TENSOR_PROPERTY_MUTABLE_LAYOUT),
-                            CL_INVALID_TENSOR_PROPERTY,
+                            "support CL_TENSOR_PROPERTY_MUTABLE_DTYPE_EXP\n");
+      POCL_RETURN_ERROR_ON ((P == CL_TENSOR_PROPERTY_MUTABLE_LAYOUT_EXP),
+                            CL_INVALID_TENSOR_PROPERTY_EXP,
                             "CPU driver does not "
-                            "support CL_TENSOR_PROPERTY_MUTABLE_LAYOUT\n");
+                            "support CL_TENSOR_PROPERTY_MUTABLE_LAYOUT_EXP\n");
       // Mutable dims are supported by CPU
-      POCL_RETURN_ERROR_ON ((P != CL_TENSOR_PROPERTY_MUTABLE_SHAPE),
-                            CL_INVALID_TENSOR_PROPERTY,
+      POCL_RETURN_ERROR_ON ((P != CL_TENSOR_PROPERTY_MUTABLE_SHAPE_EXP),
+                            CL_INVALID_TENSOR_PROPERTY_EXP,
                             "Unknown Property %" PRIu64 "\n", P);
     }
 
@@ -607,7 +854,8 @@ pocl_cpu_validate_khr_gemm (cl_bool TransA,
       cl_bool IsAlphaOne
         = pocl_tensor_dtype_value_equals (TenA->dtype, Alpha, 1.0, 1, 1, 1, 1);
 
-      POCL_RETURN_ERROR_ON (IsAlphaOne == CL_FALSE, CL_INVALID_DBK_ATTRIBUTE,
+      POCL_RETURN_ERROR_ON (IsAlphaOne == CL_FALSE,
+                            CL_DBK_INVALID_ATTRIBUTE_EXP,
                             "CPU supports only Alpha == 1.0\n");
     }
   if (Beta)
@@ -619,7 +867,7 @@ pocl_cpu_validate_khr_gemm (cl_bool TransA,
         = pocl_tensor_dtype_value_equals (TenA->dtype, Beta, 0.0, 0, 0, 0, 0);
 
       POCL_RETURN_ERROR_ON ((!IsBetaOne && !IsBetaZero),
-                            CL_INVALID_DBK_ATTRIBUTE,
+                            CL_DBK_INVALID_ATTRIBUTE_EXP,
                             "CPU supports only Beta == 0.0 or 1.0\n");
     }
 
@@ -632,14 +880,14 @@ pocl_cpu_validate_khr_gemm (cl_bool TransA,
 
 int
 pocl_cpu_supports_dbk (cl_device_id device,
-                       BuiltinKernelId kernel_id,
+                       cl_dbk_id_exp kernel_id,
                        const void *kernel_attributes)
 {
   switch (kernel_id)
     {
 #ifdef HAVE_LIBXSMM
-    case POCL_CDBI_DBK_EXP_GEMM:
-    case POCL_CDBI_DBK_EXP_MATMUL:
+    case CL_DBK_GEMM_EXP:
+    case CL_DBK_MATMUL_EXP:
       {
         /* The following code checks for LIBXSMM specific requirements put
          * on the tensors that are part of the kernel attributes. */
@@ -648,13 +896,23 @@ pocl_cpu_supports_dbk (cl_device_id device,
       }
 #endif
 #ifdef HAVE_LIBJPEG_TURBO
-    case POCL_CDBI_DBK_EXP_JPEG_DECODE:
-    case POCL_CDBI_DBK_EXP_JPEG_ENCODE:
+    case CL_DBK_JPEG_DECODE_EXP:
+    case CL_DBK_JPEG_ENCODE_EXP:
+      return pocl_validate_dbk_attributes (kernel_id, kernel_attributes, NULL);
+#endif
+#ifdef HAVE_ONNXRT
+    case CL_DBK_ONNX_INFERENCE_EXP:
+      return pocl_validate_dbk_attributes (kernel_id, kernel_attributes, NULL);
+#endif
+    case CL_DBK_IMG_COLOR_CONVERT_EXP:
+      return CL_SUCCESS;
+#ifdef HAVE_OPENCV
+    case CL_DBK_NMS_BOX_EXP:
       return pocl_validate_dbk_attributes (kernel_id, kernel_attributes, NULL);
 #endif
     default:
-      POCL_RETURN_ERROR_ON (
-        1, CL_UNSUPPORTED_DBK,
+      POCL_RETURN_ERROR (
+        CL_DBK_UNSUPPORTED_EXP,
         "The CPU driver does not support DBK (kernel id %d).\n", kernel_id);
     }
 }
@@ -678,53 +936,40 @@ pocl_cpu_build_defined_builtin (cl_program program, cl_uint device_i)
 #ifdef HAVE_LIBJPEG_TURBO
   return CL_SUCCESS;
 #endif
+#ifdef HAVE_ONNXRT
+  return CL_SUCCESS;
+#endif
+#ifdef HAVE_OPENCV
+  return CL_SUCCESS;
+#endif
   /* TODO: is it necessary to return an error here or can it be caught earlier
      on? */
-  POCL_RETURN_ERROR_ON (
-    1, CL_BUILD_PROGRAM_FAILURE,
+  POCL_RETURN_ERROR (
+    CL_BUILD_PROGRAM_FAILURE,
     "The CPU driver has not been compiled with support for DBKs\n");
-}
-
-/**
- * Get the device memory pointer of the supplied pocl argument.
- *
- * \param global_mem_id [in] This is needed to get the device specific pointer.
- * \return NULL if arg->value is NULL and otherwise the requested pointer.
- */
-void *
-pocl_cpu_get_ptr (struct pocl_argument *arg, unsigned global_mem_id)
-{
-  if (arg->value == NULL)
-    return NULL;
-
-  if (arg->is_raw_ptr)
-    return *(void **)arg->value;
-
-  cl_mem mem = *(cl_mem *)(arg->value);
-  char *ptr = (char *)(mem->device_ptrs[global_mem_id].mem_ptr);
-  ptr += arg->offset;
-  return (void *)ptr;
 }
 
 #ifdef HAVE_LIBXSMM
 
 static cl_bool
-tensor_is_blas_row_major (const cl_tensor_desc *A)
+tensor_is_blas_row_major (const cl_tensor_desc_exp *A)
 {
   assert (A);
   assert (A->layout && "Does not have data layout!");
-  assert (
-    A->layout_type == CL_TENSOR_LAYOUT_BLAS
-    && "The method must not be called for tensors with non-BLAS data layouts");
-  const cl_tensor_layout_blas *BL = (const cl_tensor_layout_blas *)A->layout;
+  assert ((A->layout_type == CL_TENSOR_LAYOUT_BLAS_EXP
+           || A->layout_type == CL_TENSOR_LAYOUT_BLAS_PITCHED_EXP)
+          && "The method must not be called for tensors with non-BLAS data "
+             "layouts");
+  const cl_tensor_layout_blas_exp *BL
+    = (const cl_tensor_layout_blas_exp *)A->layout;
   assert (A->rank >= 2 && "Not a (batched) matrix!");
 
   return BL->leading_dims[0] == (A->rank - 1u) ? CL_TRUE : CL_FALSE;
 }
 
 static unsigned
-tensor_get_trailing_dim (const cl_tensor_desc *A,
-                         const cl_tensor_layout_blas *BL)
+tensor_get_trailing_dim (const cl_tensor_desc_exp *A,
+                         const cl_tensor_dim_exp *leading_dims)
 {
   assert (A);
   assert ((A->rank < (sizeof (unsigned) * 8))
@@ -732,7 +977,7 @@ tensor_get_trailing_dim (const cl_tensor_desc *A,
 
   unsigned DimSet = (1u << A->rank) - 1;
   for (unsigned I = 0; I < A->rank - 1; I++)
-    DimSet &= ~(1u << BL->leading_dims[I]);
+    DimSet &= ~(1u << leading_dims[I]);
 
   assert (__builtin_popcount (DimSet) == 1 && "Invalid data layout?");
   unsigned TrailingDim = __builtin_ctz (DimSet);
@@ -740,20 +985,35 @@ tensor_get_trailing_dim (const cl_tensor_desc *A,
   return TrailingDim;
 }
 
-static cl_tensor_stride
-tensor_get_blas_stride_in_elements (const cl_tensor_desc *A, unsigned Dim)
+static cl_tensor_stride_exp
+tensor_get_blas_stride_in_elements (const cl_tensor_desc_exp *A, unsigned Dim)
 {
   assert (A);
   assert (A->rank >= 2);
   assert (A->layout && "Does not have data layout!");
-  assert (
-    A->layout_type == CL_TENSOR_LAYOUT_BLAS
-    && "The method must not be called for tensors with non-BLAS data layouts");
-  const cl_tensor_layout_blas *BL = (const cl_tensor_layout_blas *)A->layout;
+  assert ((A->layout_type == CL_TENSOR_LAYOUT_BLAS_PITCHED_EXP
+           || A->layout_type == CL_TENSOR_LAYOUT_BLAS_EXP)
+          && "The method must not be called for tensors with non-BLAS data "
+             "layouts");
+
+  if (A->layout_type == CL_TENSOR_LAYOUT_BLAS_EXP)
+    {
+      const cl_tensor_layout_blas_exp *BL = A->layout;
+      cl_tensor_stride_exp stride = 1;
+      for (unsigned i = 0; i < Dim; i++)
+        {
+          assert (A->shape[BL->leading_dims[i]]);
+          stride *= A->shape[BL->leading_dims[i]];
+        }
+      return stride;
+    }
+
+  const cl_tensor_layout_blas_pitched_exp *BL = A->layout;
   if (Dim < (A->rank - 1))
     return BL->leading_strides[Dim];
   else
-    return BL->leading_strides[A->rank - 1] * tensor_get_trailing_dim (A, BL);
+    return BL->leading_strides[A->rank - 1]
+           * tensor_get_trailing_dim (A, BL->leading_dims);
 }
 
 static int
@@ -767,10 +1027,10 @@ pocl_cpu_execute_gemm_anytype (char *Aptr,
                                size_t OutElemSize,
                                cl_bool TransposeA,
                                cl_bool TransposeB,
-                               const cl_tensor_desc *TenA,
-                               const cl_tensor_desc *TenB,
-                               const cl_tensor_desc *TenCout,
-                               const cl_tensor_desc *TenCIOpt,
+                               const cl_tensor_desc_exp *TenA,
+                               const cl_tensor_desc_exp *TenB,
+                               const cl_tensor_desc_exp *TenCout,
+                               const cl_tensor_desc_exp *TenCIOpt,
                                float Alpha,
                                float Beta)
 {
@@ -883,7 +1143,7 @@ pocl_cpu_execute_gemm_anytype (char *Aptr,
   return CL_SUCCESS;
 }
 
-int
+static int
 pocl_xsmm_execute_dbk (cl_program program,
                        cl_kernel kernel,
                        pocl_kernel_metadata_t *meta,
@@ -897,19 +1157,19 @@ pocl_xsmm_execute_dbk (cl_program program,
   void *Cin = NULL;
   void *Cout = pocl_cpu_get_ptr (&arguments[2], mem_id);
   float Alpha = 1.0f, Beta = 0.0f;
-  cl_tensor_datatype InDtype, OutDtype;
+  cl_tensor_datatype_exp InDtype, OutDtype;
   cl_bool TransposeA, TransposeB;
-  const cl_tensor_desc *TenA;
-  const cl_tensor_desc *TenB;
-  const cl_tensor_desc *TenCout;
-  const cl_tensor_desc *TenCIOpt;
+  const cl_tensor_desc_exp *TenA;
+  const cl_tensor_desc_exp *TenB;
+  const cl_tensor_desc_exp *TenCout;
+  const cl_tensor_desc_exp *TenCIOpt;
 
   switch (meta->builtin_kernel_id)
     {
-    case POCL_CDBI_DBK_EXP_GEMM:
+    case CL_DBK_GEMM_EXP:
       {
-        const cl_dbk_attributes_exp_gemm *Attrs
-          = (const cl_dbk_attributes_exp_gemm *)meta->builtin_kernel_attrs;
+        const cl_dbk_attributes_gemm_exp *Attrs
+          = (const cl_dbk_attributes_gemm_exp *)meta->builtin_kernel_attrs;
         void *Cin = pocl_cpu_get_ptr (&arguments[2], mem_id);
         void *Cout = pocl_cpu_get_ptr (&arguments[3], mem_id);
         memcpy (&Alpha, arguments[4].value, sizeof (float));
@@ -924,10 +1184,10 @@ pocl_xsmm_execute_dbk (cl_program program,
         TenCIOpt = &Attrs->c_in;
         break;
       }
-    case POCL_CDBI_DBK_EXP_MATMUL:
+    case CL_DBK_MATMUL_EXP:
       {
-        const cl_dbk_attributes_exp_matmul *Attrs
-          = (const cl_dbk_attributes_exp_matmul *)meta->builtin_kernel_attrs;
+        const cl_dbk_attributes_matmul_exp *Attrs
+          = (const cl_dbk_attributes_matmul_exp *)meta->builtin_kernel_attrs;
         InDtype = Attrs->a.dtype;
         OutDtype = Attrs->c.dtype;
         TransposeA = Attrs->trans_a;
@@ -939,8 +1199,9 @@ pocl_xsmm_execute_dbk (cl_program program,
         break;
       }
     default:
-      POCL_ABORT_UNIMPLEMENTED ("this code path should have "
-                                "been eliminated earlier");
+      POCL_MSG_ERR ("this code path should have "
+                    "been eliminated earlier");
+      return CL_FAILED;
     }
 
   libxsmm_datatype InElemType = pocl_convert_to_libxsmm_type (InDtype);
@@ -965,23 +1226,42 @@ pocl_cpu_execute_dbk (cl_program program,
   switch (meta->builtin_kernel_id)
     {
 #ifdef HAVE_LIBXSMM
-    case POCL_CDBI_DBK_EXP_GEMM:
-    case POCL_CDBI_DBK_EXP_MATMUL:
+    case CL_DBK_GEMM_EXP:
+    case CL_DBK_MATMUL_EXP:
       return pocl_xsmm_execute_dbk (program, kernel, meta, dev_i, arguments);
 #endif
 #ifdef HAVE_LIBJPEG_TURBO
-    case POCL_CDBI_DBK_EXP_JPEG_ENCODE:
+    case CL_DBK_JPEG_ENCODE_EXP:
       return pocl_cpu_execute_dbk_khr_jpeg_encode (program, kernel, meta,
                                                    dev_i, arguments);
-    case POCL_CDBI_DBK_EXP_JPEG_DECODE:
+    case CL_DBK_JPEG_DECODE_EXP:
       return pocl_cpu_execute_dbk_khr_jpeg_decode (program, kernel, meta,
                                                    dev_i, arguments);
+#endif
+#ifdef HAVE_ONNXRT
+    case CL_DBK_ONNX_INFERENCE_EXP:
+      {
+        cl_device_id dev = program->devices[dev_i];
+        unsigned mem_id = dev->global_mem_id;
+        return pocl_perform_ort_inference (
+            kernel->data[dev_i], pocl_cpu_get_ptr (&arguments[0], mem_id),
+            pocl_cpu_get_ptr (&arguments[1], mem_id),
+            pocl_cpu_get_ptr (&arguments[2], mem_id),
+            pocl_cpu_get_ptr (&arguments[3], mem_id));
+      }
+#endif
+    case CL_DBK_IMG_COLOR_CONVERT_EXP:
+      return pocl_cpu_execute_dbk_exp_img_yuv2rgb (program, kernel, meta,
+                                                   dev_i, arguments);
+#ifdef HAVE_OPENCV
+    case CL_DBK_NMS_BOX_EXP:
+      return pocl_cpu_execute_dbk_khr_nms_box (program, kernel, meta, dev_i,
+                                               arguments);
 #endif
     default:
       {
         POCL_MSG_ERR ("Unhandled DBK id %d.\n", meta->builtin_kernel_id);
-        POCL_ABORT_UNIMPLEMENTED (
-          "Requested DBK is not implemented on the CPU device.\n");
+        return CL_FAILED;
       }
     }
 }

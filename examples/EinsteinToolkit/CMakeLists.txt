@@ -30,30 +30,32 @@ add_definitions("-DSRCDIR=\"${CMAKE_CURRENT_SOURCE_DIR}\"")
 #set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c99 ${OPENCL_CFLAGS}")
 add_compile_options(${OPENCL_CFLAGS} -std=c99)
 
-if (MSVC)
-  set_source_files_properties( EinsteinToolkit.c PROPERTIES LANGUAGE CXX )
-endif(MSVC)
 add_executable("EinsteinToolkit" EinsteinToolkit.c ML_BSSN_CL_RHS1.cl ML_BSSN_CL_RHS2.cl)
+add_symlink_to_built_opencl_dynlib("EinsteinToolkit")
 
 # EinsteinToolkit_LDADD = @OPENCL_LIBS@ ../../lib/poclu/libpoclu.la
 target_link_libraries("EinsteinToolkit" ${POCLU_LINK_OPTIONS})
 
-if(NOT MIPS)
-  add_test(NAME "EinsteinToolkit" COMMAND "EinsteinToolkit")
+add_test(NAME "EinsteinToolkit" COMMAND "EinsteinToolkit")
 
-  set_tests_properties( "EinsteinToolkit"
+set_tests_properties( "EinsteinToolkit"
     PROPERTIES
     COST 15.0
-    LABELS "internal;EinsteinToolkit"
-    DEPENDS "pocl_version_check")
-
-  add_test(NAME "EinsteinToolkit_SubDev" COMMAND "EinsteinToolkit" s)
-
-  set_tests_properties( "EinsteinToolkit_SubDev"
-    PROPERTIES
-    COST 15.0
+    RESOURCE_LOCK "einstein" # these tests use a lot of memory; allow only 1 instance at a time
     LABELS "EinsteinToolkit"
-    ENVIRONMENT "POCL_AFFINITY=1"
-    SKIP_RETURN_CODE 77
-    DEPENDS "pocl_version_check")
+    SKIP_RETURN_CODE 77)
+
+add_test(NAME "EinsteinToolkit_SubDev" COMMAND "EinsteinToolkit" s)
+
+set_tests_properties( "EinsteinToolkit_SubDev"
+    PROPERTIES
+    COST 15.0
+    RESOURCE_LOCK "einstein"
+    LABELS "EinsteinToolkit"
+    SKIP_RETURN_CODE 77)
+
+if(ENABLE_HOST_CPU_DEVICES AND NOT RISCV)
+  set_property(TEST
+    "EinsteinToolkit" "EinsteinToolkit_SubDev"
+    APPEND PROPERTY LABELS "cpu")
 endif()

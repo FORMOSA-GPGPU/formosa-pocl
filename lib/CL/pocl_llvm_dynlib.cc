@@ -64,5 +64,37 @@ void *pocl_dynlib_symbol_address(void *, const char *SymbolName) {
 }
 
 const char *pocl_dynlib_pathname(void *Address) {
-  POCL_ABORT_UNIMPLEMENTED("pocl_dynlib_pathname using LLVM");
+#ifdef _WIN32
+  HMODULE Hm;
+  if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                             GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         (LPCWSTR)&Address, &Hm) == 0) {
+    int Ret = GetLastError();
+    POCL_MSG_WARN("GetModuleHandleEx failed, error = %d ; trying fallback\n", Ret);
+
+    // undocumented hack from https://stackoverflow.com/a/2396380
+    MEMORY_BASIC_INFORMATION mbi;
+    size_t Len = VirtualQuery(Address, &mbi, sizeof(mbi));
+    if (Len != sizeof(mbi)) {
+      POCL_MSG_ERR("VirtualQuery failed", Ret);
+      return nullptr;
+    }
+    Hm = (HMODULE)mbi.AllocationBase;
+  }
+
+  WCHAR wpath[MAX_PATH]{};
+  if (GetModuleFileNameW(Hm, wpath, ARRAYSIZE(wpath)) == 0) {
+    int Ret = GetLastError();
+    POCL_MSG_ERR("GetModuleFileName failed, error = %d\n", Ret);
+    return nullptr;
+  }
+
+  static char path[MAX_PATH];
+  WideCharToMultiByte(CP_UTF8, 0, wpath, -1, path, ARRAYSIZE(path), NULL, NULL);
+  POCL_MSG_PRINT_INFO("pocl_dynlib_symbol_adress: using DLL path: %s \n", path);
+  return path;
+#else
+  POCL_MSG_ERR("pocl_dynlib_pathname does not have C++/LLVM implementation\n");
+  return nullptr;
+#endif
 }

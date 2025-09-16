@@ -75,8 +75,8 @@ public:
 
   virtual int buildOrLinkProgram(
       uint32_t program_id, std::vector<uint32_t> &DeviceList, char *source,
-      size_t source_size, bool is_binary, bool is_builtin, bool is_spirv,
-      const char *options,
+      size_t source_size, bool is_binary, bool is_builtin, bool is_dbk,
+      bool is_spirv, const char *options,
       std::unordered_map<uint64_t, std::vector<unsigned char>> &input_binaries,
       std::unordered_map<uint64_t, std::vector<unsigned char>> &output_binaries,
       std::unordered_map<uint64_t, std::string> &build_logs,
@@ -89,6 +89,13 @@ public:
                            const char *name) = 0;
 
   virtual int freeKernel(uint32_t kernel_id) = 0;
+
+  virtual int createCommandBuffer(uint32_t CmdBufId,
+                                  const std::vector<uint32_t> &DeviceList,
+                                  const std::vector<uint32_t> &QueueList,
+                                  const std::vector<Request *> &Cmds) = 0;
+
+  virtual int freeCommandBuffer(uint32_t CmdbufId) = 0;
 
   virtual int createQueue(uint32_t queue_id, uint32_t dev_id) = 0;
 
@@ -177,6 +184,11 @@ public:
                         unsigned dim, const sizet_vec3 &offset,
                         const sizet_vec3 &global,
                         const sizet_vec3 *local = nullptr) = 0;
+
+  virtual int runCommandBuffer(uint64_t ev_id, EventTiming_t &evt,
+                               uint32_t CmdBufId, uint32_t NumQueues,
+                               uint32_t *QueueIds, uint32_t waitlist_size,
+                               uint64_t *waitlist) = 0;
 
   /**********************************************************************/
   /**********************************************************************/

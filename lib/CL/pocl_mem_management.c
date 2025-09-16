@@ -29,6 +29,8 @@
 #include "utlist.h"
 #include <string.h>
 
+/* #define DEBUG_MIGRATIONS */
+
 #ifndef USE_POCL_MEMMANAGER
 
 cl_event pocl_mem_manager_new_event ()
@@ -373,6 +375,7 @@ out:
   return retv;
 }
 
+#ifdef DEBUG_MIGRATIONS
 static void
 pocl_dump_migration_infos (pocl_buffer_migration_info *mis)
 {
@@ -394,6 +397,7 @@ pocl_dump_migration_infos (pocl_buffer_migration_info *mis)
                  mi->buffer->parent->latest_version);
     }
 }
+#endif
 
 /** Creates an implicit sub-buffer to patch up a part left by another
    sub-buffers which ends before an unaligned address.
@@ -461,7 +465,7 @@ pocl_convert_to_subbuffer_migrations (pocl_buffer_migration_info *buffer_usage,
   pocl_buffer_migration_info *extra_migrations = NULL;
   pocl_buffer_migration_info *patch_migrations = NULL;
 
-#if 0
+#ifdef DEBUG_MIGRATIONS
   fprintf (stderr, "Original migrations:\n");
   pocl_dump_migration_infos (buffer_usage);
 #endif
@@ -524,7 +528,14 @@ pocl_convert_to_subbuffer_migrations (pocl_buffer_migration_info *buffer_usage,
           patch_migrations = append_unaligned_patch_subbuffer_migration (
             patch_migrations, sub_buf->mem, align, mi->read_only, &retv);
           if (retv != CL_SUCCESS)
-            return NULL;
+            {
+              pocl_buffer_migration_info *mi2, *tmp2 = NULL;
+              DL_FOREACH_SAFE (extra_migrations, mi2, tmp2)
+                {
+                  free (mi2);
+                }
+              return NULL;
+            }
         }
 
       LL_DELETE (buffer_usage, mi);
@@ -533,7 +544,7 @@ pocl_convert_to_subbuffer_migrations (pocl_buffer_migration_info *buffer_usage,
   LL_CONCAT (patch_migrations, buffer_usage);
   LL_CONCAT (patch_migrations, extra_migrations);
 
-#if 0
+#ifdef DEBUG_MIGRATIONS
   fprintf (stderr, "Updated sub-buffer-based migrations:\n");
   pocl_dump_migration_infos (patch_migrations);
 #endif
@@ -574,18 +585,18 @@ update_subbuffer_versioning_data (cl_mem updated_buf)
  * defined using commands, buffers, command queues and events.
  *
  * Attempts to use direct copies from a device instead of a device-host-device
- * hip in case there is an accessible peer device with a fresh copy available.
+ * hop in case there is an accessible peer device with a fresh copy available.
  *
- * @param ev_export_p Optional output parameter for the export event.
- * @param dev Destination device
- * @param user_cmd The event that marks the command that uses the data of the
+ * \param ev_export_p Optional output parameter for the export event.
+ * \param dev Destination device
+ * \param user_cmd The event that marks the command that uses the data of the
  * buffer.
- * @param mem The buffer to migrate.
- * @param gmem Identifier of the global memory where the mem should be
+ * \param mem The buffer to migrate.
+ * \param gmem Identifier of the global memory where the mem should be
  * migrated.
- * @param migration_size Max number of bytes to migrate (caller has to read
+ * \param migration_size Max number of bytes to migrate (caller has to read
  *                       content size from mem->size_buffer if applicable).
- * @param last_migr_event Input/output for dep-chaining the created migration
+ * \param last_migr_event Input/output for dep-chaining the created migration
  * command an event dependency is created to it if non-NULL. The new migration
  * command will be overwritten to it (after reference release).
  */
@@ -947,12 +958,12 @@ FINISH_VER_SETUP:
              migrations. */
           /* Create an event dep chain through the migration commands. */
           POname (clRetainEvent) (last_migration_event);
-          pocl_create_event_sync (last_migration_event, *prev_migr_event);
+          pocl_create_event_sync (*prev_migr_event, last_migration_event);
           if (*prev_migr_event != NULL)
             POname (clReleaseEvent) (*prev_migr_event);
           *prev_migr_event = last_migration_event;
         }
-      pocl_create_event_sync (user_cmd, last_migration_event);
+      pocl_create_event_sync (last_migration_event, user_cmd);
       /* if the event itself only reads from the buffer,
        * set the last buffer updating event to the last_mig_event,
        * instead of the actual command event;
@@ -1060,7 +1071,8 @@ pocl_find_raw_ptr_with_vm_ptr (cl_context context, const void *host_ptr)
     {
       if (item->vm_ptr == NULL)
         continue;
-      if (item->vm_ptr <= host_ptr && item->vm_ptr + item->size > host_ptr)
+      if (item->vm_ptr <= host_ptr
+          && (char *)item->vm_ptr + item->size > (const char *)host_ptr)
         {
           break;
         }
@@ -1078,9 +1090,63 @@ pocl_find_raw_ptr_with_dev_ptr (cl_context context, const void *dev_ptr)
     {
       if (item->dev_ptr == NULL)
         continue;
-      if (item->dev_ptr <= dev_ptr && item->dev_ptr + item->size > dev_ptr)
+      if (item->dev_ptr <= dev_ptr
+          && (char *)item->dev_ptr + item->size > (const char *)dev_ptr)
         break;
     }
   POCL_UNLOCK_OBJ (context);
   return item;
+}
+
+void *
+pocl_cpu_get_ptr (struct pocl_argument *arg, unsigned global_mem_id)
+{
+  if (arg->value == NULL)
+    return NULL;
+
+  if (arg->is_raw_ptr)
+    return *(void **)arg->value;
+
+  cl_mem mem = *(cl_mem *)(arg->value);
+  char *ptr = (char *)(mem->device_ptrs[global_mem_id].mem_ptr);
+  ptr += arg->offset;
+  return (void *)ptr;
+}
+
+void
+pocl_reset_indirect_ptrs (cl_kernel kernel, void **ptrs, size_t n)
+{
+  if (kernel->indirect_raw_ptrs != NULL)
+    {
+      struct _pocl_ptr_list_node *n, *tmp;
+      DL_FOREACH_SAFE (kernel->indirect_raw_ptrs, n, tmp)
+        {
+          free (n);
+        }
+      kernel->indirect_raw_ptrs = NULL;
+    }
+
+  for (size_t i = 0; i < n; ++i)
+    {
+      void *ptr = ptrs[i];
+      if (ptr == NULL)
+        continue;
+
+      /* Filter out non-sensical pointers silently. The spec doesn't
+         tell to return an error in this case, perhaps for future
+         compatibility with system allocated (but not migrated)
+         buffers? */
+      pocl_raw_ptr *svm_ptr
+        = pocl_find_raw_ptr_with_vm_ptr (kernel->context, ptr);
+
+      if (svm_ptr == NULL)
+        continue;
+
+      struct _pocl_ptr_list_node *node
+        = malloc (sizeof (struct _pocl_ptr_list_node));
+      node->ptr = ptr;
+
+      DL_APPEND (kernel->indirect_raw_ptrs, node);
+      POCL_MSG_PRINT_MEMORY ("Set an indirect SVM/USM ptr %p\n", node->ptr);
+    }
 }

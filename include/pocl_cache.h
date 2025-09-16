@@ -26,6 +26,20 @@
 
 #include "pocl_cl.h"
 
+#ifdef _WIN32
+#ifdef __MINGW32__
+#define SHARED_LIB_EXT ".dll"
+#define OBJ_EXT ".o"
+#else
+#define SHARED_LIB_EXT ".dll"
+#define OBJ_EXT ".obj"
+#endif
+#else
+#define SHARED_LIB_EXT ".so"
+#define OBJ_EXT  ".so.o"
+#endif
+#define ASM_EXT ".S"
+
 /* The filename in which the work group (parallelizable) kernel LLVM bc is stored in
    the kernel's temp dir. */
 #define POCL_PARALLEL_BC_FILENAME   "/parallel.bc"
@@ -64,10 +78,19 @@ int pocl_cache_write_spirv (char *spirv_path,
                             const char *spirv_content,
                             uint64_t file_size);
 
+int pocl_cache_write_kernel_asmfile (char *asmfile_path,
+                                     const char *asmfile_content,
+                                     uint64_t asmfile_size);
+
 POCL_EXPORT
 int pocl_cache_write_generic_objfile (char *objfile_path,
                                       const char *objfile_content,
                                       uint64_t objfile_size);
+
+int pocl_cache_write_header (char *header_path,
+                             const char *header_name,
+                             const char *header_content,
+                             uint64_t header_size);
 
 int pocl_cache_update_program_last_access(cl_program program,
                                           unsigned device_i);

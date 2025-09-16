@@ -55,7 +55,8 @@ main (int argc, char **argv)
   cl_event ev1, ev2;
 
   err = poclu_get_multiple_devices (&platform, &context, 0, &num_devices,
-                                    &devices, &queues, 1);
+                                    &devices, &queues,
+                                    CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE);
   CHECK_OPENCL_ERROR_IN ("poclu_get_multiple_devices");
 
   printf ("NUM DEVICES: %u \n", num_devices);
@@ -68,8 +69,8 @@ main (int argc, char **argv)
 
   const char *sourcefile = SRCDIR "/tests/runtime/migration_test";
   const char *basename = "migration_test";
-  err = poclu_load_program_multidev (context, devices, num_devices, sourcefile,
-                                     0, 0, NULL, NULL, &program);
+  err = poclu_load_program_multidev (platform, context, devices, num_devices,
+                                     sourcefile, 0, 0, NULL, NULL, &program);
   if (err != CL_SUCCESS)
     goto ERROR;
 
@@ -94,10 +95,10 @@ main (int argc, char **argv)
   input = (cl_float *)malloc (num_floats * sizeof (cl_float));
   output = (cl_float *)calloc (num_floats, sizeof (cl_float));
 
-  srand48 (0);
+  srand (12345);
   for (i = 0; i < num_floats; ++i)
     {
-      input[i] = (cl_float)drand48 ();
+      input[i] = (cl_float)rand ();
     }
 
   buf_in = clCreateBuffer (context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,

@@ -263,9 +263,9 @@ public:
     POCL_UNLOCK(lock);
     POCL_JOIN_THREAD(ttasim_thread);
 
-    POCL_FAST_LOCK(wq_lock);
+    POCL_LOCK(wq_lock);
     POCL_SIGNAL_COND(wakeup_cond);
-    POCL_FAST_UNLOCK(wq_lock);
+    POCL_UNLOCK(wq_lock);
     POCL_JOIN_THREAD(driver_thread);
   }
 
@@ -347,6 +347,7 @@ public:
     out << "#include <pocl_device.h>" << std::endl << std::endl;
 
     out << "#undef ALIGN4" << std::endl;
+    // The __attribute__s are fine here as the code is passed to clang.
     out << "#define ALIGN4 __attribute__ ((aligned (4)))" << std::endl;
     out << "#define __local__ __attribute__((address_space(" <<  TTA_ASID_LOCAL<< ")))" << std::endl;
     out << "#define __global__ __attribute__((address_space(" << TTA_ASID_GLOBAL << ")))" << std::endl;
@@ -700,7 +701,7 @@ pocl_ttasim_init (unsigned j, cl_device_id dev, const char* parameters)
   dev->spmd = CL_FALSE;
   dev->run_workgroup_pass = CL_TRUE;
   dev->execution_capabilities = CL_EXEC_KERNEL;
-  dev->queue_properties = CL_QUEUE_PROFILING_ENABLE;
+  dev->on_host_queue_props = CL_QUEUE_PROFILING_ENABLE;
   dev->vendor = "TTA-Based Co-design Environment";
   dev->profile = "EMBEDDED_PROFILE";
   dev->extensions = TCE_DEVICE_EXTENSIONS;

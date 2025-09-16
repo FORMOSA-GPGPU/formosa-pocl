@@ -24,6 +24,15 @@
    IN THE SOFTWARE.
 */
 
+#include "pocl.h"
+#include "pocl_compiler_macros.h"
+#include "pocl_cl.h"
+#define _BSD_SOURCE
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE
+#endif
+#define _POSIX_C_SOURCE 200809L
+
 #include <errno.h>
 #include <limits.h>
 #include <stdlib.h>
@@ -46,9 +55,12 @@
 #  include "vccompat.hpp"
 #endif
 
+#include <CL/cl_ext.h>
+
 #include "common.h"
 #include "devices.h"
 #include "pocl_cache.h"
+#include "pocl_dynlib.h"
 #include "pocl_file_util.h"
 #include "pocl_llvm.h"
 #include "pocl_local_size.h"
@@ -60,130 +72,7 @@
 #include "utlist.h"
 #include "utlist_addon.h"
 
-#ifdef ENABLE_RELOCATION
-#if defined(__APPLE__)
-#define _DARWIN_C_SOURCE
-#endif
-#ifdef __linux__
-#define _GNU_SOURCE
-#endif
-#include <dlfcn.h>
-#endif
-
-/* required for setting SSE/AVX flush denorms to zero flag */
-#if defined(__x86_64__) && defined(__GNUC__)
-#include <x86intrin.h>
-#endif
-
-struct list_item;
-
-typedef struct list_item
-{
-  void *value;
-  struct list_item *next;
-} list_item;
-
-void
-pocl_restore_ftz (unsigned ftz)
-{
-#if defined(__x86_64__) && defined(__GNUC__)
-
-#ifdef _MM_FLUSH_ZERO_ON
-  if (ftz & _MM_FLUSH_ZERO_ON)
-    _MM_SET_FLUSH_ZERO_MODE (_MM_FLUSH_ZERO_ON);
-  else
-    _MM_SET_FLUSH_ZERO_MODE (_MM_FLUSH_ZERO_OFF);
-#endif
-#ifdef _MM_DENORMALS_ZERO_ON
-  if (ftz & _MM_DENORMALS_ZERO_ON)
-    _MM_SET_DENORMALS_ZERO_MODE (_MM_DENORMALS_ZERO_ON);
-  else
-    _MM_SET_DENORMALS_ZERO_MODE (_MM_DENORMALS_ZERO_OFF);
-#endif
-
-#endif
-}
-
-unsigned
-pocl_save_ftz ()
-{
-#if defined(__x86_64__) && defined(__GNUC__)
-
-  unsigned s = 0;
-#ifdef _MM_FLUSH_ZERO_ON
-  if (_MM_GET_FLUSH_ZERO_MODE ())
-    s |= _MM_FLUSH_ZERO_ON;
-  else
-    s &= (~_MM_FLUSH_ZERO_ON);
-#endif
-#ifdef _MM_DENORMALS_ZERO_ON
-  if (_MM_GET_DENORMALS_ZERO_MODE ())
-    s |= _MM_DENORMALS_ZERO_ON;
-  else
-    s &= (~_MM_DENORMALS_ZERO_ON);
-#endif
-  return s;
-
-#else
-  return 0;
-#endif
-}
-
-void
-pocl_set_ftz (unsigned ftz)
-{
-#if defined(__x86_64__) && defined(__GNUC__)
-  if (ftz)
-    {
-#ifdef _MM_FLUSH_ZERO_ON
-      _MM_SET_FLUSH_ZERO_MODE (_MM_FLUSH_ZERO_ON);
-#endif
-
-#ifdef _MM_DENORMALS_ZERO_ON
-      _MM_SET_DENORMALS_ZERO_MODE (_MM_DENORMALS_ZERO_ON);
-#endif
-    }
-  else
-    {
-#ifdef _MM_FLUSH_ZERO_OFF
-      _MM_SET_FLUSH_ZERO_MODE (_MM_FLUSH_ZERO_OFF);
-#endif
-
-#ifdef _MM_DENORMALS_ZERO_OFF
-      _MM_SET_DENORMALS_ZERO_MODE (_MM_DENORMALS_ZERO_OFF);
-#endif
-    }
-#endif
-}
-
-
-void
-pocl_set_default_rm ()
-{
-#if defined(__x86_64__) && defined(__GNUC__) && defined(_MM_ROUND_NEAREST)
-  unsigned rm = _MM_GET_ROUNDING_MODE ();
-  if (rm != _MM_ROUND_NEAREST)
-    _MM_SET_ROUNDING_MODE (_MM_ROUND_NEAREST);
-#endif
-}
-
-unsigned
-pocl_save_rm ()
-{
-#if defined(__x86_64__) && defined(__GNUC__) && defined(_MM_ROUND_NEAREST)
-  return _MM_GET_ROUNDING_MODE ();
-#else
-  return 0;
-#endif
-}
-
-void
-pocl_restore_rm (unsigned rm)
-{
-#if defined(__x86_64__) && defined(__GNUC__) && defined(_MM_ROUND_NEAREST)
-  _MM_SET_ROUNDING_MODE (rm);
-#endif
-}
+/* #define DEBUG_EVENT_DEPS */
 
 uint32_t
 pocl_byteswap_uint32_t (uint32_t word, char should_swap)
@@ -298,8 +187,7 @@ pocl_memalign_alloc(size_t align_width, size_t size)
   int status;
 
 #ifdef __ANDROID__
-  ptr = memalign (align_width, size);
-  return ptr;
+  return memalign (align_width, size);
 #elif defined(HAVE_POSIX_MEMALIGN)
   status = posix_memalign (&ptr, align_width, size);
   return ((status == 0) ? ptr : NULL);
@@ -314,11 +202,33 @@ pocl_memalign_alloc(size_t align_width, size_t size)
 #endif
 }
 
+static void
+pocl_memalign_free (void *ptr)
+{
+#ifdef __ANDROID__
+  free (ptr);
+#elif defined(HAVE_POSIX_MEMALIGN)
+  free (ptr);
+#elif defined(_MSC_VER)
+  _aligned_free (ptr);
+#elif defined(__MINGW32__)
+  __mingw_aligned_free (ptr);
+#elif (defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L))
+  free (ptr);
+#else
+#error Cannot find aligned malloc
+#endif
+}
+
 void *
 pocl_aligned_malloc (size_t alignment, size_t size)
 {
-#ifdef HAVE_ALIGNED_ALLOC
   assert (alignment > 0);
+
+  /* posix_memalign requires alignment to be at least sizeof(void *) */
+  if (alignment < sizeof(void *))
+    alignment = sizeof(void* );
+
   /* make sure that size is a multiple of alignment, as posix_memalign
    * does not perform this test, whereas aligned_alloc does */
   if ((size & (alignment - 1)) != 0)
@@ -327,87 +237,23 @@ pocl_aligned_malloc (size_t alignment, size_t size)
       size += 1;
     }
 
-  /* posix_memalign requires alignment to be at least sizeof(void *) */
-  if (alignment < sizeof(void *))
-    alignment = sizeof(void* );
-
-  void* result;
-
-  result = pocl_memalign_alloc(alignment, size);
-  if (result == NULL)
-    {
-      errno = -1;
-      return NULL;
-    }
-
-  return result;
-
-#else
-#error Cannot find aligned malloc
-#endif
-
-#if 0
-  /* this code works in theory, but there many places in pocl
-   * where aligned memory is used in the same pointers
-   * as memory allocated by other means */
-  /* allow zero-sized allocations, force alignment to 1 */
-  if (!size)
-    alignment = 1;
-
-  /* make sure alignment is a non-zero power of two and that
-   * size is a multiple of alignment */
-  size_t mask = alignment - 1;
-  if (!alignment || ((alignment & mask) != 0) || ((size & mask) != 0))
-    {
-      errno = EINVAL;
-      return NULL;
-    }
-
-  /* allocate memory plus space for alignment header */
-  uintptr_t address = (uintptr_t)malloc(size + mask + sizeof(void *));
-  if (!address)
-    return NULL;
-
-  /* align the address, and store original pointer for future use
-   * with free in the preceding bytes */
-  uintptr_t aligned_address = (address + mask + sizeof(void *)) & ~mask;
-  void** address_ptr = (void **)(aligned_address - sizeof(void *));
-  *address_ptr = (void *)address;
-  return (void *)aligned_address;
-
-#endif
+  return pocl_memalign_alloc (alignment, size);
 }
 
-#if 0
 void
 pocl_aligned_free (void *ptr)
 {
-#ifdef HAVE_ALIGNED_ALLOC
-  POCL_MEM_FREE (ptr);
-#else
-#error Cannot find aligned malloc
-  /* extract pointer from original allocation and free it */
-  if (ptr)
-    free(*(void **)((uintptr_t)ptr - sizeof(void *)));
-#endif
+  pocl_memalign_free (ptr);
 }
-#endif
 
 void
 pocl_lock_events_inorder (cl_event ev1, cl_event ev2)
 {
   assert (ev1 != ev2);
   assert (ev1->id != ev2->id);
-  if (ev1->id < ev2->id)
-    {
-      POCL_LOCK_OBJ (ev1);
-      POCL_LOCK_OBJ (ev2);
-    }
-  else
-    {
-      POCL_LOCK_OBJ (ev2);
-      POCL_LOCK_OBJ (ev1);
-    }
+
+  POCL_LOCK_OBJ (ev1);
+  POCL_LOCK_OBJ (ev2);
 }
 
 void
@@ -415,20 +261,11 @@ pocl_unlock_events_inorder (cl_event ev1, cl_event ev2)
 {
   assert (ev1 != ev2);
   assert (ev1->id != ev2->id);
-  if (ev1->id < ev2->id)
-    {
-      POCL_UNLOCK_OBJ (ev1);
-      POCL_UNLOCK_OBJ (ev2);
-    }
-  else
-    {
-      POCL_UNLOCK_OBJ (ev2);
-      POCL_UNLOCK_OBJ (ev1);
-    }
+
+  POCL_UNLOCK_OBJ (ev1);
+  POCL_UNLOCK_OBJ (ev2);
 }
 
-extern unsigned long event_c;
-extern unsigned long uevent_c;
 
 cl_int
 pocl_create_event (cl_event *event,
@@ -475,6 +312,7 @@ pocl_create_event (cl_event *event,
   return CL_SUCCESS;
 }
 
+#ifdef DEBUG_EVENT_DEPS
 static int
 check_for_circular_dep (cl_event waiting_event, cl_event notifier_event)
 {
@@ -492,9 +330,10 @@ check_for_circular_dep (cl_event waiting_event, cl_event notifier_event)
   }
   return 0;
 }
+#endif
 
 int
-pocl_create_event_sync (cl_event waiting_event, cl_event notifier_event)
+pocl_create_event_sync (cl_event notifier_event, cl_event waiting_event)
 {
   event_node *notify_target = NULL;
   event_node *wait_list_item = NULL;
@@ -506,7 +345,7 @@ pocl_create_event_sync (cl_event waiting_event, cl_event notifier_event)
                          " , notifier %" PRIu64 "\n",
                          waiting_event->id, notifier_event->id);
 
-  pocl_lock_events_inorder (waiting_event, notifier_event);
+  pocl_lock_events_inorder (notifier_event, waiting_event);
 
   assert (notifier_event->pocl_refcount != 0);
   assert (waiting_event != notifier_event);
@@ -520,17 +359,40 @@ pocl_create_event_sync (cl_event waiting_event, cl_event notifier_event)
         }
     }
 
-  if (notifier_event->status == CL_COMPLETE)
-    goto FINISH;
+  /* If the notifier event is already complete (or failed),
+     don't create an event sync. This is fine since if the wait
+     event has no notifier events and gets submitted, it can start
+     right away.
+   */
+  if (notifier_event->status < 0 || notifier_event->status == CL_COMPLETE)
+    {
+      POCL_MSG_PRINT_EVENTS (
+        "notifier event %" PRIu64
+        " already complete, not creating sync with event %" PRIu64 "\n",
+        notifier_event->id, waiting_event->id);
+      goto FINISH;
+    }
+
   notify_target = pocl_mem_manager_new_event_node();
   wait_list_item = pocl_mem_manager_new_event_node();
   if (!notify_target || !wait_list_item)
-    return CL_OUT_OF_HOST_MEMORY;
+    {
+      free (notify_target);
+      free (wait_list_item);
+      return CL_OUT_OF_HOST_MEMORY;
+    }
 
-  /* check_for_circular_dep (waiting_event, notifier_event); */
+#ifdef DEBUG_EVENT_DEPS
+  check_for_circular_dep (waiting_event, notifier_event);
+#endif
 
   notify_target->event = waiting_event;
   wait_list_item->event = notifier_event;
+  /* Retain the waiting_event since we hold a reference to it in the notify
+     list. This is not needed for the wait_list since the only purpose is to
+     keep a count of the number of events it's waiting on.
+   */
+  POCL_RETAIN_OBJECT_UNLOCKED (waiting_event);
   LL_PREPEND (notifier_event->notify_list, notify_target);
   LL_PREPEND (waiting_event->wait_list, wait_list_item);
 
@@ -544,7 +406,7 @@ pocl_create_event_sync (cl_event waiting_event, cl_event notifier_event)
     }
 
 FINISH:
-  pocl_unlock_events_inorder (waiting_event, notifier_event);
+  pocl_unlock_events_inorder (notifier_event, waiting_event);
   return CL_SUCCESS;
 }
 
@@ -635,7 +497,7 @@ pocl_create_command_struct (_cl_command_node **cmd,
   for (i = 0; i < num_events; ++i)
     {
       cl_event wle = wait_list[i];
-      pocl_create_event_sync ((*event), wle);
+      pocl_create_event_sync (wle, (*event));
     }
   POCL_MSG_PRINT_EVENTS (
       "Created immediate command struct: CMD %p (event %" PRIu64
@@ -1033,10 +895,23 @@ pocl_command_record (cl_command_buffer_khr command_buffer,
       POCL_UNLOCK (command_buffer->mutex);
       return CL_INVALID_OPERATION;
     }
+  pocl_buffer_migration_info *mi;
+  LL_FOREACH (cmd->migr_infos, mi)
+    {
+      /* Note: mem object refcounts are NOT bumped here as deduplicating them
+       * to match the migration info list would introduce unnecessary
+       * complexity. The recorded commands themselves already hold counted
+       * references to their buffers and they are expected to live until the
+       * entire command buffer is destroyed. */
+      command_buffer->migr_infos = pocl_append_unique_migration_info (
+        command_buffer->migr_infos, mi->buffer, mi->read_only);
+    }
   LL_APPEND (command_buffer->cmds, cmd);
+
   if (sync_point != NULL)
     *sync_point = command_buffer->num_syncpoints + 1;
   command_buffer->num_syncpoints++;
+  cmd->cmd_buffer = command_buffer;
   POCL_UNLOCK (command_buffer->mutex);
   return CL_SUCCESS;
 }
@@ -1058,8 +933,8 @@ void pocl_command_enqueue (cl_command_queue command_queue,
       POCL_MSG_PRINT_EVENTS ("In-order Q; adding event syncs\n");
       if (command_queue->last_event.event)
         {
-          pocl_create_event_sync (node->sync.event.event,
-                                  command_queue->last_event.event);
+          pocl_create_event_sync (command_queue->last_event.event,
+                                  node->sync.event.event);
         }
     }
   else if ((node->type == CL_COMMAND_BARRIER
@@ -1072,7 +947,7 @@ void pocl_command_enqueue (cl_command_queue command_queue,
       POCL_MSG_PRINT_EVENTS ("Barrier; adding event syncs\n");
       DL_FOREACH (command_queue->events, event)
         {
-          pocl_create_event_sync (node->sync.event.event, event);
+          pocl_create_event_sync (event, node->sync.event.event);
         }
     }
 
@@ -1082,8 +957,8 @@ void pocl_command_enqueue (cl_command_queue command_queue,
     {
       if (command_queue->barrier)
         {
-          pocl_create_event_sync (node->sync.event.event,
-                                  command_queue->barrier);
+          pocl_create_event_sync (command_queue->barrier,
+                                  node->sync.event.event);
         }
     }
   DL_APPEND (command_queue->events, node->sync.event.event);
@@ -1148,7 +1023,7 @@ pocl_command_push (_cl_command_node *node,
       CDL_PREPEND ((*pending_list), node);
       return;
     }
-  if (pocl_command_is_ready (node->sync.event.event))
+  if (node->sync.event.event->wait_list == NULL)
     {
       pocl_update_event_submitted (node->sync.event.event);
       CDL_PREPEND ((*ready_list), node);
@@ -1181,6 +1056,8 @@ pocl_unmap_command_finished (cl_device_id dev, _cl_command_t *cmd)
 void
 pocl_ndrange_node_cleanup (_cl_command_node *node)
 {
+  if (node == NULL)
+    return;
   cl_uint i;
   for (i = 0; i < node->command.run.kernel->meta->num_args; ++i)
     {
@@ -1565,6 +1442,7 @@ pocl_setup_context (cl_context context)
   memset (context->num_image_formats, 0,
           sizeof (cl_uint) * NUM_OPENCL_IMAGE_TYPES);
 
+  unsigned num_devices_support_bda_ext = 0;
   for(i=0; i<context->num_devices; i++)
     {
       cl_device_id dev = context->devices[i];
@@ -1602,15 +1480,27 @@ pocl_setup_context (cl_context context)
       if (dev->ops->init_context)
         dev->ops->init_context (dev, context);
 
-      context->default_queues[i] = POname (clCreateCommandQueue) (
-          context, dev,
-          (CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE | CL_QUEUE_HIDDEN
-           | CL_QUEUE_PROFILING_ENABLE),
-          &err);
-      assert (err == CL_SUCCESS);
+      cl_command_queue_properties props
+        = CL_QUEUE_HIDDEN | CL_QUEUE_PROFILING_ENABLE;
+      if (dev->on_host_queue_props & CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE)
+        props |= CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE;
+      context->default_queues[i]
+        = POname (clCreateCommandQueue) (context, dev, props, &err);
+
+      if (err == CL_DEVICE_NOT_AVAILABLE)
+        return CL_DEVICE_NOT_AVAILABLE;
+
+      POCL_RETURN_ERROR_ON (
+        (err != CL_SUCCESS), CL_INVALID_CONTEXT,
+        "could not create default command queue for the context\n");
       assert (context->default_queues[i]);
+
+      if (strstr (dev->extensions, "cl_ext_buffer_device_address") != NULL)
+        ++num_devices_support_bda_ext;
     }
 
+  if (num_devices_support_bda_ext == 0)
+    context->no_devices_support_bda = CL_TRUE;
   assert (alignment > 0);
   context->min_buffer_alignment = alignment;
   return CL_SUCCESS;
@@ -1760,149 +1650,6 @@ pocl_command_to_str (cl_command_type cmd)
   return "unknown";
 }
 
-/*
- * This replaces a simple system(), because:
- *
- * 1) system() was causing issues (gpu lockups) with HSA when
- * compiling code (via compile_parallel_bc_to_brig)
- * with OpenCL 2.0 atomics (like CalcPie from AMD SDK).
- * The reason of lockups is unknown (yet).
- *
- * 2) system() uses fork() which copies page table maps, and runs
- * out of AS when pocl has already allocated huge buffers in memory.
- * this happened in llvm_codegen()
- *
- * vfork() does not copy pagetables.
- */
-int
-pocl_run_command (const char **args)
-{
-  POCL_MSG_PRINT_INFO ("Launching: %s\n", args[0]);
-#ifdef HAVE_VFORK
-  pid_t p = vfork ();
-#elif defined(HAVE_FORK)
-  pid_t p = fork ();
-#elif _WIN32
-  STARTUPINFO si;
-  ZeroMemory(&si, sizeof(si));
-  si.cb = sizeof(si);
-  PROCESS_INFORMATION pi;
-  ZeroMemory(&pi, sizeof(pi));
-  DWORD dwProcessFlags = 0;
-  char * cmd = strdup(args[0]);
-  int p = CreateProcess(NULL, cmd, NULL, NULL, 1, dwProcessFlags, NULL, NULL, &si, &pi) != 0;
-  if (!p)
-    return EXIT_FAILURE;
-  DWORD waitRc = WaitForSingleObject(pi.hProcess, INFINITE);
-  if (waitRc == WAIT_FAILED)
-    return EXIT_FAILURE;
-  DWORD exit_code = 0;
-  p = GetExitCodeProcess(pi.hProcess, &exit_code) != 0;
-  if (!p)
-    return EXIT_FAILURE;
-  return exit_code;
-#else
-#error Must have fork() or vfork() system calls for HSA
-#endif
-  if (p == 0)
-    {
-      return execv (args[0], (char *const *)args);
-    }
-  else
-    {
-      if (p < 0)
-        return EXIT_FAILURE;
-      int status;
-      int ret;
-      do {
-        ret = waitpid (p, &status, 0);
-      } while (ret == -1 && errno == EINTR);
-      if (ret < 0)
-        POCL_ABORT ("pocl: waitpid() failed.\n");
-      if (WIFEXITED (status))
-        return WEXITSTATUS (status);
-      else if (WIFSIGNALED (status))
-        return WTERMSIG (status);
-      else
-        return EXIT_FAILURE;
-    }
-}
-
-int
-pocl_run_command_capture_output (char *capture_string,
-                                 size_t *captured_bytes,
-                                 const char **args)
-{
-  POCL_MSG_PRINT_INFO ("Launching: %s\n", args[0]);
-
-  int in[2];
-  int out[2];
-  pipe (in);
-  pipe (out);
-
-#ifdef HAVE_VFORK
-  pid_t p = vfork ();
-#elif defined(HAVE_FORK)
-  pid_t p = fork ();
-#else
-#error Must have fork() or vfork() system calls
-#endif
-  if (p == 0)
-    {
-      close (in[1]);
-      close (out[0]);
-
-      dup2 (in[0], STDIN_FILENO);
-      dup2 (out[1], STDOUT_FILENO);
-      dup2 (out[1], STDERR_FILENO);
-
-      return execv (args[0], (char *const *)args);
-    }
-  else
-    {
-      if (p < 0)
-        return EXIT_FAILURE;
-
-      close (in[0]);
-      close (out[1]);
-
-      ssize_t r = 0;
-      size_t total_bytes = 0;
-      size_t capture_limit = *captured_bytes;
-      char buf[4096];
-
-      while ((r = read (out[0], buf, 4096)) > 0)
-        {
-          if (total_bytes + r > capture_limit)
-            break;
-          memcpy (capture_string + total_bytes, buf, r);
-          total_bytes += r;
-        }
-      if (total_bytes > capture_limit)
-        total_bytes = capture_limit;
-
-      capture_string[total_bytes] = 0;
-      *captured_bytes = total_bytes;
-
-      int status;
-      int ret;
-      do {
-        ret = waitpid (p, &status, 0);
-      } while (ret == -1 && errno == EINTR);
-      if (ret < 0)
-        POCL_ABORT ("pocl: waitpid() failed.\n");
-
-      close (out[0]);
-      close (in[1]);
-
-      if (WIFEXITED (status))
-        return WEXITSTATUS (status);
-      else if (WIFSIGNALED (status))
-        return WTERMSIG (status);
-      else
-        return EXIT_FAILURE;
-    }
-}
 
 void
 pocl_update_event_queued (cl_event event)
@@ -1980,11 +1727,15 @@ static void pocl_free_event_node (_cl_command_node *node)
       break;
 
     case CL_COMMAND_FILL_BUFFER:
-      POCL_MEM_FREE (node->command.memfill.pattern);
+      pocl_aligned_free (node->command.memfill.pattern);
       break;
 
     case CL_COMMAND_SVM_MEMFILL:
-      POCL_MEM_FREE (node->command.svm_fill.pattern);
+      pocl_aligned_free (node->command.svm_fill.pattern);
+      break;
+
+    case CL_COMMAND_SVM_MEMFILL_RECT_POCL:
+      pocl_aligned_free (node->command.svm_fill_rect.pattern);
       break;
 
     case CL_COMMAND_NATIVE_KERNEL:
@@ -2061,6 +1812,9 @@ pocl_copy_command_node (_cl_command_node *dst_node, _cl_command_node *src_node)
               src_node->command.svm_fill.pattern_size);
       break;
 
+    case CL_COMMAND_COMMAND_BUFFER_KHR:
+      POname (clRetainCommandBufferKHR) (dst_node->command.replay.buffer);
+      POCL_FALLTHROUGH;
     /* These cases are currently not handled in pocl_copy_event_node,
      * because there is no command buffer equivalent of these nodes. */
     case CL_COMMAND_NATIVE_KERNEL:
@@ -2083,7 +1837,6 @@ pocl_update_event_finished (cl_int status, const char *func, unsigned line,
 {
   assert (event != NULL);
   assert (event->queue != NULL);
-  assert (event->status > CL_COMPLETE);
   int notify_cmdq = CL_FALSE;
   cl_command_buffer_khr command_buffer = NULL;
   _cl_command_node *node = NULL;
@@ -2091,6 +1844,7 @@ pocl_update_event_finished (cl_int status, const char *func, unsigned line,
   cl_command_queue cq = event->queue;
   POCL_LOCK_OBJ (cq);
   POCL_LOCK_OBJ (event);
+  assert (event->status > CL_COMPLETE);
   if ((cq->properties & CL_QUEUE_PROFILING_ENABLE)
       && (cq->device->has_own_timer == 0))
     event->time_end = pocl_gettimemono_ns ();
@@ -2167,45 +1921,6 @@ pocl_update_event_finished (cl_int status, const char *func, unsigned line,
 
   ops->broadcast (event);
 
-#ifdef ENABLE_REMOTE_CLIENT
-  /* With remote being asynchronous it is possible that an event completion
-   * signal is received before some of its dependencies. Therefore this event
-   * has to be removed from the notify lists of any remaining events in the
-   * wait list.
-   *
-   * Mind the acrobatics of trying to avoid races with pocl_broadcast and
-   * pocl_create_event_sync. */
-  event_node *tmp;
-  POCL_LOCK_OBJ (event);
-  while ((tmp = event->wait_list))
-    {
-      cl_event notifier = tmp->event;
-      POCL_UNLOCK_OBJ (event);
-      pocl_lock_events_inorder (notifier, event);
-      if (tmp != event->wait_list)
-        {
-          pocl_unlock_events_inorder (notifier, event);
-          POCL_LOCK_OBJ (event);
-          continue;
-        }
-      event_node *tmp2;
-      LL_FOREACH (notifier->notify_list, tmp2)
-      {
-        if (tmp2->event == event)
-          {
-            LL_DELETE (notifier->notify_list, tmp2);
-            pocl_mem_manager_free_event_node (tmp2);
-            break;
-          }
-      }
-      LL_DELETE (event->wait_list, tmp);
-      pocl_unlock_events_inorder (notifier, event);
-      pocl_mem_manager_free_event_node (tmp);
-      POCL_LOCK_OBJ (event);
-    }
-  POCL_UNLOCK_OBJ (event);
-#endif
-
 #ifdef POCL_DEBUG_MESSAGES
   if (msg != NULL)
     {
@@ -2218,31 +1933,28 @@ pocl_update_event_finished (cl_int status, const char *func, unsigned line,
   if (ops->notify_event_finished)
     ops->notify_event_finished (event);
   POCL_UNLOCK_OBJ (event);
-  POname (clReleaseEvent) (event);
 
   if (notify_cmdq) {
     POCL_LOCK_OBJ (cq);
     ops->notify_cmdq_finished (cq);
     POCL_UNLOCK_OBJ (cq);
   }
-}
 
-
-void
-pocl_update_event_failed (cl_event event)
-{
-  POCL_UNLOCK_OBJ (event);
-  pocl_update_event_finished (CL_FAILED, NULL, 0, event, NULL);
-  POCL_LOCK_OBJ (event);
+  POname (clReleaseEvent) (event);
 }
 
 void
-pocl_update_event_device_lost (cl_event event)
+pocl_update_event_failed (cl_int status,
+                          const char *func,
+                          unsigned line,
+                          cl_event event,
+                          const char *msg)
 {
-  POCL_UNLOCK_OBJ (event);
-  pocl_update_event_finished (CL_DEVICE_NOT_AVAILABLE, NULL, 0, event, NULL);
-  POCL_LOCK_OBJ (event);
+  /* Should only be used with error statuses. */
+  assert (status < 0);
+  pocl_update_event_finished (status, func, line, event, msg);
 }
+
 
 void
 pocl_update_event_complete (const char *func, unsigned line,
@@ -2261,8 +1973,17 @@ pocl_update_event_complete (const char *func, unsigned line,
 /* execution model = Shader is used by Vulkan SPIR-V modules */
 #define ShaderExecModel 0x1
 
+#define OpMemoryModel 0x0003000e
+#define MemModelOpenCL 2
+#define Physical64 2
+
+/* exec_model is mandatory, addr_bits is optional & only used for
+ * KernelExecModel */
 static int
-bitcode_is_spirv_execmodel (const char *bitcode, size_t size, uint32_t type)
+bitcode_is_spirv_execmodel (const char *bitcode,
+                            size_t size,
+                            uint32_t exec_model,
+                            uint32_t addr_bits)
 {
   const uint32_t *bc32 = (const uint32_t *)bitcode;
   unsigned location = 0;
@@ -2271,33 +1992,60 @@ bitcode_is_spirv_execmodel (const char *bitcode, size_t size, uint32_t type)
   if ((size < 20) || (header_magic != SPIRV_MAGIC))
     return 0;
 
-  // skip version, generator, bound, schema
+  /* skip version, generator, bound, schema */
   location += 4;
-  int is_type = 0;
+  int matches_exec_model = 0, matches_addr_bits = 0;
   uint32_t value, instruction;
+  /* every opcapab is followed by one value */
   instruction = htole32 (bc32[location++]);
   value = htole32 (bc32[location++]);
   while (instruction == OpCapab && location < (size / 4))
     {
-      if (value == type)
-        return 1;
+      if (value == exec_model)
+        matches_exec_model = 1;
       instruction = htole32 (bc32[location++]);
       value = htole32 (bc32[location++]);
     }
+  if (!matches_exec_model)
+    return 0;
 
-  return 0;
+  if (addr_bits == 0 || exec_model != KernelExecModel)
+    return matches_exec_model;
+  else
+    {
+      /* for Kernel exec model, check also addressing bits */
+      location -= 2; /* undo last assignment from while loop */
+      while (location < (size / 4))
+        {
+          instruction = htole32 (bc32[location]);
+          unsigned word_count = instruction >> 16;
+          assert (instruction != OpCapab);
+          if (instruction == OpMemoryModel)
+            {
+              value = htole32 (bc32[location + 1]);
+              uint32_t spirv_addr_bits = (value == Physical64) ? 64 : 32;
+              matches_addr_bits = spirv_addr_bits == addr_bits;
+              break;
+            }
+          location += word_count;
+        }
+    }
+  return matches_exec_model && matches_addr_bits;
 }
 
 int
-pocl_bitcode_is_spirv_execmodel_kernel (const char *bitcode, size_t size)
+pocl_bitcode_is_spirv_execmodel_kernel (const char *bitcode,
+                                        size_t size,
+                                        cl_uint addr_bits)
 {
-  return bitcode_is_spirv_execmodel (bitcode, size, KernelExecModel);
+  return bitcode_is_spirv_execmodel (bitcode, size, KernelExecModel,
+                                     addr_bits);
 }
 
 int
 pocl_bitcode_is_spirv_execmodel_shader (const char *bitcode, size_t size)
 {
-  return bitcode_is_spirv_execmodel (bitcode, size, ShaderExecModel);
+  return bitcode_is_spirv_execmodel (bitcode, size, ShaderExecModel, 0);
 }
 
 int
@@ -2388,22 +2136,22 @@ pocl_escape_quoted_whitespace (char *temp_options, char *replace_me)
 }
 
 /* returns private datadir, possibly using relative path to libpocl sharedlib */
+POCL_EXPORT
 int pocl_get_private_datadir(char* private_datadir)
 {
 #ifdef ENABLE_RELOCATION
-    Dl_info info;
-    if (dladdr((void*)pocl_get_private_datadir, &info))
+  const char *Path = pocl_dynlib_pathname ((void *)pocl_get_private_datadir);
+  if (Path)
     {
-        char const *soname = info.dli_fname;
-        strcpy(private_datadir, soname);
-        char* last_slash = strrchr (private_datadir,'/');
-        if (last_slash)
-          {
-            ++last_slash;
-            *last_slash = 0;
-            strcat (private_datadir, POCL_INSTALL_PRIVATE_DATADIR_REL);
-            return 0;
-          }
+      strncpy (private_datadir, Path, POCL_MAX_PATHNAME_LENGTH);
+      char *last_slash = strrchr (private_datadir, POCL_PATH_SEPARATOR[0]);
+      if (last_slash)
+        {
+          ++last_slash;
+          *last_slash = 0;
+          strcat (private_datadir, POCL_INSTALL_FROM_LIB_TO_PRIVATE_DATADIR);
+          return 0;
+        }
         else
           return -1;
     }
@@ -2506,7 +2254,6 @@ pocl_str_append (const char **dst, const char *src)
   *dst = new_dst;
   return old_dst;
 }
-
 
 int
 pocl_fill_aligned_buf_with_pattern (void *__restrict__ ptr, size_t offset,
@@ -2636,6 +2383,9 @@ pocl_svm_check_get_pointer (cl_context context, const void *svm_ptr, size_t size
   char *svm_alloc_start = NULL;
   DL_FOREACH (context->raw_ptrs, item)
   {
+    if (item->vm_ptr == NULL)
+      continue;
+
     svm_alloc_start = (char *)item->vm_ptr;
     svm_alloc_end = svm_alloc_start + item->size;
     if (((char *)svm_ptr >= svm_alloc_start)
@@ -2716,20 +2466,18 @@ struct _pocl_async_callback_item
 };
 
 static pocl_async_callback_item *async_callback_list = NULL;
-static pocl_cond_t async_cb_wake_cond
-  __attribute__ ((aligned (HOST_CPU_CACHELINE_SIZE)));
-static POCL_FAST_LOCK_T async_cb_lock
-  __attribute__ ((aligned (HOST_CPU_CACHELINE_SIZE)));
+POCL_ALIGNAS(HOST_CPU_CACHELINE_SIZE) static pocl_cond_t async_cb_wake_cond;
+POCL_ALIGNAS(HOST_CPU_CACHELINE_SIZE) static pocl_lock_t async_cb_lock;
 static int exit_pocl_async_callback_thread = CL_FALSE;
 static pocl_thread_t async_callback_thread_id = 0;
 
 static void
 pocl_async_cb_push (pocl_async_callback_item *it)
 {
-  POCL_FAST_LOCK (async_cb_lock);
+  POCL_LOCK (async_cb_lock);
   LL_APPEND (async_callback_list, it);
   POCL_SIGNAL_COND (async_cb_wake_cond);
-  POCL_FAST_UNLOCK (async_cb_lock);
+  POCL_UNLOCK (async_cb_lock);
 }
 
 void
@@ -2743,7 +2491,8 @@ pocl_event_cb_push (cl_event event, int status)
   event_callback_item *tmp = NULL, *cb = NULL;
   LL_FOREACH_SAFE (event->callback_list, cb, tmp)
     {
-      if (cb->trigger_status == status)
+      if ((cb->trigger_status == status)
+          || (cb->trigger_status == CL_COMPLETE && status < CL_COMPLETE))
         {
           assert (event->callback_list);
           LL_DELETE (event->callback_list, cb);
@@ -2794,10 +2543,10 @@ pocl_mem_cb_push (cl_mem mem)
 void
 pocl_async_callback_finish ()
 {
-  POCL_FAST_LOCK (async_cb_lock);
+  POCL_LOCK (async_cb_lock);
   exit_pocl_async_callback_thread = CL_TRUE;
   POCL_SIGNAL_COND (async_cb_wake_cond);
-  POCL_FAST_UNLOCK (async_cb_lock);
+  POCL_UNLOCK (async_cb_lock);
   if (async_callback_thread_id)
     POCL_JOIN_THREAD (async_callback_thread_id);
   POCL_DESTROY_COND (async_cb_wake_cond);
@@ -2814,7 +2563,9 @@ process_event_cb (pocl_async_callback_item *it)
   while (cb)
     {
       next_cb = cb->next;
-      assert (cb->trigger_status == it->data.event_cb.status);
+      assert ((cb->trigger_status == it->data.event_cb.status)
+              || (cb->trigger_status == CL_COMPLETE
+                  && it->data.event_cb.status < CL_COMPLETE));
       cb->callback_function (event, cb->trigger_status, cb->user_data);
       free (cb);
       cb = next_cb;
@@ -2857,9 +2608,9 @@ process_context_cb (pocl_async_callback_item *it)
 static void *
 pocl_async_callback_thread (void *data)
 {
+  POCL_LOCK (async_cb_lock);
   while (exit_pocl_async_callback_thread == CL_FALSE)
     {
-      POCL_FAST_LOCK (async_cb_lock);
       /* Event callback handling calls functions in the same order
          they were added if the status matches the specified one. */
       pocl_async_callback_item *it = NULL;
@@ -2872,10 +2623,10 @@ pocl_async_callback_thread (void *data)
         {
           POCL_WAIT_COND (async_cb_wake_cond, async_cb_lock);
         }
-      POCL_FAST_UNLOCK (async_cb_lock);
 
       if (it)
         {
+          POCL_UNLOCK (async_cb_lock);
           switch (it->type)
             {
             case POCL_CB_TYPE_EVENT:
@@ -2889,16 +2640,18 @@ pocl_async_callback_thread (void *data)
               break;
             }
           free (it);
+          POCL_LOCK (async_cb_lock);
         }
     }
 
+  POCL_UNLOCK (async_cb_lock);
   return NULL;
 }
 
 void
 pocl_async_callback_init ()
 {
-  POCL_FAST_INIT (async_cb_lock);
+  POCL_INIT_LOCK (async_cb_lock);
   POCL_INIT_COND (async_cb_wake_cond);
   exit_pocl_async_callback_thread = CL_FALSE;
   async_callback_thread_id = 0;

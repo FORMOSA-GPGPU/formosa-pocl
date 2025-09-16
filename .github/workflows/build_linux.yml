@@ -1,10 +1,14 @@
 ---
-name: Linux test matrix
+name: Linux / CPU x86-64 tests
 
 permissions:
   contents: read
 
 on:
+  push:
+    branches:
+      - 'main'
+      - 'release*'
   workflow_dispatch:
   pull_request:
     paths-ignore:
@@ -14,19 +18,13 @@ on:
       - 'CREDITS'
       - 'LICENSE'
       - 'README.*'
+      - 'tools/docker/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref || github.run_id }}
   cancel-in-progress: true
 
 env:
-  CTEST_FLAGS: "--output-on-failure --test-output-size-failed 128000 --test-output-size-passed 128000"
-  POCL_KERNEL_CACHE: "0"
-  POCL_MAX_WORK_GROUP_SIZE: "1024"
-  POCL_MEMORY_LIMIT: "2"
-  CCACHE_COMPRESS: "true"
-  CCACHE_COMPRESSLEVEL: "1"
-  CCACHE_MAXSIZE: "25000M"
   CCACHE_BASEDIR: "${{ github.workspace }}"
   CCACHE_DIR: "${{ github.workspace }}/../../../../ccache_storage"
   EXAMPLES_DIR: "${{ github.workspace }}/../../../../examples"
@@ -35,36 +33,41 @@ jobs:
   main_test_matrix:
     name: LLVM ${{ matrix.llvm }} - ${{ matrix.config }}
     runs-on: [self-hosted, linux, x64, "${{ matrix.config }}" ]
-    # these runners have action runner directly in the home directory
+    # CPU runners have action runner directly in the home directory
     env:
+      CCACHE_BASEDIR: "${{ github.workspace }}"
       CCACHE_DIR: "${{ github.workspace }}/../../../ccache_storage"
       EXAMPLES_DIR: "${{ github.workspace }}/../../../examples"
       TSAN_OPTIONS: "second_deadlock_stack=1"
     strategy:
       fail-fast: false
       matrix:
-        llvm: [17, 18]
-        # basic = simplest pthread build
-        # devel = with devel options
+        llvm: [19, 20]
         # cts_spirv = cts with SPIR-V
         # tier1 = includes CTS without SPIR-V
-        # asan, tsan, ubsan = sanitizers
         # chipstar 1.1 only supports LLVM up to 17
-        config: [cts_spirv, tier1, chipstar, asan, tsan, ubsan]
-        exclude:
-          - llvm: 18
+        # chipstar 1.2 only supports LLVM up to 19
+        # asan, tsan, ubsan = sanitizers
+        config: [cts_spirv, tier1, asan, tsan, ubsan]
+        include:
+          - llvm: 19
             config: chipstar
 
     steps:
       - name: Checkout
-        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Load Env vars
+        id: load-env
+        run: |
+          cat ${{ github.workspace }}/.github/variables.txt >> $GITHUB_ENV
 
       - name: CMake
         id: cmake
         run: |
           runCMake() {
             BUILD_FLAGS="-O1 -ggdb -march=native -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
-            cmake -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DDEVELOPER_MODE=ON \
+            cmake -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo "-DCMAKE_C_FLAGS_RELWITHDEBINFO=$BUILD_FLAGS" \
             "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=$BUILD_FLAGS" \
             -DWITH_LLVM_CONFIG=/usr/bin/llvm-config-${{ matrix.llvm }} -DLLVM_SPIRV=/usr/bin/llvm-spirv-${{ matrix.llvm }} \
@@ -85,11 +88,11 @@ jobs:
             mkdir -p ${EXAMPLES_DIR}/source
             runCMake -DENABLE_TESTSUITES=chipStar -DTESTSUITE_SOURCE_BASEDIR=${EXAMPLES_DIR}/source -DTESTSUITE_BASEDIR=${EXAMPLES_DIR}/build_chipstar_${{ matrix.llvm }}
           elif [ "${{ matrix.config }}" == "asan" ]; then
-            runCMake -DENABLE_ASAN=1 -DENABLE_ICD=0 -DENABLE_LOADABLE_DRIVERS=0 -DDEVELOPER_MODE=OFF
+            runCMake -DENABLE_ASAN=1 -DENABLE_ICD=0 -DENABLE_LOADABLE_DRIVERS=0 -DDEVELOPER_MODE=ON
           elif [ "${{ matrix.config }}" == "tsan" ]; then
-            runCMake -DENABLE_TSAN=1 -DENABLE_ICD=0 -DENABLE_LOADABLE_DRIVERS=0 -DENABLE_PRINTF_IMMEDIATE_FLUSH=OFF
+            runCMake -DENABLE_TSAN=1 -DENABLE_ICD=0 -DENABLE_LOADABLE_DRIVERS=0 -DDEVELOPER_MODE=ON -DENABLE_PRINTF_IMMEDIATE_FLUSH=OFF
           elif [ "${{ matrix.config }}" == "ubsan" ]; then
-            runCMake -DENABLE_UBSAN=1 -DENABLE_LATEST_CXX_STD=ON -DENABLE_ICD=0 -DENABLE_LOADABLE_DRIVERS=0
+            runCMake -DENABLE_UBSAN=1 -DENABLE_LATEST_CXX_STD=ON -DENABLE_ICD=0 -DDEVELOPER_MODE=ON -DENABLE_LOADABLE_DRIVERS=0
           else
             echo "Unknown configuration" && exit 1
           fi
@@ -98,7 +101,7 @@ jobs:
         id: build_pocl
         timeout-minutes: 30
         run: |
-          cd ${{ github.workspace }}/build && make -j$(nproc)
+          cd ${{ github.workspace }}/build && make -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh)
 
       - name: Build CTS Examples
         id: build_cts_examples
@@ -106,7 +109,7 @@ jobs:
         timeout-minutes: 60
         if: ${{ matrix.config == 'cts_spirv' || matrix.config == 'tier1' }}
         run: |
-          cd ${{ github.workspace }}/build/examples/conformance && make -j$(nproc) conformance
+          cd ${{ github.workspace }}/build/examples/conformance && make -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh) conformance
 
       - name: Build Tier1 Examples
         id: build_tier1_examples
@@ -114,11 +117,11 @@ jobs:
         timeout-minutes: 90
         if: ${{ matrix.config == 'tier1' }}
         run: |
-          cd ${{ github.workspace }}/build/examples/AMDSDK3.0 && make -j$(nproc) AMDSDK3.0
-          cd ${{ github.workspace }}/build/examples/piglit && make -j$(nproc) piglit
+          cd ${{ github.workspace }}/build/examples/AMDSDK3.0 && make -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh) AMDSDK3.0
+          cd ${{ github.workspace }}/build/examples/piglit && make -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh) piglit
           # currently broken
-          #cd ${{ github.workspace }}/build/examples/PyOpenCL && make -j$(nproc) PyOpenCL
-          cd ${{ github.workspace }}/build/examples/IntelSVM && make -j$(nproc) IntelSVM
+          #cd ${{ github.workspace }}/build/examples/PyOpenCL && make -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh) PyOpenCL
+          cd ${{ github.workspace }}/build/examples/IntelSVM && make -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh) IntelSVM
 
       - name: Build chipStar Examples
         id: build_chipstar_examples
@@ -126,7 +129,7 @@ jobs:
         timeout-minutes: 90
         if: ${{ matrix.config == 'chipstar' }}
         run: |
-          cd ${{ github.workspace }}/build/examples/chipStar && make -j$(nproc) chipStar
+          cd ${{ github.workspace }}/build/examples/chipStar && make -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh) chipStar
 
       - name: Get CMake version
         id: cmake_version
@@ -135,7 +138,7 @@ jobs:
 
       - name: Cache CTest timings
         id: cache_ctest
-        uses: actions/cache@2cdf405574d6ef1f33a1d12acccd3ae82f47b3f2
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
         with:
           path: ${{ github.workspace }}/build/Testing/Temporary/CTestCostData.txt
           key: ctest-cache-${{ steps.cmake_version.outputs.version }}-${{ runner.name }}-${{ matrix.config }}
@@ -147,9 +150,11 @@ jobs:
         timeout-minutes: 120
         run: |
           runCTest() {
-            cd ${{ github.workspace }}/build &&  ctest -j$(nproc) $CTEST_FLAGS "$@"
+            cd ${{ github.workspace }}/build &&  ctest -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh) $CTEST_FLAGS "$@"
           }
           rm -rf ${{ env.POCL_CACHE_DIR }}
+          # hardcoded path in test_compiler / execute_after_included_header_link
+          rm -rf /tmp/foo
           mkdir ${{ env.POCL_CACHE_DIR }}
           if [ "${{ matrix.config }}" == "cts_spirv" ]; then
             runCTest -L conformance_suite_micro_spirv
@@ -160,514 +165,9 @@ jobs:
           elif [ "${{ matrix.config }}" == "asan" ]; then
             runCTest -L "runtime|asan"
           elif [ "${{ matrix.config }}" == "tsan" ]; then
-            runCTest -L "internal|tsan" -E "clCreateSubDevices"
+            runCTest -L "cpu|tsan"
           elif [ "${{ matrix.config }}" == "ubsan" ]; then
-            runCTest -L "internal|ubsan"
+            runCTest -L "cpu|ubsan"
           else
             echo "Unknown configuration" && exit 1
           fi
-
-  # jobs run on Github-hosted runners.
-  # TODO: move more self-hosted to Github-hosted
-  # unfortunately sanitizers don't work on Github-hosted runners,
-  # probably some limitation of Virtual address space
-  # (sanitizer-built binaries require >=20 terabytes of Virt AS)
-  github_test_matrix:
-    name: LLVM ${{ matrix.llvm }} - ${{ matrix.config }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        llvm: [17, 18]
-        # basic = simplest pthread build
-        # devel = with devel options
-        # cts_spirv = cts with SPIR-V
-        # tier1 = includes CTS without SPIR-V
-        # asan, tsan, ubsan = sanitizers
-        # chipstar 1.1 only supports LLVM up to 17
-        config: [basic, devel]
-        include:
-          - llvm: 14
-            config: OpenMP
-          - llvm: 15
-            config: TBB
-          - llvm: 16
-            config: basic
-          - llvm: 18
-            config: static
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
-
-      - name: Install prerequisites and ocl-icd
-        run: >
-          sudo apt update -y &&
-          sudo apt install -y wget gpg python3-dev libpython3-dev build-essential ocl-icd-libopencl1 cmake make git pkg-config libhwloc-dev zlib1g-dev libtbb2-dev &&
-          wget -qO- "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xd1e4ec6482cdd1da8bf1566a593b02af628bafbf" | sudo gpg --dearmor -o /usr/share/keyrings/ocl-icd.gpg &&
-          echo "deb [signed-by=/usr/share/keyrings/ocl-icd.gpg] https://ppa.launchpadcontent.net/ocl-icd/ppa/ubuntu jammy main" >/tmp/ocl-icd.list &&
-          sudo mv /tmp/ocl-icd.list /etc/apt/sources.list.d/ &&
-          sudo apt update -y &&
-          sudo apt install -y ocl-icd-libopencl1 ocl-icd-dev ocl-icd-opencl-dev
-
-      - name: Install LLVM <16
-        if: ${{ matrix.llvm <= 15 }}
-        run: >
-          export LLVM_VERSION=${{ matrix.llvm }} &&
-          sudo apt install -y libclang-cpp${LLVM_VERSION}-dev llvm-${LLVM_VERSION}-dev libclang-${LLVM_VERSION}-dev clang-${LLVM_VERSION} llvm-${LLVM_VERSION}
-
-      - name: Install LLVM 16+
-        if: ${{ matrix.llvm > 15 }}
-        run: >
-          export LLVM_VERSION=${{ matrix.llvm }} &&
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/llvm-snapshot.gpg &&
-          echo "deb [signed-by=/usr/share/keyrings/llvm-snapshot.gpg] http://apt.llvm.org/jammy/ llvm-toolchain-jammy-${LLVM_VERSION} main" >/tmp/llvm.list &&
-          sudo mv /tmp/llvm.list /etc/apt/sources.list.d/ &&
-          sudo apt update -y &&
-          sudo apt install -y libclang-cpp${LLVM_VERSION}-dev llvm-${LLVM_VERSION}-dev libclang-${LLVM_VERSION}-dev clang-${LLVM_VERSION} llvm-${LLVM_VERSION} libpolly-${LLVM_VERSION}-dev
-
-      - name: CMake
-        id: cmake
-        run: |
-          runCMake() {
-            BUILD_FLAGS="-O1 -march=native -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
-            cmake -DDEVELOPER_MODE=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            "-DCMAKE_C_FLAGS_RELWITHDEBINFO=$BUILD_FLAGS" \
-            "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=$BUILD_FLAGS" \
-            -DWITH_LLVM_CONFIG=/usr/bin/llvm-config-${{ matrix.llvm }} \
-            "$@" -B ${{ github.workspace }}/build ${{ github.workspace }}
-          }
-
-          rm -rf ${{ github.workspace }}/build
-          mkdir ${{ github.workspace }}/build
-          if [ "${{ matrix.config }}" == "OpenMP" ]; then
-            runCMake -DENABLE_ICD=1 -DENABLE_HOST_CPU_DEVICES_OPENMP=1
-          elif [ "${{ matrix.config }}" == "TBB" ]; then
-            runCMake -DENABLE_ICD=1 -DENABLE_TBB_DEVICE=1
-          elif [ "${{ matrix.config }}" == "basic" ]; then
-            runCMake -DENABLE_ICD=1
-          elif [ "${{ matrix.config }}" == "static" ]; then
-            runCMake -DENABLE_ICD=1 -DSTATIC_LLVM=1
-          elif [ "${{ matrix.config }}" == "devel" ]; then
-            runCMake -DENABLE_RELOCATION=0 -DENABLE_VALGRIND=1 -DENABLE_EXTRA_VALIDITY_CHECKS=1
-          else
-            echo "Unknown configuration" && exit 1
-          fi
-
-      - name: Build PoCL
-        id: build_pocl
-        timeout-minutes: 20
-        run: |
-          cd ${{ github.workspace }}/build && make -j$(nproc)
-
-      - name: Run Tests
-        env:
-          POCL_CACHE_DIR: "${{ runner.temp }}/GH_POCL_CACHE"
-        id: ctest
-        timeout-minutes: 120
-        run: |
-          runCTest() {
-            cd ${{ github.workspace }}/build &&  ctest -j$(nproc) $CTEST_FLAGS "$@"
-          }
-          rm -rf ${{ env.POCL_CACHE_DIR }}
-          mkdir ${{ env.POCL_CACHE_DIR }}
-          if [ "${{ matrix.config }}" == "OpenMP" ]; then
-            runCTest -L internal
-          elif [ "${{ matrix.config }}" == "TBB" ]; then
-            runCTest -L internal
-          elif [ "${{ matrix.config }}" == "basic" ]; then
-            runCTest -L internal
-          elif [ "${{ matrix.config }}" == "static" ]; then
-            runCTest -L internal
-          elif [ "${{ matrix.config }}" == "devel" ]; then
-            runCTest -L internal
-          else
-            echo "Unknown configuration" && exit 1
-          fi
-
-  oneapi_matrix:
-    name: LLVM ${{ matrix.llvm }} - oneAPI
-    runs-on: [self-hosted, linux, x64, oneapi]
-    strategy:
-      fail-fast: false
-      matrix:
-        llvm: [18]
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
-
-      - name: CMake
-        id: cmake
-        run: |
-          runCMake() {
-            BUILD_FLAGS="-O1 -march=native -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
-            cmake -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DDEVELOPER_MODE=ON \
-            -DENABLE_HOST_CPU_DEVICES=1 -DENABLE_LEVEL0=1 -DSTATIC_LLVM=ON \
-            -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_FLAGS_RELEASE=$BUILD_FLAGS" "-DCMAKE_CXX_FLAGS_RELEASE=$BUILD_FLAGS" \
-            -DWITH_LLVM_CONFIG=/usr/bin/llvm-config-${{ matrix.llvm }} -DLLVM_SPIRV=/usr/bin/llvm-spirv-${{ matrix.llvm }} \
-            "$@" -B ${{ github.workspace }}/build ${{ github.workspace }}
-          }
-
-          rm -rf ${{ github.workspace }}/build
-          mkdir ${{ github.workspace }}/build
-          mkdir -p ${EXAMPLES_DIR}/build_oneapi
-          mkdir -p ${EXAMPLES_DIR}/source
-          runCMake "-DENABLE_TESTSUITES=dpcpp-book-samples;oneapi-samples;simple-sycl-samples;intel-compute-samples" -DTESTSUITE_SOURCE_BASEDIR=${EXAMPLES_DIR}/source -DTESTSUITE_BASEDIR=${EXAMPLES_DIR}/build_oneapi -DSYCL_CXX_COMPILER=/opt/intel/oneapi/compiler/latest/bin/icpx -DSYCL_LIBDIR=/opt/intel/oneapi/compiler/latest/lib
-
-      - name: Build PoCL
-        id: build_pocl
-        timeout-minutes: 20
-        run: |
-          cd ${{ github.workspace }}/build && make -j4
-
-      - name: Build Examples
-        id: build_examples
-        # occasionally git timeouts on git clone of the examples
-        timeout-minutes: 120
-        run: |
-          cd ${{ github.workspace }}/build/examples/dpcpp-book-samples && make -j4 dpcpp-book-samples
-          cd ${{ github.workspace }}/build/examples/oneapi-samples && make -j4 oneapi-samples
-          cd ${{ github.workspace }}/build/examples/simple-sycl-samples && make -j4 simple-sycl-samples
-          cd ${{ github.workspace }}/build/examples/intel-compute-samples && make -j4 intel-compute-samples
-
-      - name: Run CPU Tests
-        env:
-          POCL_CACHE_DIR: "${{ runner.temp }}/GH_POCL_CACHE"
-        id: ctest_cpu
-        timeout-minutes: 40
-        run: |
-          rm -rf ${{ env.POCL_CACHE_DIR }}
-          mkdir ${{ env.POCL_CACHE_DIR }}
-          cd ${{ github.workspace }}/build && ${{ github.workspace }}/tools/scripts/run_oneapi_tests_cpu -j4 $CTEST_FLAGS
-
-      - name: Run GPU Tests
-        env:
-          POCL_CACHE_DIR: "${{ runner.temp }}/GH_POCL_CACHE"
-        id: ctest_gpu
-        timeout-minutes: 40
-        run: |
-          rm -rf ${{ env.POCL_CACHE_DIR }}
-          mkdir ${{ env.POCL_CACHE_DIR }}
-          cd ${{ github.workspace }}/build && ${{ github.workspace }}/tools/scripts/run_oneapi_tests_gpu -j1 $CTEST_FLAGS
-
-
-  remote_matrix:
-    name: LLVM ${{ matrix.llvm }} - remote
-    runs-on: [self-hosted, linux, x64, remote]
-    strategy:
-      fail-fast: false
-      matrix:
-        llvm: [16]
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
-
-      - name: CMake
-        id: cmake
-        run: |
-          runCMake() {
-            BUILD_FLAGS="-O1 -march=native -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
-            cmake -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DDEVELOPER_MODE=ON \
-            -DENABLE_HOST_CPU_DEVICES=1 -DENABLE_LEVEL0=0 -DENABLE_REMOTE_CLIENT=1 -DENABLE_REMOTE_SERVER=1 \
-            -DENABLE_LOADABLE_DRIVERS=0 -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS_RELEASE="$BUILD_FLAGS" \
-            -DCMAKE_CXX_FLAGS_RELEASE="$BUILD_FLAGS" -DWITH_LLVM_CONFIG=/usr/bin/llvm-config-${{ matrix.llvm }} \
-            -DENABLE_ICD=1 "$@" -B ${{ github.workspace }}/build ${{ github.workspace }}
-          }
-
-          rm -rf ${{ github.workspace }}/build
-          mkdir ${{ github.workspace }}/build
-          runCMake
-
-      - name: Build PoCL
-        id: build_pocl
-        timeout-minutes: 20
-        run: |
-          cd ${{ github.workspace }}/build && make -j4
-
-      - name: Run Tests
-        env:
-          POCL_CACHE_DIR: "${{ runner.temp }}/GH_POCL_CACHE"
-        id: ctest
-        timeout-minutes: 120
-        run: |
-          rm -rf ${{ env.POCL_CACHE_DIR }}
-          mkdir ${{ env.POCL_CACHE_DIR }}
-          cd ${{ github.workspace }}/build && ${{ github.workspace }}/tools/scripts/run_remote_tests $CTEST_FLAGS -E test_command_buffer
-
-  rdma_matrix:
-    name: LLVM ${{ matrix.llvm }} - rdma
-    runs-on: [self-hosted, linux, x64, rdma]
-    strategy:
-      fail-fast: false
-      matrix:
-        llvm: [17]
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
-
-      - name: CMake
-        id: cmake
-        run: |
-          runCMake() {
-            BUILD_FLAGS="-O1 -march=native -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
-            cmake -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DDEVELOPER_MODE=ON \
-            -DENABLE_HOST_CPU_DEVICES=1 -DENABLE_LEVEL0=0 -DENABLE_REMOTE_CLIENT=1 -DENABLE_REMOTE_SERVER=1 -DENABLE_RDMA=1 \
-            -DENABLE_LOADABLE_DRIVERS=0 -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS_RELEASE="$BUILD_FLAGS" \
-            -DCMAKE_CXX_FLAGS_RELEASE="$BUILD_FLAGS" -DWITH_LLVM_CONFIG=/usr/bin/llvm-config-${{ matrix.llvm }} \
-            -DENABLE_ICD=1 "$@" -B ${{ github.workspace }}/build ${{ github.workspace }}
-          }
-
-          rm -rf ${{ github.workspace }}/build
-          mkdir ${{ github.workspace }}/build
-          runCMake
-
-      - name: Build PoCL
-        id: build_pocl
-        timeout-minutes: 20
-        run: |
-          cd ${{ github.workspace }}/build && make -j4
-
-      - name: Run Tests
-        env:
-          POCL_CACHE_DIR: "${{ runner.temp }}/GH_POCL_CACHE"
-        id: ctest
-        timeout-minutes: 120
-        run: |
-          rm -rf ${{ env.POCL_CACHE_DIR }}
-          mkdir ${{ env.POCL_CACHE_DIR }}
-          cd ${{ github.workspace }}/build && ctest $CTEST_FLAGS -L remote_rdma
-
-  cuda_matrix:
-    name: LLVM ${{ matrix.llvm }} - ${{ matrix.config }}
-    runs-on: [self-hosted, linux, x64, cuda]
-    strategy:
-      fail-fast: false
-      matrix:
-        llvm: [17, 18]
-        config: [cuda]
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
-
-      - name: Run CMake
-        id: cmake
-        run: |
-          runCMake() {
-            BUILD_FLAGS="-O1 -march=native -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
-            cmake -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DDEVELOPER_MODE=ON \
-            -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_FLAGS_RELEASE=$BUILD_FLAGS" "-DCMAKE_CXX_FLAGS_RELEASE=$BUILD_FLAGS" \
-            -DWITH_LLVM_CONFIG=/usr/bin/llvm-config-${{ matrix.llvm }} \
-            "$@" -B ${{ github.workspace }}/build ${{ github.workspace }}
-          }
-
-          rm -rf ${{ github.workspace }}/build
-          mkdir ${{ github.workspace }}/build
-          runCMake -DENABLE_CUDA=ON
-
-      - name: Run Build
-        id: build
-        run: |
-          cd ${{ github.workspace }}/build && make -j$(nproc)
-
-      - name: Run Tests
-        env:
-          POCL_CACHE_DIR: "${{ runner.temp }}/GH_POCL_CACHE"
-        id: ctest
-        timeout-minutes: 120
-        run: |
-          rm -rf ${{ env.POCL_CACHE_DIR }}
-          mkdir ${{ env.POCL_CACHE_DIR }}
-          cd ${{ github.workspace }}/build && ${{ github.workspace }}/tools/scripts/run_cuda_tests $CTEST_FLAGS
-
-  openasip_matrix:
-    env:
-      PATH: "/home/LLVM_${{ matrix.llvm }}0/bin:/home/TCE_${{ matrix.llvm }}0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-      LD_LIBRARY_PATH: "/home/TCE_${{ matrix.llvm }}0/lib"
-    name: LLVM ${{ matrix.llvm }} - ${{ matrix.config }}
-    runs-on: [self-hosted, linux, x64, openasip]
-    strategy:
-      fail-fast: false
-      matrix:
-        # 15 to 17 should work, however 17 currently fails two tests (fp16)
-        llvm: [17]
-        config: [openasip]
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
-
-      - name: Run CMake
-        id: cmake
-        run: |
-          runCMake() {
-            BUILD_FLAGS="-O1 -march=native -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
-            cmake -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DDEVELOPER_MODE=ON \
-            -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_FLAGS_RELEASE=$BUILD_FLAGS" "-DCMAKE_CXX_FLAGS_RELEASE=$BUILD_FLAGS" \
-            -DWITH_LLVM_CONFIG=/home/LLVM_${{ matrix.llvm }}0/bin/llvmtce-config \
-            "$@" -B ${{ github.workspace }}/build ${{ github.workspace }}
-          }
-
-          rm -rf ${{ github.workspace }}/build
-          mkdir ${{ github.workspace }}/build
-          runCMake -DENABLE_TCE=ON
-
-      - name: Run Build
-        id: build
-        run: |
-          cd ${{ github.workspace }}/build && make -j$(nproc)
-
-      - name: Run Tests
-        env:
-          POCL_CACHE_DIR: "${{ runner.temp }}/GH_POCL_CACHE"
-        id: ctest
-        timeout-minutes: 120
-        run: |
-          rm -rf ${{ env.POCL_CACHE_DIR }}
-          mkdir ${{ env.POCL_CACHE_DIR }}
-          cd ${{ github.workspace }}/build && ${{ github.workspace }}/tools/scripts/run_tta_tests $CTEST_FLAGS
-
-  # could be tried with multiple CLSPV versions
-  vulkan_matrix:
-    name: Vulkan
-    runs-on: [self-hosted, linux, vulkan]
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
-
-      - name: Run CMake
-        id: cmake
-        run: |
-          runCMake() {
-            BUILD_FLAGS="-O1 -march=native -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
-            cmake -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DDEVELOPER_MODE=ON \
-            -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_FLAGS_RELEASE=$BUILD_FLAGS" "-DCMAKE_CXX_FLAGS_RELEASE=$BUILD_FLAGS" \
-            "$@" -B ${{ github.workspace }}/build ${{ github.workspace }}
-          }
-
-          rm -rf ${{ github.workspace }}/build
-          mkdir ${{ github.workspace }}/build
-          runCMake -DENABLE_VULKAN=1 -DCLSPV_DIR=/home/CLSPV -DENABLE_HOST_CPU_DEVICES=0 -DENABLE_LLVM=0
-
-      - name: Run Build
-        id: build
-        run: |
-          cd ${{ github.workspace }}/build && make -j4
-
-      - name: Run Tests
-        env:
-          POCL_CACHE_DIR: "${{ runner.temp }}/GH_POCL_CACHE"
-          VK_ICD_FILENAMES: "/usr/share/vulkan/icd.d/intel_icd.x86_64.json"
-        id: ctest
-        timeout-minutes: 120
-        run: |
-          rm -rf ${{ env.POCL_CACHE_DIR }}
-          mkdir ${{ env.POCL_CACHE_DIR }}
-          cd ${{ github.workspace }}/build && ${{ github.workspace }}/tools/scripts/run_vulkan_tests $CTEST_FLAGS
-
-
-  # this one is only for LLVM 16+
-  arm64_matrix:
-    name: LLVM ${{ matrix.llvm }} - ARM64 ${{ matrix.config }}
-    runs-on: [self-hosted, linux, arm64, ubuntu]
-    strategy:
-      fail-fast: false
-      matrix:
-        llvm: [18]
-        config: [basic]
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
-
-      - name: Run CMake
-        id: cmake
-        run: |
-          runCMake() {
-            BUILD_FLAGS="-O1 -march=native -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
-            cmake -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DDEVELOPER_MODE=ON \
-            -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_FLAGS_RELEASE=$BUILD_FLAGS" "-DCMAKE_CXX_FLAGS_RELEASE=$BUILD_FLAGS" \
-            -DWITH_LLVM_CONFIG=/opt/LLVM_${{ matrix.llvm }}0/bin/llvm-config \
-            "$@" -B ${{ github.workspace }}/build ${{ github.workspace }}
-          }
-
-          rm -rf ${{ github.workspace }}/build
-          mkdir ${{ github.workspace }}/build
-          runCMake -DENABLE_ICD=1
-
-      - name: Run Build
-        id: build
-        run: |
-          cd ${{ github.workspace }}/build && make -j$(nproc)
-
-      - name: Run Tests
-        env:
-          POCL_CACHE_DIR: "${{ runner.temp }}/GH_POCL_CACHE"
-        id: ctest
-        timeout-minutes: 120
-        run: |
-          rm -rf ${{ env.POCL_CACHE_DIR }}
-          mkdir ${{ env.POCL_CACHE_DIR }}
-          cd ${{ github.workspace }}/build && ctest -j$(nproc) $CTEST_FLAGS -L internal -E 'test_shuffle_half_'
-
-
-  level_zero_matrix:
-    name: LLVM ${{ matrix.llvm }} - ${{ matrix.config }}
-    runs-on: [self-hosted, linux, level_zero]
-    strategy:
-      fail-fast: false
-      matrix:
-        llvm: [17, 18]
-        config: [level_zero]
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871
-
-      - name: Run CMake
-        id: cmake
-        run: |
-          runCMake() {
-            BUILD_FLAGS="-O1 -march=native -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
-            cmake -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DDEVELOPER_MODE=ON \
-            -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_FLAGS_RELEASE=$BUILD_FLAGS" "-DCMAKE_CXX_FLAGS_RELEASE=$BUILD_FLAGS" \
-            "$@" -B ${{ github.workspace }}/build ${{ github.workspace }}
-          }
-
-          rm -rf ${{ github.workspace }}/build
-          mkdir ${{ github.workspace }}/build
-          mkdir -p ${EXAMPLES_DIR}/build_level0
-          mkdir -p ${EXAMPLES_DIR}/source
-          # test both with and without ENABLE_CONFORMANCE
-          if [ ${{ matrix.llvm }} -eq 17 ]; then
-            runCMake -DENABLE_LEVEL0=1 -DENABLE_HOST_CPU_DEVICES=0 -DSTATIC_LLVM=1 -DWITH_LLVM_CONFIG=/usr/bin/llvm-config-${{ matrix.llvm }}
-          else
-            runCMake -DENABLE_TESTSUITES=conformance -DENABLE_CONFORMANCE=ON -DTESTSUITE_SOURCE_BASEDIR=${EXAMPLES_DIR}/source -DTESTSUITE_BASEDIR=${EXAMPLES_DIR}/build_level0 -DENABLE_LEVEL0=1 -DENABLE_HOST_CPU_DEVICES=0 -DSTATIC_LLVM=1 -DWITH_LLVM_CONFIG=/usr/bin/llvm-config-${{ matrix.llvm }}
-          fi
-
-      - name: Run Build
-        id: build
-        run: |
-          cd ${{ github.workspace }}/build && make -j4
-
-      - name: Build Examples
-        id: build_examples
-        if: ${{ matrix.llvm == 18 }}
-        timeout-minutes: 120
-        run: |
-          cd ${{ github.workspace }}/build/examples/conformance && make -j4 conformance
-
-      - name: Run Tests
-        env:
-          POCL_CACHE_DIR: "${{ runner.temp }}/GH_POCL_CACHE"
-        id: ctest
-        timeout-minutes: 120
-        run: |
-          rm -rf ${{ env.POCL_CACHE_DIR }}
-          mkdir ${{ env.POCL_CACHE_DIR }}
-          # exclude long tests
-          cd ${{ github.workspace }}/build && ${{ github.workspace }}/tools/scripts/run_level0_tests -j2 $CTEST_FLAGS -LE long

@@ -1,0 +1,138 @@
+---
+name: Windows / MinGW / CPU tests
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - 'main'
+      - 'release*'
+  workflow_dispatch:
+  pull_request:
+    paths-ignore:
+      - 'doc/**'
+      - 'CHANGES'
+      - 'COPYING'
+      - 'CREDITS'
+      - 'LICENSE'
+      - 'README.*'
+      - 'tools/docker/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  mingw_test_matrix:
+    name: LLVM ${{ matrix.llvm_version }} - MinGW ${{ matrix.config }}
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    strategy:
+      fail-fast: false
+      matrix:
+        llvm_version: [19]
+        config: [cpu]
+
+    steps:
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@61f9e5e925871ba6c9e3e8da24ede83ea27fa91f # v2.27.0
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-hwloc
+            mingw-w64-x86_64-pkg-config
+
+      - name: Checkout PoCL
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup Build Environment
+        run: |
+          # Convert the Windows workspace path to an MSYS2 compatible one
+          WORKSPACE=$(cygpath -u "${{ github.workspace }}")
+          echo "WORKSPACE=${WORKSPACE}" >> $GITHUB_ENV
+
+      - name: Checkout LLVM
+        id: checkout-llvm
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: llvm/llvm-project
+          ref: release/${{ matrix.llvm_version }}.x
+          path: llvm-project
+
+      - name: Restore Cached LLVM
+        id: cache-llvm
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: install-llvm
+          key: llvm-mingw-${{ matrix.llvm_version }}-${{ runner.os }}
+
+      - if: ${{ steps.cache-llvm.outputs.cache-hit != 'true' }}
+        name: Configure LLVM
+        run: |
+          cmake -S llvm-project/llvm -B build-llvm \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_ENABLE_PROJECTS=clang \
+            -DLLVM_TARGETS_TO_BUILD=host \
+            -DCMAKE_INSTALL_PREFIX=${{ env.WORKSPACE }}/install-llvm \
+            -DLLVM_BUILD_LLVM_DYLIB=ON \
+            -DLLVM_LINK_LLVM_DYLIB=ON \
+            -G "Ninja"
+        # XXX: DYLIBs are necessary to work around export ordinal overflows
+
+      - if: ${{ steps.cache-llvm.outputs.cache-hit != 'true' }}
+        name: Build LLVM
+        run: |
+          cmake --build build-llvm
+          cmake --install build-llvm
+
+      - if: ${{ steps.cache-llvm.outputs.cache-hit != 'true' }}
+        name: Save LLVM
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: install-llvm
+          key: llvm-mingw-${{ matrix.llvm_version }}-${{ runner.os }}
+
+      - name: Load Env vars
+        id: load-env
+        run: |
+          cat ${{ env.WORKSPACE }}/.github/variables.txt >> $GITHUB_ENV
+
+      - name: Configure PoCL
+        run: |
+          cmake -S ${{ env.WORKSPACE }} -B ${{ env.WORKSPACE }}/build-pocl \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=${{ env.WORKSPACE }}/install-pocl \
+            -DWITH_LLVM_CONFIG=${{ env.WORKSPACE }}/install-llvm/bin/llvm-config.exe \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DENABLE_ICD=OFF \
+            -DENABLE_LOADABLE_DRIVERS=OFF \
+            -G "Ninja"
+        # XXX: ENABLE_ICD=OFF because ocl-icd doesn't support Windows,
+        #      and PoCL doesn't support Khronos' ICD loader
+        # XXX: BUILD_SHARED_LIBS=OFF because the CI workers have OpenCL.dll
+        #      in System32 which takes preference over our version.
+        # XXX: ENABLE_LOADABLE_DRIVERS=OFF because PoCL doesn't know how to
+        #      find drivers when built with BUILD_SHARED_LIBS=OFF
+
+      - name: Build PoCL
+        run: |
+          cmake --build ${{ env.WORKSPACE }}/build-pocl
+
+      - name: Run Tests
+        env:
+          POCL_CACHE_DIR: "${{ runner.temp }}/GH_POCL_CACHE"
+        timeout-minutes: 120
+        run: |
+          rm -rf ${{ env.POCL_CACHE_DIR }}
+          mkdir -p ${{ env.POCL_CACHE_DIR }}
+          cd ${{ env.WORKSPACE }}/build-pocl
+          export PATH=${{ env.WORKSPACE }}/install-llvm/bin:$PATH
+          ${{ env.WORKSPACE }}/tools/scripts/run_cpu_tests mingw $CTEST_FLAGS -j$(nproc)

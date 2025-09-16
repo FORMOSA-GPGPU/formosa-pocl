@@ -94,6 +94,16 @@ and leaves the diff uncommitted in the working tree.
 used in an interactive rebase session. Both scripts require "clang-format" binary
 present in PATH.
 
+.. note::
+    If the format scripts return an error similar to:
+
+    "UnicodeDecodeError: 'utf-8' codec can't decode byte 0xb3 in position 173310:
+    invalid start byte"
+
+    It is likely that the commit contains a binary file that is erroneously
+    being parsed. One solution is to break out the binary file into a separate
+    commit and later squash it once the formatting is done.
+
 An example emacs configuration to help get the pocl code style correct::
 
   (setq default-tab-width 2)
@@ -193,7 +203,8 @@ Code comments should be done C99 style (so "/\* ... \*/") in C files and C++ sty
 LLVM practises described `here
 <https://llvm.org/docs/CodingStandards.html#doxygen-use-in-documentation-comments>`_.
 Please keep in mind that for C files the Doxygen documentation should be created with "/\*\*"
-but use the "\\" prefix Doxygen commands, e.g. "\\param". It is also possible to
+but use the "\\" prefix Doxygen commands, e.g. "\\param". Preferably parameters
+are documented with "\\p" but "\\param" is also fine. It is also possible to
 generate a Doxygen documentation page by configuring CMake with: `ENABLE_DOXYGEN=YES`
 and then running::
 
@@ -270,7 +281,7 @@ A checklist and hints for testing and making a release successfully:
   updates done during the release cycle. Add missing changes from git log.
 
 * Create a single commit in master branch: change the version to the
-  release one (without -pre), in all relevant places (doc/**/conf.py,
+  release one (without -pre), in all relevant places (doc/\*\*/conf.py,
   CMakeLists.txt, etc); update the .so version (if required);
   check that supported LLVM versions in cmake/LLVM.cmake are correct.
   Create the release branch from this commit and push it to github.

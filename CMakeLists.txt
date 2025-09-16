@@ -2,6 +2,7 @@
 #   CMake build system files
 #
 #   Copyright (c) 2014-2024 pocl developers
+#                 2024 Pekka Jääskeläinen / Intel Finland Oy
 #
 #   Permission is hereby granted, free of charge, to any person obtaining a copy
 #   of this software and associated documentation files (the "Software"), to deal
@@ -23,7 +24,7 @@
 #
 #=============================================================================
 
-cmake_minimum_required(VERSION 3.12 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.15 FATAL_ERROR)
 cmake_policy(SET CMP0067 OLD)
 
 project(pocl)
@@ -34,7 +35,9 @@ MESSAGE(STATUS "CMAKE_SYSTEM_PROCESSOR: ${CMAKE_SYSTEM_PROCESSOR}")
 MESSAGE(STATUS "CMAKE_LIBRARY_ARCHITECTURE: ${CMAKE_LIBRARY_ARCHITECTURE}")
 
 set(LATEST_KNOWN_CXX_STD_VERSION "20")
-set(SUPPORTED_CXX_STD_VERSION "11")
+# this is required for lib/CL/pocl_threads.cc
+set(SUPPORTED_CXX_STD_VERSION "17")
+set(SUPPORTED_C_STD_VERSION "99")
 
 option(ENABLE_LATEST_CXX_STD "Upgrade C++ standard version to ${LATEST_KNOWN_CXX_STD_VERSION}. Required to get rid of unused variables warnings in compilers not supporting [[gnu::*]] attributes. Can bring other benefits, including performance and efficiency ones. Before a pull request build with this disabled." OFF)
 if(ENABLE_LATEST_CXX_STD)
@@ -45,6 +48,23 @@ endif()
 set(POCL_CMAKE_CXX_STANDARD ${CMAKE_CXX_STANDARD})
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+if(MSVC)
+  set(SUPPORTED_C_STD_VERSION "11")
+
+  # Enables __VA_ARGS__ for C++ on MSVC. For some reason the feature, conformant
+  # since C++11, is not enabled by default in the MSVC compiler.
+  add_compile_options(/Zc:preprocessor)
+
+  # Enable conformant respond from __cplusplus. Otherwise, the value is 199711L
+  # regardless of the C++ standard.
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>)
+
+  # TODO: Check other Zc options. We might still have some
+  #       leg-shooters enabled.
+endif()
+
+set(CMAKE_C_STANDARD "${SUPPORTED_C_STD_VERSION}")
 
 # if variable FEATURE_X isn't defined, sets it to DEFAULT_FEATURE_X;
 # also, if DEFAULT_FEATURE_X is 0, prevents FEATURE_X being 1
@@ -74,7 +94,10 @@ macro(setup_cached_var VARNAME DESCRIPTION DOCS_FEATURE_IS_UNAVAILABLE DOCS_REQU
 endmacro()
 
 include(CheckCCompilerFlag)
+include(CheckCXXCompilerFlag)
 include(CPackComponent)
+include(CheckFunctionExists)
+
 macro(pass_through_cpack_vars)
   get_cmake_property(cpackVarsToPassthrough VARIABLES)
   foreach(varName ${cpackVarsToPassthrough})
@@ -86,7 +109,7 @@ macro(pass_through_cpack_vars)
 endmacro()
 
 # don't allow implicit function declarations
-if(UNIX)
+if(UNIX OR MINGW)
   if((CMAKE_C_COMPILER_ID STREQUAL "GNU") OR
      (CMAKE_C_COMPILER_ID STREQUAL "Clang") OR
       (CMAKE_C_COMPILER_ID STREQUAL "AppleClang"))
@@ -97,17 +120,37 @@ if(UNIX)
         set(FORBID_IMPLICIT_FUNCTIONS ${FORBID_IMPLICIT_FUNCTIONS} "-Werror=incompatible-pointer-types")
     endif()
     add_compile_options("$<$<COMPILE_LANGUAGE:C>:${FORBID_IMPLICIT_FUNCTIONS}>")
-
     add_compile_options("-Wno-ignored-attributes")
+
+    check_c_compiler_flag("-Werror=return-type" HAVE_C_WERROR_RETURN_TYPE)
+    check_cxx_compiler_flag("-Werror=return-type" HAVE_CXX_WERROR_RETURN_TYPE)
+    if(HAVE_C_WERROR_RETURN_TYPE)
+      add_compile_options("$<$<COMPILE_LANGUAGE:C>:-Werror=return-type>")
+    endif()
+    if(HAVE_CXX_WERROR_RETURN_TYPE)
+      add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-Werror=return-type>")
+    endif()
 
   else()
     message(WARNING "Don't know how to forbid this compiler from allowing implicit function declarations.")
   endif()
 endif()
 
-set(MAJOR_VERSION 6)
-set(MINOR_VERSION 1)
-set(VERSION_SUFFIX_FIXED_TEXT "-pre")
+# MSVC does not support VLA in C++. Not even in C because it supports
+# C11 and later where the VLAs are optional. Ban VLAs for maintaining
+# MSVC portability.
+check_c_compiler_flag("-Werror=vla" HAVE_C_WERROR_VLA)
+check_cxx_compiler_flag("-Werror=vla" HAVE_CXX_WERROR_VLA)
+if(HAVE_C_WERROR_VLA)
+  add_compile_options("$<$<COMPILE_LANGUAGE:C>:-Werror=vla>")
+endif()
+if(HAVE_CXX_WERROR_VLA)
+  add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-Werror=vla>")
+endif()
+
+set(MAJOR_VERSION 7)
+set(MINOR_VERSION 0)
+set(VERSION_SUFFIX_FIXED_TEXT "")
 set(VERSION_SUFFIX "${VERSION_SUFFIX_FIXED_TEXT}")
 set(VERSION_STRING ${MAJOR_VERSION}.${MINOR_VERSION}${VERSION_SUFFIX})
 set(POCL_VERSION_BASE ${VERSION_STRING})
@@ -115,7 +158,9 @@ set(POCL_VERSION_BASE ${VERSION_STRING})
 # required b/c SHARED libs defaults to ON while OBJECT defaults to OFF
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # CMake doesn't add "-pie" by default for executables (CMake issue #14983)
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -pie")
+if(UNIX)
+  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -pie")
+endif()
 
 enable_testing()
 
@@ -193,22 +238,24 @@ else()
   set(POCL_VERSION_FULL "${POCL_VERSION_BASE}")
 endif()
 
-set(CPACK_PACKAGE_NAME pocl)
-set(CPACK_PACKAGE_VENDOR pocl)
+set(CPACK_PACKAGE_NAME PoCL)
+set(CPACK_PACKAGE_VENDOR PoCL)
 set(CPACK_PACKAGE_VERSION_MAJOR "${MAJOR_VERSION}")
 set(CPACK_PACKAGE_VERSION_MINOR "${MINOR_VERSION}")
-set(CPACK_PACKAGE_VERSION "${MAJOR_VERSION}.${MINOR_VERSION}~${VERSION_SUFFIX_FIXED_TEXT}")
-if(HAVE_GIT)
-       set(CPACK_PACKAGE_VERSION "${CPACK_PACKAGE_VERSION}.${GIT_COMMIT}")
+set(CPACK_PACKAGE_VERSION_PATCH "0")
+
+set(BUILD_SHARED_LIBS_DEFAULT ON)
+if(MINGW)
+  # Building PoCL as shared library does not work yet with MinGW.
+  set(BUILD_SHARED_LIBS_DEFAULT OFF)
 endif()
 
 ##################################################################################
 
 option(ENABLE_LLVM "Build pocl with LLVM. Default is ON." ON)
 
-option(STATIC_LLVM "If ON, link to static LLVM libraries. OFF (default) = link to shared LLVM libraries." OFF)
-
-option(BUILD_SHARED_LIBS "ON=Build shared libs, OFF=static libs" ON)
+option(BUILD_SHARED_LIBS "ON=Build shared libs, OFF=static libs"
+  ${BUILD_SHARED_LIBS_DEFAULT})
 
 option(POCL_DEBUG_MESSAGES
   "Enable debug messages from pocl (useful for OpenCL developers), must be enabled at runtime, with env var POCL_DEBUG"
@@ -227,6 +274,8 @@ option(ENABLE_CUDNN "Enable the CUDNN for the CUDA device driver, requires CUDA"
 option(ENABLE_VULKAN "Experimental and incomplete driver that uses the Vulkan API for controlling the device. Please refer to the user manual for the status and open tasks" OFF)
 
 option(ENABLE_LEVEL0 "Experimental and incomplete driver that uses the Level Zero API for controlling the device. Please refer to the user manual for the status and open tasks" OFF)
+
+option(ENABLE_NPU "Experimental support for Intel NPU (requires LevelZero driver)" OFF)
 
 option(ENABLE_TBB_DEVICE "Enable the Intel TBB device driver." OFF)
 
@@ -252,32 +301,46 @@ option(ENABLE_POCL_BUILDING "When OFF, env var POCL_BUILDING has no effect. Defa
 
 option(ENABLE_PRINTF_IMMEDIATE_FLUSH "[currently only applies to CPU drivers] if enabled, printf is flushed immediately when encountered, instead of after all NDRange workgroups are finished" ON)
 
-option(ENABLE_VSOCK "Enable vsock transport in the remote driver" OFF)
-
 option(ENABLE_LLVM_FILECHECKS "Enable kernel compiler/autovectorizer filechecks using the given FileCheck binary defined in LLVM_FILECHECK_BIN. Note: the checks are tested against recent Intel X86/SIMD CPUs for now.")
 
-if (USE_LLVM_FOR_DYNLIBS)
-  if(ENABLE_LOADABLE_DRIVERS)
-    message(WARNING "LLVM dynlibs implementation doesn't support loadable drivers, disabling.")
-    set(ENABLE_LOADABLE_DRIVERS 0)
-  endif()
-  if(ENABLE_PRINTF_IMMEDIATE_FLUSH)
-    message(WARNING "LLVM dynlibs implementation doesn't support printf() immediate flush, disabling.")
-    set(ENABLE_PRINTF_IMMEDIATE_FLUSH 0)
-  endif()
+if(ENABLE_LEVEL0)
+  set(DEFAULT_STATIC_LLVM ON)
+else()
+  set(DEFAULT_STATIC_LLVM OFF)
 endif()
 
-if (ENABLE_PROXY_DEVICE)
+option(STATIC_LLVM "If ON, link to static LLVM libraries. OFF (default) = link to shared LLVM libraries." ${DEFAULT_STATIC_LLVM})
+
+
+if(WIN32)
+  set(DEFAULT_LLVM_PLATFORM_SUPPORT ON)
+else()
+  set(DEFAULT_LLVM_PLATFORM_SUPPORT OFF)
+endif()
+option(ENABLE_LLVM_PLATFORM_SUPPORT "Enable platform support using C++ STL and LLVM's Support library" ${DEFAULT_LLVM_PLATFORM_SUPPORT})
+
+option(ENABLE_REMOTE_DISCOVERY_AVAHI "Enable remote discovery in remote device for linux using avahi" OFF)
+
+option(ENABLE_REMOTE_DISCOVERY_DHT "Enable remote discovery in remote device for linux using DHT" OFF)
+
+option(ENABLE_REMOTE_DISCOVERY_ANDROID "Enable remote discovery support in remote device for Android" OFF)
+
+option(ENABLE_REMOTE_ADVERTISEMENT_AVAHI "Enable remote server advertisement using avahi" OFF)
+
+option(ENABLE_REMOTE_ADVERTISEMENT_DHT "Enable remote server advertisement using DHT" OFF)
+
+if (ENABLE_PROXY_DEVICE OR MSVC)
   set(VISIBILITY_HIDDEN_DEFAULT OFF)
 else()
   set(VISIBILITY_HIDDEN_DEFAULT ON)
 endif()
 option(VISIBILITY_HIDDEN "Build with -fvisibility=hidden -fvisibility-inlines-hidden" ${VISIBILITY_HIDDEN_DEFAULT})
-if(VISIBILITY_HIDDEN)
+
+if(VISIBILITY_HIDDEN AND NOT MSVC)
+  # MSVC ignores the following options and spams warnings about them.
   add_compile_options(-fvisibility=hidden)
   add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fvisibility-inlines-hidden>)
 endif()
-
 
 # Ninja Job Pool support
 set(PARALLEL_COMPILE_JOBS "" CACHE STRING
@@ -308,8 +371,6 @@ option(ENABLE_EXTRA_VALIDITY_CHECKS "Enable extra checks on cl_* object validity
 
 option(DEVELOPER_MODE "This will SIGNIFICANTLY reduce PoCL's performance, but speeds up its compilation for faster development-test cycles. Only turn on if you know what you're doing." OFF)
 
-option(USE_LLVM_FOR_DYNLIBS "Use the LLVM's support library for dynamic library handling (instead of POSIX directly) in the host runtime.")
-
 option(USE_POCL_MEMMANAGER "Enables custom memory manager. Except for special circumstances, this should be disabled." OFF)
 
 option(EXAMPLES_USE_GIT_MASTER "If enabled, some of the external testsuites in examples/ will try to use sources from Git master, instead of releases. This may result in failure to build or run the examples" OFF)
@@ -322,7 +383,7 @@ option(ENABLE_EXAMPLES "Build examples. Defaults to ON" ON)
 
 option(ENABLE_RDMA "Enable usage of RDMA libraries for memory allocations. Requires libRDMAcm and libverbs" OFF)
 
-OPTION(RENAME_POCL "rename PoCL's ocl functions to PO<ocl_function>. Allows an user to call both PoCL and another ocl application" OFF)
+option(RENAME_POCL "Rename PoCL's OpenCL functions to PO<ocl_function>. Allows an user to call both PoCL and another OpenCL implementation." OFF)
 
 ##########################################################
 
@@ -337,6 +398,16 @@ endif()
 # printf buffer size, in KB
 if(NOT DEFINED PRINTF_BUFFER_SIZE)
   set(PRINTF_BUFFER_SIZE 16384 CACHE STRING "printf buffer size, in KB")
+endif()
+
+if(ENABLE_LLVM_PLATFORM_SUPPORT)
+  if(NOT ENABLE_LLVM)
+    message(FATAL_ERROR "ENABLE_LLVM_PLATFORM_SUPPORT requires also ENABLE_LLVM")
+  endif()
+  if(ENABLE_PRINTF_IMMEDIATE_FLUSH)
+    message(WARNING "LLVM dynlibs implementation doesn't support printf() immediate flush, disabling.")
+    set(ENABLE_PRINTF_IMMEDIATE_FLUSH OFF CACHE BOOL "enable immediate printf flush" FORCE)
+  endif()
 endif()
 
 ##################################################################################
@@ -355,9 +426,18 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "(arm|aarch64)")
   else()
     set(ARM64 1)
   endif()
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "riscv")
+  set(RISCV 1)
+  if(HOST_DEVICE_ADDRESS_BITS MATCHES "32")
+    set(RISCV32 1)
+  else()
+    set(RISCV64 1)
+  endif()
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "(i.86|AMD64|x86_64|amd64)")
   set(X86 1)
-  if(HOST_DEVICE_ADDRESS_BITS MATCHES "32")
+  if(CMAKE_LIBRARY_ARCHITECTURE STREQUAL "x86_64-linux-gnux32")
+    set(X32 1)
+  elseif(HOST_DEVICE_ADDRESS_BITS MATCHES "32")
     set(I386 1)
   else()
     set(X86_64 1)
@@ -370,7 +450,6 @@ if(HOST_CPU_CORECOUNT LESS 1)
   set(HOST_CPU_CORECOUNT 1)
 endif()
 message(STATUS "Host CPU cores: ${HOST_CPU_CORECOUNT}")
-
 
 ######################################################################################
 
@@ -412,43 +491,104 @@ set(COMMAND_USES_TERMINAL USES_TERMINAL)
 
 include(GNUInstallDirs)
 
-# for libpocl.so
-set(POCL_INSTALL_PUBLIC_LIBDIR "${CMAKE_INSTALL_FULL_LIBDIR}" CACHE PATH "POCL public libdir")
+# PoCL installation paths. Only use relative paths in install()
+# commands (absolute paths are not supported by CPack generally).
 
-# for libpocl-devices-*.so
-set(POCL_INSTALL_PRIVATE_LIBDIR "${CMAKE_INSTALL_FULL_LIBDIR}/pocl" CACHE PATH "POCL private libdir")
+# for (lib)pocl.(so|dll|dylib)
+if(WIN32)
+  set(POCL_INSTALL_PUBLIC_LIBDIR "${CMAKE_INSTALL_FULL_BINDIR}"
+    CACHE PATH "Absolute path to POCL public libdir")
+  set(POCL_INSTALL_PUBLIC_LIBDIR_REL "${CMAKE_INSTALL_BINDIR}"
+    CACHE PATH "Relative path to  POCL public libdir")
+else()
+  set(POCL_INSTALL_PUBLIC_LIBDIR "${CMAKE_INSTALL_FULL_LIBDIR}"
+    CACHE PATH "Absolute path to POCL public libdir")
+  set(POCL_INSTALL_PUBLIC_LIBDIR_REL "${CMAKE_INSTALL_LIBDIR}"
+    CACHE PATH "Relative path to  POCL public libdir")
+endif()
+
+# for (lib)pocl-devices-*.(so|dll|dylib)
+set(POCL_INSTALL_PRIVATE_LIBDIR "${POCL_INSTALL_PUBLIC_LIBDIR}/pocl"
+  CACHE PATH "Absolute path to  POCL private libdir")
+set(POCL_INSTALL_PRIVATE_LIBDIR_REL "${POCL_INSTALL_PUBLIC_LIBDIR_REL}/pocl"
+  CACHE PATH "Relative path to  POCL private libdir")
+
+# for libpocl.(a|dll.a)
+if(WIN32)
+  set(POCL_INSTALL_STATIC_LIBDIR "${CMAKE_INSTALL_FULL_LIBDIR}"
+    CACHE PATH "Absolute path to POCL public libdir")
+  set(POCL_INSTALL_STATIC_LIBDIR_REL "${CMAKE_INSTALL_LIBDIR}"
+    CACHE PATH "Relative path to POCL public libdir")
+else()
+  set(POCL_INSTALL_STATIC_LIBDIR "${POCL_INSTALL_PUBLIC_LIBDIR}/static"
+    CACHE PATH "Absolute path to POCL public libdir")
+  set(POCL_INSTALL_STATIC_LIBDIR_REL "${POCL_INSTALL_PUBLIC_LIBDIR_REL}/static"
+    CACHE PATH "Relative path to POCL public libdir")
+endif()
 
 # for pocl.icd
 set(POCL_INSTALL_ICD_VENDORDIR "${CMAKE_INSTALL_FULL_SYSCONFDIR}/OpenCL/vendors" CACHE PATH "POCL ICD file destination")
 
 # for kernel-<target>.bc
-set(POCL_INSTALL_PRIVATE_DATADIR "${CMAKE_INSTALL_FULL_DATADIR}/pocl" CACHE PATH "POCL private datadir")
+set(POCL_INSTALL_PRIVATE_DATADIR "${CMAKE_INSTALL_FULL_DATADIR}/pocl"
+  CACHE PATH "Absolute path to POCL private datadir")
+set(POCL_INSTALL_PRIVATE_DATADIR_REL "${CMAKE_INSTALL_DATADIR}/pocl"
+  CACHE PATH "Relative path to POCL private datadir")
 
 # for poclu.h
-set(POCL_INSTALL_PUBLIC_HEADER_DIR "${CMAKE_INSTALL_FULL_INCLUDEDIR}" CACHE PATH "POCL public header dir")
+set(POCL_INSTALL_PUBLIC_HEADER_DIR "${CMAKE_INSTALL_FULL_INCLUDEDIR}"
+  CACHE PATH "Absolute path to POCL public header dir")
+set(POCL_INSTALL_PUBLIC_HEADER_DIR_REL "${CMAKE_INSTALL_INCLUDEDIR}"
+  CACHE PATH "Relative path to POCL public header dir")
 
 # for _kernel.h et al
-set(POCL_INSTALL_PRIVATE_HEADER_DIR "${POCL_INSTALL_PRIVATE_DATADIR}/include" CACHE PATH "POCL private header dir")
+set(POCL_INSTALL_PRIVATE_HEADER_DIR "${POCL_INSTALL_PRIVATE_DATADIR}/include"
+  CACHE PATH "Absolute path to POCL private header dir")
+set(POCL_INSTALL_PRIVATE_HEADER_DIR_REL
+  "${POCL_INSTALL_PRIVATE_DATADIR_REL}/include"
+  CACHE PATH "Relative path to POCL private header dir")
 
 # for pocl-standalone et al
-set(POCL_INSTALL_PUBLIC_BINDIR "${CMAKE_INSTALL_FULL_BINDIR}" CACHE PATH "POCL public bindir")
+set(POCL_INSTALL_PUBLIC_BINDIR "${CMAKE_INSTALL_FULL_BINDIR}"
+  CACHE PATH "Absolute path to POCL public bindir")
+set(POCL_INSTALL_PUBLIC_BINDIR_REL "${CMAKE_INSTALL_BINDIR}"
+  CACHE PATH "Relative path to POCL public bindir")
 
 # for PoclConfig.cmake & stuff
 set(POCL_INSTALL_CMAKE_CONFIG_DIR "${POCL_INSTALL_PRIVATE_LIBDIR}/cmake" CACHE PATH   "Installation directory for CMake files")
 
 # TODO maybe use output of pkg-config --variable=pc_path pkg-config ?
 set(POCL_INSTALL_PKGCONFIG_DIR "${POCL_INSTALL_PUBLIC_LIBDIR}/pkgconfig" CACHE PATH "Destination for pocl.pc")
+set(POCL_INSTALL_PKGCONFIG_DIR_REL "${POCL_INSTALL_PUBLIC_LIBDIR_REL}/pkgconfig" CACHE PATH "Destination for pocl.pc")
 
 if(APPLE)
   set(CMAKE_MACOSX_RPATH ON)
-  set(POCL_INSTALL_OPENCL_HEADER_DIR "${POCL_INSTALL_PUBLIC_HEADER_DIR}/OpenCL" CACHE PATH "POCL header dir for OpenCL headers")
+  set(POCL_INSTALL_OPENCL_HEADER_DIR
+    "${POCL_INSTALL_PUBLIC_HEADER_DIR}/OpenCL"
+    CACHE PATH "Absolute path to POCL header dir for OpenCL headers")
+  set(POCL_INSTALL_OPENCL_HEADER_DIR_REL
+    "${POCL_INSTALL_PUBLIC_HEADER_DIR_REL}/OpenCL"
+    CACHE PATH "Relative path to POCL header dir for OpenCL headers")
 else()
-  set(POCL_INSTALL_OPENCL_HEADER_DIR "${POCL_INSTALL_PUBLIC_HEADER_DIR}/CL" CACHE PATH "POCL header dir for OpenCL headers")
+  set(POCL_INSTALL_OPENCL_HEADER_DIR
+    "${POCL_INSTALL_PUBLIC_HEADER_DIR}/CL"
+    CACHE PATH "Absolute path to POCL header dir for OpenCL headers")
+  set(POCL_INSTALL_OPENCL_HEADER_DIR_REL
+    "${POCL_INSTALL_PUBLIC_HEADER_DIR_REL}/CL"
+    CACHE PATH "Relative path to POCL header dir for OpenCL headers")
 endif()
 
 ######################################################################################
 
 set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+include(pocl_utils)
+
+if(WIN32 AND NOT ENABLE_ICD AND BUILD_SHARED_LIBS)
+  # To have executables link to PoCL built OpenCL.dll instead of a system one
+  # we resort to symlinks which require elevated permissions or developer mode
+  # enabled.
+  pocl_assert_symlinks_works()
+endif()
 
 option(HARDENING_ENABLE "Enable hardening against various attacks. May worsen performance" OFF)
 if(HARDENING_ENABLE)
@@ -460,14 +600,48 @@ endif()
 
 find_package(PkgConfig MODULE)
 
+function(findImpLibAndDLL PACKAGE IMP_NAME DLL_NAME INCLUDE_FILE)
+  find_library(TGT_LIB_IMPLIB "${IMP_NAME}")
+  get_filename_component(TGT_LIB_LIBDIR ".." REALPATH BASE_DIR "${TGT_LIB_IMPLIB}")
+  get_filename_component(TGT_LIB_BINDIR "../../bin" REALPATH BASE_DIR "${TGT_LIB_IMPLIB}")
+  # find_library refuses to find .dll files
+  find_path(TGT_LIB_DLL_PATH
+    NAMES "${DLL_NAME}"
+    HINTS
+        "${TGT_LIB_LIBDIR}"
+        "${TGT_LIB_BINDIR}"
+    PATHS
+      ENV PATH
+    )
+  if(TGT_LIB_DLL_PATH)
+    set(TGT_LIB_DLL "${TGT_LIB_DLL_PATH}/${DLL_NAME}")
+  endif()
+  find_path(TGT_INCLUDE_DIRS "${INCLUDE_FILE}")
+  if (TGT_LIB_IMPLIB AND TGT_LIB_DLL AND TGT_INCLUDE_DIRS)
+    message(STATUS "${PACKAGE} found: Imp ${TGT_LIB_IMPLIB} DLL ${TGT_LIB_DLL} INCLUDE ${TGT_INCLUDE_DIRS}")
+	add_library(PkgConfig::${PACKAGE} SHARED IMPORTED)
+    set_target_properties(PkgConfig::${PACKAGE}
+                PROPERTIES
+                IMPORTED_IMPLIB "${TGT_LIB_IMPLIB}"
+				IMPORTED_LOCATION "${TGT_LIB_DLL}"
+                INTERFACE_INCLUDE_DIRECTORIES "${TGT_INCLUDE_DIRS}")
+  else()
+    message(STATUS "Library ${PACKAGE} not found")
+  endif()
+endfunction()
+
 if(PKG_CONFIG_FOUND)
   pkg_check_modules(HWLOC IMPORTED_TARGET hwloc>=1.0)
+endif()
 
-  if(NOT HWLOC_FOUND)
-    set(DEFAULT_ENABLE_HWLOC OFF CACHE INTERNAL "default hwloc")
-  else()
-    set(DEFAULT_ENABLE_HWLOC ON CACHE INTERNAL "default hwloc")
-  endif()
+if(WIN32 AND NOT HWLOC_FOUND)
+  findImpLibAndDLL(HWLOC "hwloc" "libhwloc-15.dll" "hwloc.h")
+endif()
+
+if(TARGET PkgConfig::HWLOC)
+  set(DEFAULT_ENABLE_HWLOC ON CACHE INTERNAL "default hwloc")
+else()
+  set(DEFAULT_ENABLE_HWLOC OFF CACHE INTERNAL "default hwloc")
 endif()
 
 option(ENABLE_HWLOC "Enable Portable Hardware Locality software package"
@@ -515,6 +689,8 @@ if(ENABLE_HOST_CPU_DEVICES_OPENMP)
   if(NOT OpenMP_CXX_FOUND)
     message(FATAL_ERROR "ENABLE_HOST_CPU_DEVICES_OPENMP specified but OpenMP not found.")
   endif()
+  # The OpenMP device depends on the pthread device which depends on the basic device. ENABLE_HOST_CPU_DEVICES enables both.
+  set(ENABLE_HOST_CPU_DEVICES 1)
 endif()
 
 ######################################################################################
@@ -565,14 +741,6 @@ find_program(XARGS_EXEC
   NAMES xargs
   HINTS ENV PATH
 )
-
-if(NOT PATCH_EXEC)
-  message(FATAL_ERROR "Could not find patch command.")
-endif()
-
-if(NOT XARGS_EXEC)
-  message(FATAL_ERROR "Could not find xargs command.")
-endif()
 
 ######################################################################################
 
@@ -642,6 +810,23 @@ else()
 
 endif()
 
+# SIGFPE and SIGUSR2
+if(UNIX AND (CMAKE_SYSTEM_NAME MATCHES "Linux"))
+  # this is now handled by a LLVM pass
+  if(ENABLE_HOST_CPU_DEVICES AND X86 AND
+     (NOT ENABLE_HOST_CPU_DEVICES_OPENMP) AND
+     (NOT ENABLE_TBB_DEVICE))
+    set(DEFAULT_SIGFPE ON)
+  else()
+    set(DEFAULT_SIGFPE OFF)
+  endif()
+  option(ENABLE_SIGFPE_HANDLER "enable SIGFPE signal handler" ${DEFAULT_SIGFPE})
+  option(ENABLE_SIGUSR2_HANDLER "enable SIGUSR2 signal handler" ON)
+else()
+  set(ENABLE_SIGFPE_HANDLER OFF CACHE INTERNAL "enable SIGFPE signal handler" FORCE)
+  set(ENABLE_SIGUSR2_HANDLER OFF CACHE INTERNAL "enable SIGUSR2 signal handler" FORCE)
+endif()
+
 ######################################################################################
 
 if(ENABLE_HSA)
@@ -653,7 +838,7 @@ endif()
 
 ######################################################################################
 
-if(UNIX)
+if(UNIX OR MINGW)
   include(CheckCSourceCompiles)
   include(CheckSymbolExists)
 
@@ -728,21 +913,36 @@ if(UNIX)
   CHECK_SYMBOL_EXISTS("dladdr"
                       "dlfcn.h"
                       HAVE_DLADDR)
-  if(ENABLE_VSOCK)
-    find_file(
-      HAVE_LINUX_VSOCK_H
-      NAMES
-        linux/vm_sockets.h
-      PATHS
-        /usr/include
-    )
 
-    if(NOT HAVE_LINUX_VSOCK_H)
-      message(FATAL_ERROR "Could not find vsock header file. Please \
-        make sure that the kernel is configured with vsock support.
-    ")
+  unset(CMAKE_REQUIRED_DEFINITIONS)
+  unset(CMAKE_REQUIRED_LIBRARIES)
+
+  check_c_source_compiles(
+  "_Float16 callfp16(_Float16 a) { return a * 1.8f16; };
+  int main(int argc, char** argv) {
+  _Float16 x = callfp16((_Float16)argc);
+  return ((x > 0.8f16) ? 20 : 10);
+  }" HOST_COMPILER_SUPPORTS_FLOAT16)
+  if(NOT HOST_COMPILER_SUPPORTS_FLOAT16)
+    set(HOST_COMPILER_SUPPORTS_FLOAT16 0 CACHE BOOL "host-side _Float16 support" FORCE)
+  endif()
+  message(STATUS "Host side compiler support for _Float16: ${HOST_COMPILER_SUPPORTS_FLOAT16}")
+  if(NOT HOST_COMPILER_SUPPORTS_FLOAT16)
+    if((CMAKE_C_COMPILER_ID STREQUAL "GNU") AND (CMAKE_C_COMPILER_VERSION VERSION_LESS 12.0))
+      message(WARNING "Note: GCC only supports _Float16 since version 12")
+    endif()
+    if((CMAKE_C_COMPILER_ID STREQUAL "Clang") AND (CMAKE_C_COMPILER_VERSION VERSION_LESS 15.0))
+      message(WARNING "Note: Clang only supports _Float16 since version 15 (17+ is recommended)")
     endif()
   endif()
+
+  find_file(
+    HAVE_LINUX_VSOCK_H
+    NAMES
+      linux/vm_sockets.h
+    PATHS
+      /usr/include
+  )
 
   unset(CMAKE_REQUIRED_DEFINITIONS)
   unset(CMAKE_REQUIRED_FLAGS)
@@ -763,6 +963,7 @@ else()
   set(HAVE_UTIME 0)
   set(HAVE_DLADDR 0)
   set(HAVE_VALGRIND 0)
+  unset(HAVE_LINUX_VSOCK_H)
 endif()
 
 ######################################################################################
@@ -798,7 +999,8 @@ endif()
 
 ######################################################################################
 
-if(UNIX AND ENABLE_LLVM AND HAVE_DLADDR)
+# for relocation, we need working pocl_dynlib_pathname()
+if((UNIX AND HAVE_DLADDR) OR (WIN32 AND ENABLE_LLVM_PLATFORM_SUPPORT))
     option(ENABLE_RELOCATION "make libpocl relocatable" ON)
 else()
     message(STATUS "Relocation not available")
@@ -806,11 +1008,16 @@ else()
 endif()
 
 if(ENABLE_RELOCATION)
-  file(RELATIVE_PATH POCL_INSTALL_PRIVATE_DATADIR_REL ${POCL_INSTALL_PUBLIC_LIBDIR} ${POCL_INSTALL_PRIVATE_DATADIR})
+  # Relative path from the PoCL runtime library to private data directory.
+  file(RELATIVE_PATH POCL_INSTALL_FROM_LIB_TO_PRIVATE_DATADIR
+    ${POCL_INSTALL_PUBLIC_LIBDIR} ${POCL_INSTALL_PRIVATE_DATADIR})
   message(STATUS "Private Datadir Relative path: ${POCL_INSTALL_PRIVATE_DATADIR_REL}")
 endif()
 
-file(RELATIVE_PATH POCL_INSTALL_PRIVATE_LIBDIR_REL ${POCL_INSTALL_PUBLIC_LIBDIR} ${POCL_INSTALL_PRIVATE_LIBDIR})
+# Relative path from the PoCL runtime library to private runtime
+# library directory (a place where loadable drivers are placed, for example).
+file(RELATIVE_PATH POCL_INSTALL_FROM_LIB_TO_PRIVATE_LIBDIR
+  ${POCL_INSTALL_PUBLIC_LIBDIR} ${POCL_INSTALL_PRIVATE_LIBDIR})
 
 ######################################################################################
 
@@ -825,6 +1032,10 @@ if(NOT DEFINED DEFAULT_ENABLE_IPO)
   if(NOT CMAKE_VERSION VERSION_LESS "3.9")
 
     if(DEVELOPER_MODE)
+      set(IPO 0)
+    elseif(MINGW)
+      # XXX: IPO on MinGW runs into linker errors (such as `two or more sections
+      # for .gnu.lto__ZN4llvm12DenseMapInfoIPKNS_8MetadataEvE7isEqualES3_S3_.65576.2f694590`)
       set(IPO 0)
     else()
       include(CheckIPOSupported)
@@ -849,6 +1060,50 @@ endif()
 
 ######################################################################################
 
+set(HAVE_LIBSVML 0)
+if(X86)
+  set(ORIG_CMAKE_FIND_LIBRARY_SUFFIXES ${CMAKE_FIND_LIBRARY_SUFFIXES})
+  # use static libraries, so that the poclbinary is independent of system
+  set(CMAKE_FIND_LIBRARY_SUFFIXES .a)
+  find_library(LIBSVML NAMES svml PATHS "/opt/intel/oneapi/compiler/latest/lib")
+  find_library(LIBIRC NAMES irc PATHS "/opt/intel/oneapi/compiler/latest/lib")
+  set(CMAKE_FIND_LIBRARY_SUFFIXES ${ORIG_CMAKE_FIND_LIBRARY_SUFFIXES})
+  if(LIBSVML AND LIBIRC)
+    message(STATUS "Found LibSVML and LibIRC")
+    set(HAVE_LIBSVML 1)
+  else()
+    message(STATUS "LibSVML and LibIRC not found")
+  endif()
+endif()
+
+set(HAVE_SLEEF 0)
+if(ARM)
+  find_library(LIBSLEEF NAMES sleef)
+  set_expr(HAVE_SLEEF LIBSLEEF)
+endif()
+
+# should be very widely available with GCC installations, but does not cover
+# quite as much function/vector-width variants as SVML/SLEEF
+set(HAVE_LIBMVEC 0)
+if((NOT HAVE_SLEEF) AND (NOT HAVE_LIBSVML))
+  find_library(LIBMVEC NAMES mvec)
+  if(LIBMVEC)
+    set(CMAKE_REQUIRED_LIBRARIES "${LIBMVEC}")
+    CHECK_FUNCTION_EXISTS("_ZGVdN8v_tanf" LIBMVEC_HAS_REQUIRED_SYMBOLS)
+    unset(CMAKE_REQUIRED_LIBRARIES)
+    if(LIBMVEC_HAS_REQUIRED_SYMBOLS)
+      message(STATUS "libmvec found at ${LIBMVEC}, and seems to provide required functions")
+    else()
+      message(STATUS "libmvec found at ${LIBMVEC}, but does not provide required functions (likely too old)")
+    endif()
+  endif()
+  if(LIBMVEC AND LIBMVEC_HAS_REQUIRED_SYMBOLS)
+    set(HAVE_LIBMVEC 1)
+  endif()
+endif()
+
+######################################################################################
+
 option(ENABLE_SLEEF "Use SLEEF for kernel library" ON)
 
 option(ENABLE_CONFORMANCE "Enable conformance to OpenCL standard. \
@@ -863,6 +1118,21 @@ if(ENABLE_CONFORMANCE AND (NOT ENABLE_SLEEF))
   message(FATAL_ERROR "conformance needs enabled SLEEF")
 endif()
 
+set(ENABLE_HOST_CPU_VECTORIZE_BUILTINS OFF)
+if(ENABLE_LLVM AND ENABLE_HOST_CPU_DEVICES AND (LLVM_VERSION_MAJOR GREATER 17) AND (NOT ENABLE_CONFORMANCE))
+  # these are experimental options and may change in future
+  option(ENABLE_HOST_CPU_VECTORIZE_SLEEF "vectorize builtins with SLEEF (ARM only)" ${HAVE_SLEEF})
+  option(ENABLE_HOST_CPU_VECTORIZE_LIBMVEC "vectorize builtins with LIBMVEC" ${HAVE_LIBMVEC})
+  option(ENABLE_HOST_CPU_VECTORIZE_SVML "vectorize builtins with SVML" ${HAVE_LIBSVML})
+
+  if(ENABLE_HOST_CPU_VECTORIZE_SLEEF
+     OR ENABLE_HOST_CPU_VECTORIZE_LIBMVEC
+     OR ENABLE_HOST_CPU_VECTORIZE_SVML)
+    message(STATUS "CPU device: enabled vectorization of OpenCL builtins")
+    set(ENABLE_HOST_CPU_VECTORIZE_BUILTINS ON)
+  endif()
+
+endif()
 ######################################################################################
 
 unset(OPAQUE_PTR_FLAGS)
@@ -886,10 +1156,20 @@ endif()
 #
 # no-jump-tables is to avoid LLVM optimization passes introducing switch tables,
 # which the variable uniformity analysis cannot analyze
-set(DEFAULT_KERNEL_CL_FLAGS  "-xcl -fno-stack-protector -fPIC -fno-jump-tables ${OPAQUE_PTR_FLAGS}")
-set(DEFAULT_KERNEL_C_FLAGS "-xc -std=c11 -D__CBUILD__ -fno-math-errno -fno-stack-protector -fPIC -fno-jump-tables ${OPAQUE_PTR_FLAGS}")
-set(DEFAULT_KERNEL_CXX_FLAGS "-xc++ -std=c++11 -fno-stack-protector -fPIC -fno-jump-tables ${OPAQUE_PTR_FLAGS}")
 
+# TODO: Should match "msvc" environment component in the
+#       LLC_TRIPLE. Now assuming MSVC implies target triple that
+#       invokes MSVC toolchain in Clang.
+if (MSVC)
+  set(DEFAULT_KERNEL_CL_FLAGS  "-xcl -fno-stack-protector ${OPAQUE_PTR_FLAGS}")
+  set(DEFAULT_KERNEL_C_FLAGS "-xc -std=c11 -D__CBUILD__ -fno-math-errno -fno-stack-protector ${OPAQUE_PTR_FLAGS}")
+  set(DEFAULT_KERNEL_CXX_FLAGS "-xc++ -std=c++11 -fno-stack-protector ${OPAQUE_PTR_FLAGS}")
+  set(KERNEL_TRIPLE_TARGETS_MSVC_TOOLCHAIN 1)
+else()
+  set(DEFAULT_KERNEL_CL_FLAGS  "-xcl -fno-stack-protector -fPIC -fno-jump-tables ${OPAQUE_PTR_FLAGS}")
+  set(DEFAULT_KERNEL_C_FLAGS "-xc -std=c11 -D__CBUILD__ -fno-math-errno -fno-stack-protector -fPIC -fno-jump-tables ${OPAQUE_PTR_FLAGS}")
+  set(DEFAULT_KERNEL_CXX_FLAGS "-xc++ -std=c++11 -fno-stack-protector -fPIC -fno-jump-tables ${OPAQUE_PTR_FLAGS}")
+endif()
 
 set(EXTRA_KERNEL_FLAGS "" CACHE STRING "Extra arguments to all kernel compilation commands (defaults to empty)")
 set(EXTRA_KERNEL_CL_FLAGS "" CACHE STRING "Extra arguments to kernel CL compiler (defaults to empty)")
@@ -907,14 +1187,30 @@ if(UNIX)
     # MacOS ld outputs useless warnings like
     # ld: warning: -macosx_version_min not specificed, assuming 10.7
     # suppress them with -w.
-    set(DEFAULT_HOST_LD_FLAGS "-dynamiclib -w -lm")
+    set(DEFAULT_HOST_LD_FLAGS "-dynamiclib -w -lm -nostartfiles")
   elseif(ANDROID)
+    # TODO shouldn't Android use -nostartfiles ?
     set(DEFAULT_HOST_LD_FLAGS "-L/system/lib/ -shared -ldl -lc /system/lib/crtbegin_so.o /system/lib/crtend_so.o")
   else()
-    set(DEFAULT_HOST_LD_FLAGS "-shared")
+    set(DEFAULT_HOST_LD_FLAGS "-shared -nostartfiles")
+    if(ENABLE_HOST_CPU_VECTORIZE_LIBMVEC)
+      set(DEFAULT_HOST_LD_FLAGS "${DEFAULT_HOST_LD_FLAGS} -lmvec")
+    endif()
+    if(ENABLE_HOST_CPU_VECTORIZE_SLEEF)
+      set(DEFAULT_HOST_LD_FLAGS "${DEFAULT_HOST_LD_FLAGS} ${LIBSLEEF}")
+    endif()
+    if(ENABLE_HOST_CPU_VECTORIZE_SVML)
+      set(DEFAULT_HOST_LD_FLAGS "${DEFAULT_HOST_LD_FLAGS} ${LIBSVML} ${LIBIRC}")
+    endif()
   endif()
   set(LIBMATH "-lm")
 elseif(WIN32)
+  set(DEFAULT_HOST_LD_FLAGS "--shared")
+  # disable a warning that generates a lot of noise
+  # enable unwind semantics
+  if(MSVC)
+    add_compile_options("/wd4624" "/EHsc")
+  endif()
   set(LIBMATH)
 endif()
 
@@ -935,11 +1231,9 @@ endif()
 
 ######################################################################################
 
-set(SPIRV OFF)
-
 # drivers that consume SPIRV directly don't need LLVM or LLVM-SPIRV;
 # those that consume SPIRV indirectly need both, but it might be useful to disable LLVM-SPIRV translator
-if(ENABLE_LLVM AND LLVM_SPIRV AND (EXISTS "${LLVM_SPIRV}"))
+if(ENABLE_LLVM AND (HAVE_LLVM_SPIRV OR HAVE_LLVM_SPIRV_LIB))
   option(ENABLE_SPIRV "Enable SPIR-V support (default ON when available)" ON)
 else()
   set(ENABLE_SPIRV OFF CACHE INTERNAL "SPIR-V enabled" FORCE)
@@ -948,6 +1242,13 @@ endif()
 if(ENABLE_SPIRV)
   # required for the wrapper generator
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+endif()
+
+# we don't have a useful SPIRV wrapper for 32bit SPIRV
+# SPIR-V on windows is broken ATM because of mangling
+set(HOST_CPU_ENABLE_SPIRV OFF)
+if(ENABLE_HOST_CPU_DEVICES AND ENABLE_SPIRV AND (NOT WIN32) AND (HOST_DEVICE_ADDRESS_BITS MATCHES "64"))
+  set(HOST_CPU_ENABLE_SPIRV ON)
 endif()
 
 ######################################################################################
@@ -959,7 +1260,9 @@ if(WIN32 AND (NOT MINGW))
 
 elseif(UNIX)
 
-  if (CMAKE_CROSSCOMPILING AND (NOT ENABLE_HOST_CPU_DEVICES) AND (NOT ENABLE_HSA))
+  # if proxy uses opencl-stub then dlfcn is required.
+  if (CMAKE_CROSSCOMPILING AND (NOT ENABLE_HOST_CPU_DEVICES) AND (NOT ENABLE_HSA)
+        AND (NOT PROXY_USE_LIBOPENCL_STUB))
     message(STATUS "Cross-compiling without CPU/HSA devices -> skipping LIBDL search")
   else()
 
@@ -983,7 +1286,8 @@ elseif(UNIX)
       endif()
       set(HAVE_DLFCN_H ON CACHE BOOL "dlfcn.h" FORCE)
     else()
-      message(FATAL_ERROR "Could not find dlfcn.h!")
+      message(STATUS "dlfcn.h header not found")
+	  set(HAVE_DLFCN_H OFF CACHE BOOL "dlfcn.h" FORCE)
     endif()
 
   endif()
@@ -994,6 +1298,11 @@ endif()
 
 if(ENABLE_PRINTF_IMMEDIATE_FLUSH AND (NOT HAVE_DLFCN_H))
   message(WARNING "ENABLE_PRINTF_IMMEDIATE_FLUSH cannot work without HAVE_DLFCN_H, disabling it")
+  set(ENABLE_PRINTF_IMMEDIATE_FLUSH OFF CACHE BOOL "enable immediate printf flush" FORCE)
+endif()
+
+if(ENABLE_PRINTF_IMMEDIATE_FLUSH AND ENABLE_ANYSAN)
+  message(WARNING "ENABLE_PRINTF_IMMEDIATE_FLUSH cannot work with sanitizers, disabling it")
   set(ENABLE_PRINTF_IMMEDIATE_FLUSH OFF CACHE BOOL "enable immediate printf flush" FORCE)
 endif()
 
@@ -1035,14 +1344,17 @@ endif()
 ######################################################################################
 
 if(ENABLE_HOST_CPU_DEVICES AND PKG_CONFIG_FOUND AND NOT ENABLE_CONFORMANCE)
+  # PoCL requires libxsmm to support LIBXSMM_DATATYPE_F16, which was added after the
+  # 1.17 release. Until there is a new release, building libxsmm from git and
+  # manually updating the version number in version.txt before building is necessary.
   if(BUILD_SHARED_LIBS)
-    pkg_check_modules(LIBXSMM IMPORTED_TARGET libxsmm-shared>=1.15)
+    pkg_check_modules(LIBXSMM IMPORTED_TARGET libxsmm-shared>1.17.0)
   endif()
   if(NOT LIBXSMM_FOUND)
-    pkg_check_modules(LIBXSMM IMPORTED_TARGET libxsmm-static>=1.15)
+    pkg_check_modules(LIBXSMM IMPORTED_TARGET libxsmm-static>1.17.0)
   endif()
   if(NOT LIBXSMM_FOUND)
-    pkg_check_modules(LIBXSMM IMPORTED_TARGET libxsmm>=1.15)
+    pkg_check_modules(LIBXSMM IMPORTED_TARGET libxsmm>1.17.0)
   endif()
 
   # libxsmm needs BLAS as fallback
@@ -1053,34 +1365,105 @@ endif()
 
 if(LIBXSMM_FOUND AND TARGET BLAS::BLAS)
   set(HAVE_LIBXSMM 1)
+  message(STATUS "Found both libxsmm and libblas, XSMM enabled")
 else()
   set(HAVE_LIBXSMM 0)
-  message(STATUS "libxsmm or libblas not found, disabled")
+  message(STATUS "libxsmm or libblas not found, XSMM disabled")
+  message(STATUS "NOTE: If you meant to use a git build of libxsmm you may have to manually bump "
+          "the version in its version.txt before building.")
 endif()
 
+function(print_target_properties target)
+  if(NOT TARGET ${target})
+    message(STATUS "There is no target named '${target}'")
+    return()
+  endif()
+  message("Target found: ${target}")
+
+  foreach(property ${CMAKE_PROPERTY_LIST})
+    string(REPLACE "<CONFIG>" "DEBUG" property ${property})
+
+    get_property(was_set TARGET ${target} PROPERTY ${property} SET)
+    if(was_set)
+      get_target_property(value ${target} ${property})
+      message("${target} ${property} = ${value}")
+    endif()
+  endforeach()
+endfunction()
+
 if(ENABLE_HOST_CPU_DEVICES AND NOT ENABLE_CONFORMANCE)
-  pkg_search_module(LIBJPEG_TURBO IMPORTED_TARGET
-    libjpeg-turbo>=3.0.0 libturbojpeg>=3.0.0)
-  if(NOT LIBJPEG_TURBO_FOUND)
+
+  set(HAVE_ONNXRT OFF)
+  if (ANDROID)
+    if (NOT ORT_ANDROID_DIR)
+      message("ONNX on Android requires \"ORT_ANDROID_DIR\" to point to the files described in:
+      https://onnxruntime.ai/docs/install/#cc-1, but is missing.")
+    else ()
+      # Find_package does not find the package, so create a library ourselves.
+      add_library(onnxruntime::onnxruntime SHARED IMPORTED)
+      # Assumes that ORT_ANDROID_DIR points to the root of the unpacked .aar.
+      set_target_properties(onnxruntime::onnxruntime PROPERTIES IMPORTED_LOCATION
+              "${ORT_ANDROID_DIR}/jni/${ANDROID_ABI}/libonnxruntime.so")
+      set_target_properties(onnxruntime::onnxruntime PROPERTIES INTERFACE_INCLUDE_DIRECTORIES
+              "${ORT_ANDROID_DIR}/headers")
+      set(HAVE_ONNXRT ON)
+    endif ()
+  else ()
+    # PoCL requires SetUserLoggingFunction which was introduced in 1.17,
+    # search for a version that is compatible with this.
+    find_package(onnxruntime 1.17 QUIET)
+    set(HAVE_ONNXRT ${onnxruntime_FOUND})
+    if (${HAVE_ONNXRT})
+      # TODO: this is a hack, just passing onnxruntime::onnxruntime
+      # to include_directories should probably work
+      get_target_property(onnxruntime_INCLUDE_DIRS onnxruntime::onnxruntime INTERFACE_INCLUDE_DIRECTORIES)
+      get_target_property(onnxruntime_IMPORTED_CONFIGURATIONS onnxruntime::onnxruntime IMPORTED_CONFIGURATIONS)
+      message(STATUS "ONNXRuntime version ${onnxruntime_VERSION} found, with headers at ${onnxruntime_INCLUDE_DIRS} for configs ${onnxruntime_IMPORTED_CONFIGURATIONS}")
+    endif()
+  endif()
+
+  if (NOT ${HAVE_ONNXRT})
+    message(STATUS "ONNXRuntime not found, disabled")
+  endif ()
+
+  find_package(LIBJPEG_TURBO 3.0.0 QUIET CONFIG NAMES libjpeg-turbo libturbojpeg)
+  set(HAVE_LIBJPEG_TURBO ${LIBJPEG_TURBO_FOUND})
+  if(HAVE_LIBJPEG_TURBO)
+    if(BUILD_SHARED_LIBS)
+      set(LIBJPEG_TARGET libjpeg-turbo::turbojpeg)
+    else()
+      if(TARGET libjpeg-turbo::turbojpeg-static)
+        set(LIBJPEG_TARGET libjpeg-turbo::turbojpeg-static)
+      else()
+        set(LIBJPEG_TARGET libjpeg-turbo::turbojpeg)
+      endif()
+    endif()
+    if(TARGET ${LIBJPEG_TARGET})
+      message(STATUS "libjpeg-turbo v${LIBJPEG_TURBO_VERSION} found, using CMake target ${LIBJPEG_TARGET}")
+    else()
+      message(WARNING "libjpeg-turbo v${LIBJPEG_TURBO_VERSION} found, but CMake target ${LIBJPEG_TARGET} not found")
+      set(HAVE_LIBJPEG_TURBO OFF)
+    endif()
+  else()
     message(STATUS "libjpeg-turbo v3.0.0+ not found, disabled")
   endif()
-  set(HAVE_LIBJPEG_TURBO ${LIBJPEG_TURBO_FOUND})
+
+  find_package(OpenCV QUIET COMPONENTS dnn)
+  set(HAVE_OPENCV ${OpenCV_FOUND})
+  if(NOT ${HAVE_OPENCV})
+    message(STATUS "OpenCV not found, disabled")
+  endif()
+
 endif()
+
 ######################################################################################
 
 if(NOT DEFINED DEFAULT_ENABLE_ICD)
-
-if (MSVC)
-  message(STATUS "Building ICD not yet supported on Windows.")
-  set(DEFAULT_ENABLE_ICD 0 CACHE INTERNAL "Going to use ICD loader")
-
-else()
 
   # pkg-config doesn't work with cross-compiling
   if(PKG_CONFIG_EXECUTABLE)
     pkg_check_modules(OCL_ICD ocl-icd>=1.3)
   endif()
-
 
   # Need to avoid finding the Apple OpenCL framework
   set(CMAKE_FIND_FRAMEWORK NEVER CACHE STRING "Find frameworks on macOS")
@@ -1090,7 +1473,7 @@ else()
       NAMES
         ocl_icd.h
     )
-  elseif("${OCL_ICD_LIBRARIES}" STREQUAL "")
+  elseif(NOT OCL_ICD_LIBRARIES)
     # OCL_ICD_LIBRARIES is set to empty because of a bug in ocl-icd.pc
     unset(OCL_ICD_LIBRARIES CACHE)
   endif()
@@ -1115,7 +1498,6 @@ else()
     set(OPENCL_LIBRARIES "${OCL_ICD_LIBRARIES}" CACHE INTERNAL "ocl-icd library")
     set(OPENCL_LIBDIR "${OCL_ICD_LIBDIR}" CACHE INTERNAL "opencl ICD/library path")
 
-    set(DEFAULT_ENABLE_ICD 1 CACHE INTERNAL "ICD loader availability")
     if(DEFINED OCL_ICD_VERSION AND (OCL_ICD_VERSION VERSION_GREATER_EQUAL "2.3.0"))
       set(HAVE_OCL_ICD_30_COMPATIBLE 1 CACHE INTERNAL "ICD 3.0 compat")
     else()
@@ -1124,37 +1506,46 @@ else()
   else()
 
     set(HAVE_OCL_ICD 0 CACHE INTERNAL "OCL library is ocl-icd")
+    set(HAVE_OCL_ICD_30_COMPATIBLE 0 CACHE INTERNAL "ICD 3.0 compat")
     unset (OPENCL_FOUND CACHE)
 
       # fallback to other ICD loaders
       message(STATUS "ocl-icd not found -> trying fallback ICD implementations")
       if(PKG_CONFIG_EXECUTABLE)
         pkg_check_modules(OPENCL OpenCL>=1.2)
+        if(OPENCL_FOUND AND OPENCL_VERSION AND OPENCL_VERSION VERSION_GREATER_EQUAL "3.0.0")
+          set(HAVE_OCL_ICD_30_COMPATIBLE 1 CACHE INTERNAL "ICD 3.0 compat")
+        else()
+          set(HAVE_OCL_ICD_30_COMPATIBLE 0 CACHE INTERNAL "ICD 3.0 compat")
+        endif()
       endif()
       if(NOT OPENCL_FOUND)
         find_library(OPENCL_LIBRARIES OpenCL)
         # version check the found library
         if(OPENCL_LIBRARIES)
           set(CMAKE_REQUIRED_LIBRARIES "${OPENCL_LIBRARIES}")
-          include(CheckFunctionExists)
           unset (OPENCL_FOUND CACHE)
           CHECK_FUNCTION_EXISTS("clEnqueueFillImage" OPENCL_FOUND)
+          CHECK_FUNCTION_EXISTS("clSetContextDestructorCallback" OPENCL_30_FOUND)
+          if(OPENCL_30_FOUND AND OPENCL_FOUND)
+            set(HAVE_OCL_ICD_30_COMPATIBLE 1 CACHE INTERNAL "ICD 3.0 compat")
+          else()
+            set(HAVE_OCL_ICD_30_COMPATIBLE 0 CACHE INTERNAL "ICD 3.0 compat")
+          endif()
         endif()
       endif()
 
     if(OPENCL_FOUND)
       # no ocl-icd, but libopencl
-      message(STATUS "libOpenCL (unknown ICD loader) found")
-      set(DEFAULT_ENABLE_ICD 1 CACHE INTERNAL "ICD loader availability")
+      message(STATUS "libOpenCL (unknown ICD loader) found, 3.0 compat: ${OPENCL_30_FOUND}")
     else()
-      message(STATUS "No ICD loader of any kind found (or its OpenCL version is <1.2)")
       # no ocl-icd, no libopencl
-      set(DEFAULT_ENABLE_ICD 0 CACHE INTERNAL "no ICL loader found availability")
+      message(STATUS "No ICD loader of any kind found (or its OpenCL version is <1.2)")
     endif()
 
   endif()
 
-endif()
+  set(DEFAULT_ENABLE_ICD ${HAVE_OCL_ICD_30_COMPATIBLE} CACHE INTERNAL "ICD loader availability")
 
 endif()
 
@@ -1163,8 +1554,7 @@ setup_cached_var(ENABLE_ICD "Using an ICD loader"
   "ICD loader found, but requested build without it")
 
 if(ENABLE_ICD)
-  # only meaningful to link tests with ocl-icd
-  set(TESTS_USE_ICD ${HAVE_OCL_ICD})
+  set(TESTS_USE_ICD 1)
 else()
   set(TESTS_USE_ICD 0)
 endif()
@@ -1179,75 +1569,52 @@ else()
   set(POCL_LIBRARY_NAME "OpenCL")
 endif()
 
+# make sure the OpenCL library is found (poclcc links against it)
+if(ENABLE_ICD)
+  link_directories(${OPENCL_LIBDIR})
+endif()
+
 message(STATUS "Run tests with ICD: ${TESTS_USE_ICD}")
 
 ######################################################################################
 
-# Apple's OpenCL headers are too old for building PoCL, always use our own
-if(NOT APPLE)
-  find_file(OPENCL_H opencl.h PATH_SUFFIXES CL)
-  find_file(OPENCL_HPP opencl.hpp PATH_SUFFIXES CL)
-endif()
-
-if(OPENCL_H AND ENABLE_ICD AND (NOT HAVE_OCL_ICD_30_COMPATIBLE))
-  # if system-wide headers are present, ICD is enabled and older than 3.0 -> use the system-wide headers
-  # TBD we're assuming a sane combination of header & ICD versions
-  message(STATUS "opencl.h found (${OPENCL_H}) and ICD <3.0 enabled, using system headers")
-  set(HAVE_OPENCL_H ON)
-  set_expr(HAVE_OPENCL_HPP OPENCL_HPP)
-  set(IOH OFF)
-else()
-  # if system-wide OpenCL headers are not found, we must use PoCL's
-  # if ICD is disabled, we might as well compile with our own headers
-  # if ICD is 3.0, force the use of PoCL's own 3.0 headers -> enables some additional tests
-  message(STATUS "opencl.h not found or ICD disabled or ICD >= 3.0, using our headers")
-  set(HAVE_OPENCL_H OFF)
-  set(HAVE_OPENCL_HPP OFF)
-  # install headers only if system-wide headers not found
-  if(OPENCL_H)
-    set(IOH OFF)
-  else()
-    set(IOH ON)
+# if ICD is enabled and older than 3.0, we can't compile tests and examples. Disable them
+if(ENABLE_ICD AND (NOT HAVE_OCL_ICD_30_COMPATIBLE))
+  if(ENABLE_TESTS OR ENABLE_EXAMPLES)
+    message(FATAL_ERROR "ENABLE_ICD=ON and ICD doesn't support OpenCL 3.0, and tests/examples \
+                         are enabled. Either disable ICD or tests/examples")
   endif()
 endif()
 
 if(NOT DEFINED INSTALL_OPENCL_HEADERS)
+  find_file(OPENCL_H opencl.h PATH_SUFFIXES CL)
+  find_file(OPENCL_HPP opencl.hpp PATH_SUFFIXES CL)
+
+  # install headers only if system-wide headers not found
+  if(OPENCL_H AND OPENCL_HPP)
+    set(IOH OFF)
+  else()
+    set(IOH ON)
+  endif()
+
   option(INSTALL_OPENCL_HEADERS "Install POCL's OpenCL headers. (Ones from Khronos should be installed instead)" ${IOH})
 endif()
+
+#  force the use of PoCL's own 3.0 headers -> enables some additional tests
+message(STATUS "Using PoCL's OpenCL 3.0 headers")
+# PoCL's internal headers are OpenCL 3.0
+set(OPENCL_HEADER_VERSION 300)
 
 add_definitions(-DCL_USE_DEPRECATED_OPENCL_1_0_APIS -DCL_USE_DEPRECATED_OPENCL_1_1_APIS
                 -DCL_USE_DEPRECATED_OPENCL_1_2_APIS -DCL_USE_DEPRECATED_OPENCL_2_0_APIS
                 -DCL_USE_DEPRECATED_OPENCL_2_1_APIS -DCL_USE_DEPRECATED_OPENCL_2_2_APIS)
 
-# check the highest supported OpenCL version in the headers
-if(HAVE_OPENCL_H)
-  include(CheckSymbolExists)
-  check_symbol_exists(CL_VERSION_3_0 ${OPENCL_H} HAVE_OPECL_3_0)
-  check_symbol_exists(CL_VERSION_2_2 ${OPENCL_H} HAVE_OPECL_2_2)
-  check_symbol_exists(CL_VERSION_2_1 ${OPENCL_H} HAVE_OPECL_2_1)
-  check_symbol_exists(CL_VERSION_2_0 ${OPENCL_H} HAVE_OPECL_2_0)
-  check_symbol_exists(CL_VERSION_1_2 ${OPENCL_H} HAVE_OPECL_1_2)
-  if(HAVE_OPECL_3_0)
-    set(OPENCL_HEADER_VERSION 300)
-  else()
-    message(FATAL_ERROR "Couldn't find OpenCL header with version at least 3.0")
-  endif()
-else()
-  # PoCL's internal headers are OpenCL 3.0
-  set(OPENCL_HEADER_VERSION 300)
-endif()
-
 # sets a target-version macro
-# sets the include directories to point either to system-wide OpenCL headers, or PoCL's own
+# sets the include directories to point to PoCL's own
 macro(set_opencl_header_includes)
   add_definitions(-DCL_TARGET_OPENCL_VERSION=${OPENCL_HEADER_VERSION}
                   -DCL_HPP_TARGET_OPENCL_VERSION=${OPENCL_HEADER_VERSION})
-  if(NOT HAVE_OPENCL_H)
-    include_directories("${CMAKE_SOURCE_DIR}/include")
-  endif()
-  if(NOT HAVE_OPENCL_HPP)
-    include_directories("${CMAKE_SOURCE_DIR}/include/hpp")
-  endif()
+  include_directories("${CMAKE_SOURCE_DIR}/include")
   include_directories("${CMAKE_SOURCE_DIR}/poclu")
 endmacro()
 
@@ -1269,7 +1636,7 @@ file(WRITE "${CMAKE_BINARY_DIR}/pocl_build_timestamp.h" "#define POCL_BUILD_TIME
 
 # Host (basic/pthread) driver setup
 
-set(DEFAULT_HOST_CLANG_FLAGS "${CLANG_TARGET_OPTION}${LLC_TRIPLE}")
+set(DEFAULT_HOST_CLANG_FLAGS "--target=${LLC_TRIPLE}")
 set(DEFAULT_HOST_LLC_FLAGS "-relocation-model=pic -mtriple=${LLC_TRIPLE}")
 
 # Option for users to define Clang's --target-abi argument.
@@ -1280,15 +1647,19 @@ endif()
 
 # FP16 support requires _Float16 type
 # LLVM <15 doesn't support _Float16;
-# LLVM 15 crashes on some code; LLVM 16 seems to work
+# LLVM 15 crashes on some code; LLVM 16 seems to work but fails with ldexp; LLVM 18 fails with isinf
 # CONFORMANCE=ON disables FP16 b/c PoCL support is incomplete
-if((LLVM_VERSION_MAJOR GREATER_EQUAL 16)
+if((LLVM_VERSION_MAJOR GREATER_EQUAL 19)
    AND (NOT ENABLE_CONFORMANCE)
-   AND HOST_CPU_SUPPORTS_FLOAT16)
-  message(STATUS "Host support for cl_khr_fp16 enabled")
+   AND (NOT RISCV) AND (NOT I386)
+   AND (CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+   AND ENABLE_HOST_CPU_VECTORIZE_BUILTINS
+   AND CLANG_SUPPORTS_FLOAT16_ON_CPU
+   AND HOST_COMPILER_SUPPORTS_FLOAT16)
+  message(STATUS "CPU device support for cl_khr_fp16 enabled")
   set(HOST_CPU_ENABLE_CL_KHR_FP16 1)
 else()
-  message(STATUS "Host support for cl_khr_fp16 disabled")
+  message(STATUS "CPU device support for cl_khr_fp16 disabled")
   set(HOST_CPU_ENABLE_CL_KHR_FP16 0)
 endif()
 
@@ -1309,8 +1680,7 @@ set(HOST_DEVICE_CL_VERSION_MINOR 0)
 # Host CPU device: list of extensions that are always enabled, for both OpenCL 1.2 and 3.0
 set(HOST_DEVICE_EXTENSIONS "cl_khr_byte_addressable_store cl_khr_global_int32_base_atomics \
 cl_khr_global_int32_extended_atomics cl_khr_local_int32_base_atomics \
-cl_khr_local_int32_extended_atomics cl_khr_3d_image_writes \
-cl_khr_command_buffer cl_khr_command_buffer_multi_device cl_khr_subgroups \
+cl_khr_local_int32_extended_atomics cl_khr_3d_image_writes cl_ext_float_atomics \
 cl_intel_unified_shared_memory cl_ext_buffer_device_address")
 
 # Host CPU device: list of OpenCL 3.0 features that are always enabled
@@ -1319,26 +1689,39 @@ cl_intel_unified_shared_memory cl_ext_buffer_device_address")
 # .... seems like a bug in CTS, but needs to be investigated.
 set(HOST_DEVICE_FEATURES_30 "__opencl_c_3d_image_writes  __opencl_c_images \
 __opencl_c_atomic_order_acq_rel __opencl_c_atomic_order_seq_cst \
-__opencl_c_atomic_scope_device __opencl_c_program_scope_global_variables \
-__opencl_c_atomic_scope_all_devices __opencl_c_generic_address_space \
-__opencl_c_work_group_collective_functions")
+__opencl_c_atomic_scope_device __opencl_c_atomic_scope_all_devices \
+__opencl_c_generic_address_space __opencl_c_work_group_collective_functions")
+
+# enabled by default
+# when disabled, depending on setting of ENABLE_CONFORMANCE, denorms are disabled
+# (FTZ and DAZ = on) for all floats (conformance=OFF) or all but fp64 (conformance=ON)
+option(HOST_CPU_ENABLE_DENORMS "enable denorm support for CPU devices" ON)
+
+# when enabled, the compiler estimates the worst-case stack size used by a kernel's
+# workgroup function, and limits the workgroup size of the kernel accordingly (via
+# CL_KERNEL_WORK_GROUP_SIZE property); however, not all tests check the property,
+# and they try to enqueue larger WG sizes, which fails the tests. Mainly a problem
+# with AMD SDK, piglit & chipStar tests.
+option(HOST_CPU_ENABLE_STACK_SIZE_CHECK "enable stack size checking for CPU devices" OFF)
 
 # Host CPU device: Unfinished/undertested extensions only advertised when conformance
 # is OFF.
 if(NOT ENABLE_CONFORMANCE)
   set(HOST_DEVICE_EXTENSIONS "${HOST_DEVICE_EXTENSIONS} \
       cl_pocl_svm_rect cl_pocl_command_buffer_svm \
+      cl_khr_command_buffer cl_khr_command_buffer_multi_device cl_khr_command_buffer_mutable_dispatch \
       cl_pocl_command_buffer_host_buffer")
 
-  if (HAVE_LIBXSMM)
+  if (HAVE_LIBXSMM OR HAVE_ONNXRT OR HAVE_LIBJPEG_TURBO OR HAVE_OPENCV)
     set(HOST_DEVICE_EXTENSIONS "${HOST_DEVICE_EXTENSIONS} \
       cl_exp_tensor cl_exp_defined_builtin_kernels")
   endif()
-  set(HOST_DEVICE_EXTENSIONS "${HOST_DEVICE_EXTENSIONS} cl_khr_subgroup_ballot \
-cl_khr_subgroup_shuffle cl_intel_subgroups cl_intel_subgroups_short cl_intel_subgroups_char \
-cl_ext_float_atomics cl_intel_required_subgroup_size")
+  set(HOST_DEVICE_EXTENSIONS "${HOST_DEVICE_EXTENSIONS} \
+cl_khr_subgroups cl_khr_subgroup_ballot cl_khr_subgroup_shuffle \
+cl_intel_subgroups cl_intel_subgroups_short cl_intel_subgroups_char cl_intel_required_subgroup_size")
   # read-write images are still partially broken
-  set( HOST_DEVICE_FEATURES_30  "${HOST_DEVICE_FEATURES_30} __opencl_c_read_write_images")
+  # program-scope variables work on OpenCL C input, but breaks with SPIR-V input (llvm-spirv bugs)
+  set(HOST_DEVICE_FEATURES_30  "${HOST_DEVICE_FEATURES_30} __opencl_c_subgroups __opencl_c_read_write_images __opencl_c_program_scope_global_variables")
 endif()
 
 # Extensions that are considered feature-complete (preferably CTS-tested).
@@ -1367,12 +1750,15 @@ endif()
 #   Those with either 1) expression implementation, or 2) Clang builtin
 #   implementation.
 #
+# * cl_khr_subgroup: still need some patches to OpenCL-CTS, which are
+#   not upstreamed. Removing this extension from conformance-enabled build
+#   is required for PoCL CPU device pass the official upstream OpenCL-CTS.
 
 if(HOST_DEVICE_EXTENSIONS MATCHES "cl_khr_subgroup")
   set(HOST_DEVICE_FEATURES_30 "${HOST_DEVICE_FEATURES_30} __opencl_c_subgroups")
 endif()
 
-if(ENABLE_SPIRV)
+if(HOST_CPU_ENABLE_SPIRV)
   set(HOST_DEVICE_EXTENSIONS "${HOST_DEVICE_EXTENSIONS} cl_khr_il_program")
 endif()
 
@@ -1434,7 +1820,7 @@ if(KERNELLIB_HOST_CPU_VARIANTS STREQUAL "distro")
   if(HOST_CPU_FORCED)
     message(FATAL_ERROR "Cannot build with CPU autodetection distro variants build, and enforce LLC_HOST_CPU at the same time. Please pick one")
   endif()
-  if(X86_64 OR I386)
+  if(X86)
     set(KERNELLIB_HOST_CPU_VARIANTS sse2 ssse3 sse41 avx avx_f16c avx_fma4 avx2 avx512)
     if(I386)
       set(KERNELLIB_HOST_CPU_VARIANTS i386 i686 mmx sse ${KERNELLIB_HOST_CPU_VARIANTS})
@@ -1547,7 +1933,6 @@ if(ENABLE_PROXY_DEVICE)
 
     if(ENABLE_OPENGL_INTEROP)
       set(CMAKE_REQUIRED_LIBRARIES "OpenCL")
-      include(CheckFunctionExists)
       unset (ENABLE_CL_GET_GL_CONTEXT CACHE)
       CHECK_FUNCTION_EXISTS("clGetGLContextInfoKHR" ENABLE_CL_GET_GL_CONTEXT)
       unset(CMAKE_REQUIRED_LIBRARIES)
@@ -1555,6 +1940,9 @@ if(ENABLE_PROXY_DEVICE)
 
   endif()
 
+  # an option parameter to link to libopencl-stub
+  # source code: https://github.com/krrishnarraj/libopencl-stub
+  OPTION(PROXY_USE_LIBOPENCL_STUB "link the proxy device to libopencl-stub instead of system opencl" OFF)
   if(RENAME_POCL AND PROXY_USE_LIBOPENCL_STUB)
     message(FATAL_ERROR "RENAME_POCL and PROXY_USE_LIBOPENCL_STUB can not be used together")
   endif()
@@ -1569,7 +1957,12 @@ if(ENABLE_PROXY_DEVICE)
     set(RENAME_POCL OFF )
   endif()
 
-
+  find_library(TSLIB tree-sitter)
+  set(HAVE_TREE_SITTER OFF)
+  if(TSLIB)
+    set(HAVE_TREE_SITTER ON)
+    message("-- FOUND tree sitter library")
+  endif()
 
   set(BUILD_PROXY 1)
 
@@ -1749,10 +2142,41 @@ endif()
 ##########################################################
 
 if (ENABLE_LEVEL0)
-  if(NOT PKG_CONFIG_EXECUTABLE)
-    message(FATAL_ERROR "building Level0 requires pkg-config")
+  if(PKG_CONFIG_EXECUTABLE)
+    message(STATUS "trying to find LevelZero ICD using pkg-config")
+    pkg_check_modules(LEVEL0 REQUIRED IMPORTED_TARGET level-zero>=1.3)
   endif()
-  pkg_check_modules(LEVEL0 REQUIRED level-zero>=1.3)
+
+  if (NOT LEVEL0_FOUND)
+    message(STATUS "Could not find level-zero via pkg-config, trying to find it directly")
+    find_library(LEVEL0_LIBRARIES NAMES ze_loader REQUIRED)
+    find_path(LEVEL0_INCLUDE_DIRS NAMES ze_api.h PATH_SUFFIXES level_zero)
+    if (LEVEL0_LIBRARIES AND LEVEL0_INCLUDE_DIRS)
+      set(LEVEL0_FOUND ON CACHE INTERNAL "Level0 found")
+      add_library(PkgConfig::LEVEL0 SHARED IMPORTED)
+      if(WIN32)
+        set_property(TARGET PkgConfig::LEVEL0 PROPERTY
+            IMPORTED_IMPLIB "${LEVEL0_LIBRARIES}")
+      else()
+        set_property(TARGET PkgConfig::LEVEL0 PROPERTY
+            IMPORTED_LOCATION "${LEVEL0_LIBRARIES}")
+      endif()
+      set_target_properties(PkgConfig::LEVEL0
+            PROPERTIES INTERFACE_INCLUDE_DIRECTORIES
+            "${LEVEL0_INCLUDE_DIRS}"
+      )
+    endif()
+  endif()
+
+  if(NOT LEVEL0_FOUND)
+    message(FATAL_ERROR "Level Zero library/headers not found")
+  else()
+    message(STATUS "Using Level0 library: '${LEVEL0_LIBRARIES}' and Level0 headers: '${LEVEL0_INCLUDE_DIRS}'")
+    set(OCL_DRIVERS "${OCL_DRIVERS} level0")
+    set(OCL_TARGETS "${OCL_TARGETS} level0")
+  endif()
+
+  option(ENABLE_HEADER_BUNDLING "bundling of LevelZero headers into driver binary" OFF)
 
   if(ENABLE_CONFORMANCE)
     set(DEFAULT_LEVEL0_EXTRA_F OFF)
@@ -1767,29 +2191,30 @@ if (ENABLE_LEVEL0)
   if(NOT ENABLE_LLVM)
     message(FATAL_ERROR "Level Zero requires LLVM/Clang")
   endif()
-  if(NOT LLVM_SPIRV AND NOT HAVE_LLVM_SPIRV_LIB)
-    message(FATAL_ERROR "Level Zero requires llvm-spirv translator (either binary or libLLVMSPIRV library")
-  endif()
   if(NOT STATIC_LLVM)
     message(WARNING "Level Zero might run into symbol conflicts when using dynamic LLVM libraries, consider using -DSTATIC_LLVM=ON")
   endif()
 
-  if (NOT LEVEL0_FOUND)
-    message(STATUS "Could not find level-zero via pkg-config, trying to find it directly")
-    find_library(LEVEL0_LIBRARIES NAMES ze_loader REQUIRED)
-    find_path(LEVEL0_INCLUDE_DIRS NAMES ze_api.h PATH_SUFFIXES level_zero)
-    if (LEVEL0_LIBRARIES AND LEVEL0_INCLUDE_DIRS)
-      set(LEVEL0_FOUND ON CACHE INTERNAL "Level0 found")
+  if((NOT LLVM_SPIRV) AND (NOT HAVE_LLVM_SPIRV_LIB))
+    if(NOT LLVM_HAS_SPIRV_TARGET)
+      message(FATAL_ERROR "Level Zero requires LLVM SPIRV backend or llvm-spirv translator (either an executable or libLLVMSPIRV library)")
+    else()
+      message(WARNING "Level Zero: SPIRV backend support is experimental")
+      set(USE_LLVM_SPIRV_TARGET 1)
+    endif()
+  else()
+    if(LLVM_HAS_SPIRV_TARGET)
+      # prefer the translator by default, but let the user choose
+      option(USE_LLVM_SPIRV_TARGET "use the LLVM SPIRV target (default: off" OFF)
+    else()
+      set(USE_LLVM_SPIRV_TARGET 0)
     endif()
   endif()
 
-  if(NOT LEVEL0_FOUND)
-    message(FATAL_ERROR "Level Zero library/headers not found")
-  else()
-    message(STATUS "Using Level0 library: '${LEVEL0_LIBRARIES}' and Level0 headers: '${LEVEL0_INCLUDE_DIRS}'")
-    message(WARNING "Note: Level0 backend is highly experimental and very incomplete." )
-    set(OCL_DRIVERS "${OCL_DRIVERS} level0")
-    set(OCL_TARGETS "${OCL_TARGETS} level0")
+  if(USE_LLVM_SPIRV_TARGET)
+    message(STATUS "Level Zero: using LLVM SPIRV backend")
+    set(HAVE_LLVM_SPIRV 0)
+    set(HAVE_LLVM_SPIRV_LIB 0)
   endif()
 
 endif()
@@ -1814,6 +2239,11 @@ endif()
 ##########################################################
 
 if(ENABLE_CUDA)
+
+  if(CMAKE_VERSION VERSION_LESS 3.17.0)
+    message(FATAL_ERROR "CUDA build requires CMake 3.17!")
+  endif()
+  find_package(CUDAToolkit REQUIRED COMPONENTS cudart)
 
   if(NOT "${LLVM_ALL_TARGETS}" MATCHES "NVPTX")
     message(FATAL_ERROR "CUDA build requested but LLVM does not support NVPTX target!")
@@ -1879,10 +2309,11 @@ if(ENABLE_CUDA)
   set(CUDA_DEVICE_EXTENSIONS "${CUDA_DEVICE_EXTENSIONS} cl_khr_fp64")
   set(CUDA_DEVICE_FEATURES_30 "${CUDA_DEVICE_FEATURES_30} __opencl_c_fp64")
 
+  set(CUDA_POCL_TARGETS CUDA::cuda_driver CUDA::cudart)
   if(ENABLE_CUDNN)
     add_definitions(-DENABLE_CUDNN=1)
+    list(APPEND CUDA_POCL_TARGETS cudnn)
   endif()
-
 
 endif()
 
@@ -1905,24 +2336,6 @@ else()
   # Set default as little-endian
   set(WORDS_BIGENDIAN 0)
 endif()
-
-##########################################################
-
-if (ENABLE_LLVM AND NOT CMAKE_CROSSCOMPILING)
-  CHECK_ALIGNOF("double16" "typedef double double16  __attribute__((__ext_vector_type__(16)));" ALIGNOF_DOUBLE16)
-else()
-  set(ALIGNOF_DOUBLE16 128)
-endif()
-
-if(ALIGNOF_DOUBLE16 LESS 128)
-  set(ALIGNOF_DOUBLE16 128)
-endif()
-
-math(EXPR ALIGNOF_DOUBLE16 "${ALIGNOF_DOUBLE16} + 0")
-if(ALIGNOF_DOUBLE16 EQUAL 0)
-  set(ALIGNOF_DOUBLE16 128)
-endif()
-set(MAX_EXTENDED_ALIGNMENT "${ALIGNOF_DOUBLE16}")
 
 ##########################################################
 
@@ -1991,7 +2404,7 @@ endif()
 # 13:0:11 == 4.0 (the libpocl.so will be named libpocl.so.2.11.X )
 # 14:0:12 == 5.0 (the libpocl.so will be named libpocl.so.2.12.X )
 # 15:0:13 == 6.0 (the libpocl.so will be named libpocl.so.2.13.X )
-# 16:0:14 == 6.1 (the libpocl.so will be named libpocl.so.2.14.X )
+# 16:0:14 == 7.0 (the libpocl.so will be named libpocl.so.2.14.X )
 
 set(LIB_CURRENT_VERSION 16)
 set(LIB_REVISION_VERSION 0)
@@ -2036,8 +2449,10 @@ rename_if_different("${CMAKE_BINARY_DIR}/pocl_version.h.new" "${CMAKE_BINARY_DIR
 configure_file("pocl_opencl.h.in.cmake" "pocl_opencl.h.new")
 rename_if_different("${CMAKE_BINARY_DIR}/pocl_opencl.h.new" "${CMAKE_BINARY_DIR}/pocl_opencl.h" 0)
 
-configure_file("cl_offline_compiler.sh.in.cmake" "cl_offline_compiler.sh.in.new" @ONLY)
-rename_if_different("${CMAKE_BINARY_DIR}/cl_offline_compiler.sh.in.new" "${CMAKE_BINARY_DIR}/cl_offline_compiler.sh" 1)
+configure_file("cl_offline_compiler.sh.in.cmake" "cl_offline_compiler.sh.config.new" @ONLY)
+rename_if_different(
+  "${CMAKE_BINARY_DIR}/cl_offline_compiler.sh.config.new"
+  "${CMAKE_BINARY_DIR}/cl_offline_compiler.sh" 1)
 
 include_directories("${CMAKE_BINARY_DIR}")
 
@@ -2068,12 +2483,15 @@ if(ENABLE_ICD)
     set(CONTENT "$<TARGET_FILE_NAME:pocl>")
   endif()
   file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/pocl.icd" CONTENT "${CONTENT}" CONDITION 1)
-  install(FILES "${CMAKE_BINARY_DIR}/pocl.icd"
-          DESTINATION "${POCL_INSTALL_ICD_VENDORDIR}" COMPONENT "icd")
-
-  # write icd file for pocl testing
-  file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/ocl-vendors")
-  file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/ocl-vendors/pocl-tests.icd" CONTENT "$<TARGET_FILE:pocl>" CONDITION 1)
+  # On Windows Khronos ICD loader looks for vendors in registry.
+  # https://registry.khronos.org/OpenCL/sdk/3.0/docs/man/html/cl_khr_icd.html#_icd_loader_vendor_enumeration_on_windows
+  if (NOT WIN32)
+    install(FILES "${CMAKE_BINARY_DIR}/pocl.icd"
+            DESTINATION "${POCL_INSTALL_ICD_VENDORDIR}" COMPONENT "icd")
+    # write icd file for pocl testing
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/ocl-vendors")
+    file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/ocl-vendors/pocl-tests.icd" CONTENT "$<TARGET_FILE:pocl>" CONDITION 1)
+  endif()
 
   cpack_add_component("icd")
   set("CPACK_DEBIAN_ICD_PACKAGE_NAME" "pocl-opencl-icd")
@@ -2084,12 +2502,10 @@ endif()
 
 ##########################################################
 
-if(UNIX)
-
+if(UNIX OR MINGW)
   configure_file("${CMAKE_SOURCE_DIR}/pocl.pc.in.cmake" "${CMAKE_BINARY_DIR}/pocl.pc" @ONLY)
   install(FILES "${CMAKE_BINARY_DIR}/pocl.pc"
-          DESTINATION "${POCL_INSTALL_PKGCONFIG_DIR}" COMPONENT "dev")
-
+          DESTINATION "${POCL_INSTALL_PKGCONFIG_DIR_REL}" COMPONENT "dev")
 endif()
 
 # For now always use a mirror copy of ocml, but allow overriding
@@ -2158,7 +2574,7 @@ set(POCLU_LINK_OPTIONS poclu ${OPENCL_LIBS} ${LIBMATH})
 message(STATUS "POCLU LINK OPTS: ${POCLU_LINK_OPTIONS}")
 
 # poclcc bin
-if(ENABLE_POCLCC)
+if(ENABLE_POCLCC OR ENABLE_SPIRV)
     add_subdirectory("bin")
 endif()
 
@@ -2167,13 +2583,15 @@ include(add_test_pocl)
 if(ENABLE_TESTS)
     add_subdirectory("tests")
 
-    # make check & make check_tier1
-    add_custom_target(check COMMAND ${CMAKE_CTEST_COMMAND} "--output-on-failure" -j ${HOST_CPU_CORECOUNT} ${COMMAND_USES_TERMINAL})
-    add_custom_target(check_tier1 COMMAND ${CMAKE_CTEST_COMMAND} "--output-on-failure" -L "'internal|piglit|PyOpenCL|conformance_suite_micro|shoc|chipStar'" -j ${HOST_CPU_CORECOUNT} ${COMMAND_USES_TERMINAL})
+    # add make check targets
+    set(COMMON_CTEST_ARGS "--output-on-failure" -j ${HOST_CPU_CORECOUNT} ${COMMAND_USES_TERMINAL})
+    if(ENABLE_HOST_CPU_DEVICES)
+      add_custom_target(check COMMAND "${CMAKE_SOURCE_DIR}/tools/scripts/run_cpu_tests" ${COMMON_CTEST_ARGS})
+    endif()
+    if(ENABLE_CUDA)
+      add_custom_target(check-cuda COMMAND "${CMAKE_SOURCE_DIR}/tools/scripts/run_cuda_tests" ${COMMON_CTEST_ARGS})
+    endif()
 
-    add_custom_target(check-cuda COMMAND
-      "${CMAKE_SOURCE_DIR}/tools/scripts/run_cuda_tests"
-      "--output-on-failure" -j ${HOST_CPU_CORECOUNT} ${COMMAND_USES_TERMINAL})
 endif()
 
 if(ENABLE_EXAMPLES)
@@ -2220,13 +2638,24 @@ if(ENABLE_REMOTE_SERVER)
     add_subdirectory("pocld")
 endif()
 
+file(TO_CMAKE_PATH
+  "${CMAKE_SOURCE_DIR}/doc/www/img/pocl-80x60.png" POCL_ICON_PATH)
+
+if(WIN32)
+  # Work-around for "Invalid escape sequence \U" when using NSIS package
+  # generator. CPack/NSIS does not honor cmake paths nor it handles Windows
+  # native paths.
+  # [https://gitlab.kitware.com/cmake/cmake/-/issues/22441]
+  string(REPLACE "/" "\\\\" POCL_ICON_PATH "${POCL_ICON_PATH}")
+endif()
+
 set(CPACK_PACKAGE_DESCRIPTION_FILE "${CMAKE_SOURCE_DIR}/CPack.pocl.description.txt")
-set(CPACK_PACKAGE_ICON "${CMAKE_SOURCE_DIR}/doc/www/img/pocl-80x60.png")
+set(CPACK_PACKAGE_ICON ${POCL_ICON_PATH})
 set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/pocl/pocl")
 set(CPACK_PACKAGE_CONTACT "https://github.com/pocl/pocl")
 set(CPACK_PACKAGE_CHECKSUM "SHA512")
 set(CPACK_RESOURCE_FILE_README "${CMAKE_SOURCE_DIR}/README.md")
-set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/COPYING")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE.with.3rdparty")
 set(CPACK_GENERATOR "DEB")
 
 set("CPACK_DEBIAN_DEV_PACKAGE_NAME" "libpocl-dev")
@@ -2236,6 +2665,49 @@ set(CPACK_DEBIAN_DEV_PACKAGE_REPLACES "libpocl1-common (<< 0.13-9)")
 
 set(CPACK_RPM_COMPONENT_INSTALL ON)
 set(CPACK_DEB_COMPONENT_INSTALL ON)
+
+# Notify users about the previous PoCL installed on the system and let
+# (NSIS) installer offer to unistall it. Default
+# CPACK_PACKAGE_INSTALL_REGISTRY_KEY is overriden here so the user
+# gets the notification if the PoCL is installed on other location or
+# it is different version.
+set(CPACK_PACKAGE_INSTALL_REGISTRY_KEY "PoCL")
+set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
+
+if(WIN32 AND ENABLE_ICD)
+  # Make NSIS installer to register PoCL to ICD loader.
+  #
+  # $INSTDIR is NSIS variable for the installation path (possibly
+  # chosen by user).
+  file(TO_CMAKE_PATH "$INSTDIR/${POCL_INSTALL_PUBLIC_LIBDIR_REL}/pocl.dll"
+    WINREG_ICD_POCL_ENTRY)
+  string(REPLACE "/" "\\\\" WINREG_ICD_POCL_ENTRY "${WINREG_ICD_POCL_ENTRY}")
+
+  set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS "
+SetRegView 64
+WriteRegDWORD HKLM 'SOFTWARE\\\\Khronos\\\\OpenCL\\\\Vendors' '${WINREG_ICD_POCL_ENTRY}' 0
+setRegView default
+")
+
+  # "SetRegView 64" puts the register key into 64-bit windows registry.
+  set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS "
+SetRegView 64
+DeleteRegValue HKLM 'SOFTWARE\\\\Khronos\\\\OpenCL\\\\Vendors' '${WINREG_ICD_POCL_ENTRY}'
+setRegView default
+")
+  message(STATUS "XXX CPACK_NSIS_EXTRA_INSTALL_COMMANDS=${CPACK_NSIS_EXTRA_INSTALL_COMMANDS}")
+endif()
+
+# install() library dependencies (libhwloc) as part of installation.
+# this not only installs them to POCL_INSTALL_PUBLIC_LIBDIR_REL but also
+# packages them with CPack
+# TODO : doesn't work with pkg-config because it doesn't set
+# IMPORTED_LOCATION property on the created targets
+if(WIN32 AND TARGET PkgConfig::HWLOC AND NOT PKG_CONFIG_FOUND)
+  install(IMPORTED_RUNTIME_ARTIFACTS PkgConfig::HWLOC
+        RUNTIME DESTINATION ${POCL_INSTALL_PUBLIC_LIBDIR_REL}
+        COMPONENT "lib")
+endif()
 
 include(CPack)
 
@@ -2283,6 +2755,9 @@ MESSAGE(STATUS "HAVE_CLOCK_GETTIME: ${HAVE_CLOCK_GETTIME}")
 MESSAGE(STATUS "HAVE_GLEW: ${HAVE_GLEW}")
 MESSAGE(STATUS "HAVE_LIBXSMM: ${HAVE_LIBXSMM}")
 MESSAGE(STATUS "HAVE_LIBJPEG_TURBO: ${HAVE_LIBJPEG_TURBO}")
+MESSAGE(STATUS "HAVE_ONNXRT: ${HAVE_ONNXRT}")
+MESSAGE(STATUS "HAVE_OPENCV: ${HAVE_OPENCV}")
+
 MESSAGE(STATUS "HOST_AS_FLAGS: ${HOST_AS_FLAGS}")
 MESSAGE(STATUS "HOST_CLANG_FLAGS: ${HOST_CLANG_FLAGS}")
 MESSAGE(STATUS "HOST_LD_FLAGS: ${HOST_LD_FLAGS}")
@@ -2328,21 +2803,29 @@ if (ENABLE_LLVM)
   MESSAGE(STATUS "LLVM_CPPFLAGS: ${LLVM_CPPFLAGS}")
   MESSAGE(STATUS "LLVM_LDFLAGS: ${LLVM_LDFLAGS}")
   MESSAGE(STATUS "LLVM_LIBDIR: ${LLVM_LIBDIR}")
-  MESSAGE(STATUS "LLVM_INCLUDEDIR: ${LLVM_INCLUDEDIR}")
   MESSAGE(STATUS "LLVM_SRC_ROOT: ${LLVM_SRC_ROOT}")
   MESSAGE(STATUS "LLVM_OBJ_ROOT: ${LLVM_OBJ_ROOT}")
   MESSAGE(STATUS "LLVM_INCLUDE_DIRS: ${LLVM_INCLUDE_DIRS}")
   MESSAGE(STATUS "LLVM_ALL_TARGETS: ${LLVM_ALL_TARGETS}")
   MESSAGE(STATUS "LLVM_HOST_TARGET: ${LLVM_HOST_TARGET}")
+  MESSAGE(STATUS "HAVE_LLVM_SPIRV: ${HAVE_LLVM_SPIRV}")
+  MESSAGE(STATUS "HAVE_LLVM_SPIRV_LIB: ${HAVE_LLVM_SPIRV_LIB}")
+  MESSAGE(STATUS "USE_LLVM_SPIRV_TARGET: ${USE_LLVM_SPIRV_TARGET}")
   if(ENABLE_HOST_CPU_DEVICES)
-  MESSAGE(STATUS "CLANG_TARGET_OPTION: ${CLANG_TARGET_OPTION}")
   MESSAGE(STATUS "CLANG_MARCH_FLAG: ${CLANG_MARCH_FLAG}")
   MESSAGE(STATUS "LLC_TRIPLE: ${LLC_TRIPLE}")
   MESSAGE(STATUS "LLC_HOST_CPU_AUTO: ${LLC_HOST_CPU_AUTO}")
   MESSAGE(STATUS "LLC_HOST_CPU: ${LLC_HOST_CPU}")
   MESSAGE(STATUS "SELECTED_HOST_CPU: ${SELECTED_HOST_CPU}")
   MESSAGE(STATUS "HOST_CPU_FORCED: ${HOST_CPU_FORCED}")
-  MESSAGE(STATUS "HOST_CPU_SUPPORTS_FLOAT16: ${HOST_CPU_SUPPORTS_FLOAT16}")
+  MESSAGE(STATUS "HOST_COMPILER_SUPPORTS_FLOAT16: ${HOST_COMPILER_SUPPORTS_FLOAT16}")
+  MESSAGE(STATUS "CLANG_SUPPORTS_FLOAT16_ON_CPU: ${CLANG_SUPPORTS_FLOAT16_ON_CPU}")
+  MESSAGE(STATUS "HOST_CPU_ENABLE_DENORMS: ${HOST_CPU_ENABLE_DENORMS}")
+  MESSAGE(STATUS "HOST_CPU_ENABLE_STACK_SIZE_CHECK: ${HOST_CPU_ENABLE_STACK_SIZE_CHECK}")
+  MESSAGE(STATUS "ENABLE_HOST_CPU_VECTORIZE_SLEEF: ${ENABLE_HOST_CPU_VECTORIZE_SLEEF}")
+  MESSAGE(STATUS "ENABLE_HOST_CPU_VECTORIZE_LIBMVEC: ${ENABLE_HOST_CPU_VECTORIZE_LIBMVEC}")
+  MESSAGE(STATUS "ENABLE_HOST_CPU_VECTORIZE_SVML: ${ENABLE_HOST_CPU_VECTORIZE_SVML}")
+  MESSAGE(STATUS "ENABLE_HOST_CPU_VECTORIZE_BUILTINS: ${ENABLE_HOST_CPU_VECTORIZE_BUILTINS}")
   endif()
 endif()
 MESSAGE(STATUS "")
@@ -2351,6 +2834,7 @@ MESSAGE(STATUS "OCL_KERNEL_TARGET: ${OCL_KERNEL_TARGET}")
 MESSAGE(STATUS "OCL_KERNEL_TARGET_CPU: ${OCL_KERNEL_TARGET_CPU}")
 MESSAGE(STATUS "HOST_DEVICE_ADDRESS_BITS: ${HOST_DEVICE_ADDRESS_BITS}")
 MESSAGE(STATUS "HOST_CPU_ENABLE_CL_KHR_FP16: ${HOST_CPU_ENABLE_CL_KHR_FP16}")
+MESSAGE(STATUS "HOST_CPU_ENABLE_SPIRV: ${HOST_CPU_ENABLE_SPIRV}")
 if (ENABLE_TCE)
   MESSAGE(STATUS "")
   MESSAGE(STATUS "TCE_TARGET_CLANG_FLAGS: ${TCE_TARGET_CLANG_FLAGS}")
@@ -2396,6 +2880,7 @@ MESSAGE(STATUS "ENABLE_CUDA: ${ENABLE_CUDA}")
 MESSAGE(STATUS "ENABLE_FORMOSA: ${ENABLE_FORMOSA}")
 MESSAGE(STATUS "ENABLE_CUDNN: ${ENABLE_CUDNN}")
 MESSAGE(STATUS "ENABLE_HOST_CPU_DEVICES: ${ENABLE_HOST_CPU_DEVICES}")
+MESSAGE(STATUS "ENABLE_PRINTF_IMMEDIATE_FLUSH: ${ENABLE_PRINTF_IMMEDIATE_FLUSH}")
 MESSAGE(STATUS "ENABLE_VULKAN: ${ENABLE_VULKAN}")
 MESSAGE(STATUS "ENABLE_ASAN (address sanitizer): ${ENABLE_ASAN}")
 MESSAGE(STATUS "ENABLE_LSAN (leak sanitizer): ${ENABLE_LSAN}")
@@ -2408,12 +2893,16 @@ MESSAGE(STATUS "ENABLE_PROXY_DEVICE: ${ENABLE_PROXY_DEVICE}")
 MESSAGE(STATUS "ENABLE_PROXY_DEVICE_INTEROP: ${ENABLE_PROXY_DEVICE_INTEROP}")
 MESSAGE(STATUS "ENABLE_REMOTE_SERVER: ${ENABLE_REMOTE_SERVER}")
 MESSAGE(STATUS "ENABLE_REMOTE_CLIENT: ${ENABLE_REMOTE_CLIENT}")
+if (ENABLE_REMOTE_SERVER OR  ENABLE_REMOTE_CLIENT)
+  MESSAGE(STATUS "HAVE_LINUX_VSOCK_H: ${HAVE_LINUX_VSOCK_H}")
+endif ()
 MESSAGE(STATUS "ENABLE_D2D_MIG: ${ENABLE_D2D_MIG}")
 MESSAGE(STATUS "ENABLE_RDMA: ${ENABLE_RDMA}")
 MESSAGE(STATUS "ENABLE_CL_GET_GL_CONTEXT: ${ENABLE_CL_GET_GL_CONTEXT}")
 MESSAGE(STATUS "ENABLE_OPENGL_INTEROP: ${ENABLE_OPENGL_INTEROP}")
 MESSAGE(STATUS "ENABLE_EGL_INTEROP: ${ENABLE_EGL_INTEROP}")
-
+MESSAGE(STATUS "ENABLE_SIGFPE_HANDLER: ${ENABLE_SIGFPE_HANDLER}")
+MESSAGE(STATUS "ENABLE_SIGUSR2_HANDLER: ${ENABLE_SIGUSR2_HANDLER}")
 MESSAGE(STATUS "ENABLE_SLEEF: ${ENABLE_SLEEF}")
 MESSAGE(STATUS "ENABLE_SPIRV: ${ENABLE_SPIRV}")
 MESSAGE(STATUS "ENABLE_VALGRIND: ${ENABLE_VALGRIND}")

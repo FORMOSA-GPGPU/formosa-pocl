@@ -33,7 +33,6 @@ as_type.cl
 async_work_group_copy.cl
 async_work_group_strided_copy.cl
 atomics.cl
-barrier.ll
 bitselect.cl
 clamp.cl
 clamp_int.cl
@@ -50,7 +49,7 @@ fmax_common.cl
 fmin_common.cl
 fract.cl
 get_global_id.c
-get_linear_id.c
+get_linear_id.cl
 get_global_offset.c
 get_global_size.c
 get_group_id.c
@@ -171,9 +170,9 @@ libclc-pocl/log2.cl
 libclc-pocl/logb.cl
 # currently unused
 #libclc/log1p.cl
-#libclc-pocl/frexp.cl
-#libclc-pocl/expfrexp.cl
-#libclc-pocl/frfrexp.cl
+libclc-pocl/frexp.cl
+libclc-pocl/expfrexp.cl
+libclc-pocl/frfrexp.cl
 libclc-pocl/pown.cl
 libclc-pocl/powr.cl
 libclc-pocl/pow.cl
@@ -219,9 +218,9 @@ sleef-pocl/floor.cl
 sleef-pocl/fma.cl
 sleef-pocl/fmax.cl
 sleef-pocl/fmin.cl
-sleef-pocl/expfrexp.cl
-sleef-pocl/frfrexp.cl
-sleef-pocl/frexp.cl
+#sleef-pocl/expfrexp.cl
+#sleef-pocl/frfrexp.cl
+#sleef-pocl/frexp.cl
 sleef-pocl/hypot.cl
 sleef-pocl/ilogb.cl
 sleef-pocl/ldexp.cl
@@ -242,59 +241,139 @@ sleef-pocl/tgamma.cl
 sleef-pocl/trunc.cl
 )
 
-if(HOST_CPU_ENABLE_CL_KHR_FP16)
+if(KERNEL_TRIPLE_TARGETS_MSVC_TOOLCHAIN)
+  list(APPEND SOURCES_WITH_SLEEF barrier-msvc.ll)
+else()
+  list(APPEND SOURCES_WITH_SLEEF barrier.ll)
+endif()
+
+# if ENABLE_HOST_CPU_VECTORIZE_BUILTINS is enabled, use Clang/LLVM builtins
+# this makes vectorization of (some) OpenCL builtins possible,
+# while also making FP16 versions available (if FP16 is available)
+if(ENABLE_HOST_CPU_VECTORIZE_BUILTINS)
   list(REMOVE_ITEM SOURCES_WITH_SLEEF
     libclc-pocl/cos.cl
     libclc-pocl/sin.cl
     libclc-pocl/log2.cl
     libclc-pocl/pow.cl
     libclc-pocl/fmod.cl
-    sleef-pocl/scalars.cl
-    sleef-pocl/ceil.cl
-    sleef-pocl/copysign.cl
-    sleef-pocl/exp2.cl
+
     sleef-pocl/exp.cl
+    sleef-pocl/exp2.cl
     sleef-pocl/fabs.cl
-    sleef-pocl/floor.cl
     sleef-pocl/fma.cl
+
     sleef-pocl/fmax.cl
     sleef-pocl/fmin.cl
     sleef-pocl/log10.cl
+
     sleef-pocl/log.cl
     sleef-pocl/ldexp.cl
     sleef-pocl/rint.cl
     sleef-pocl/round.cl
     sleef-pocl/sqrt.cl
-    sleef-pocl/trunc.cl
+
+    sleef-pocl/scalars.cl
     )
 
   list(APPEND SOURCES_WITH_SLEEF
-    fabs.cl
-    fma.cl
-    fmod.cl
-    copysign.cl
-    pow.cl
-    ceil.cl
     cos.cl
+    sin.cl
+    log2.cl
+    pow.cl
+    fmod.cl
+
     exp.cl
     exp2.cl
-    floor.cl
+    fabs.cl
+    fma.cl
+
     fmax.cl
     fmin.cl
     log10.cl
-    log2.cl
+
     log.cl
     ldexp.cl
     rint.cl
     round.cl
-    sin.cl
     sqrt.cl
-    trunc.cl)
+  )
+
+  if(LLVM_VERSION VERSION_GREATER_EQUAL 19.0)
+    list(REMOVE_ITEM SOURCES_WITH_SLEEF
+      libclc-pocl/cosh.cl
+      libclc-pocl/sinh.cl
+      libclc-pocl/pown.cl
+      libclc-pocl/tan.cl
+      libclc-pocl/tanh.cl
+      libclc-pocl/isinf.cl
+      libclc-pocl/isnan.cl
+      libclc-pocl/isfinite.cl
+      libclc-pocl/isnormal.cl
+      libclc-pocl/frexp.cl
+
+      # only available on Apple OS X
+      # libclc-pocl/sinpi.cl
+      # libclc-pocl/cospi.cl
+      # libclc-pocl/tanpi.cl
+
+      # these are available as Clang builtins (__builtin_XYZ), but not as LLVM
+      # intrinsics (llvm.XYZ.f32), only library calls.
+      #libclc-pocl/acosh.cl
+      #libclc-pocl/asinh.cl
+      #libclc-pocl/atanh.cl
+      #libclc-pocl/logb.cl
+      #sleef-pocl/log1p.cl
+      #sleef-pocl/expm1.cl
+      #sleef-pocl/modf.cl
+      #sleef-pocl/ilogb.cl
+      #sleef-pocl/hypot.cl
+      #sleef-pocl/atan2.cl
+      #sleef-pocl/erf.cl
+      #sleef-pocl/erfc.cl
+      #sleef-pocl/fdim.cl
+      #sleef-pocl/nextafter.cl
+      #libclc-pocl/remainder.cl
+      #libclc-pocl/remquo.cl
+
+      sleef-pocl/trunc.cl
+      sleef-pocl/ceil.cl
+      sleef-pocl/exp10.cl
+      sleef-pocl/floor.cl
+      sleef-pocl/acos.cl
+      sleef-pocl/asin.cl
+      sleef-pocl/atan.cl
+    )
+  list(APPEND SOURCES_WITH_SLEEF
+    cosh.cl
+    sinh.cl
+    tanh.cl
+    ceil.cl
+
+    pown.cl
+    tan.cl
+    acos.cl
+    asin.cl
+    atan.cl
+
+    exp10.cl
+    floor.cl
+    frexp.cl
+
+    isfinite.cl
+    isinf.cl
+    isnan.cl
+    isnormal.cl
+
+    trunc.cl
+    )
+  endif()
+
 endif()
 
 
 if(HOST_DEVICE_EXTENSIONS MATCHES "cl_khr_subgroup")
-  list(APPEND SOURCES_WITH_SLEEF subgroups.c subgroups.cl)
+  list(APPEND SOURCES_WITH_SLEEF subgroups.cl)
 endif()
 
 
@@ -358,6 +437,7 @@ set(KERNEL_CL_FLAGS
       "-Wall" "-Wno-unused-local-typedef" "-Xclang"
       "-cl-std=CL${HOST_DEVICE_CL_VERSION_STD}"
       "-D__OPENCL_C_VERSION__=${HOST_DEVICE_CL_VERSION_3DIGIT}"
+      "-DENABLE_CONFORMANCE=$<BOOL:${ENABLE_CONFORMANCE}>"
       "-DENABLE_SLEEF=1"
       ${KERNEL_CL_FLAGS})
 
@@ -576,7 +656,7 @@ else()
   set(VARIANT "${CPU_VARIANT}")
 endif()
 
-if(X86_64 OR I386)
+if(X86)
   x86_distro_variant_to_flags("${VARIANT}" LLC_CPUFLAGS CLANG_CPUFLAGS)
 else()
   set(CLANG_CPUFLAGS "${CLANG_MARCH_FLAG}${VARIANT}")
@@ -646,6 +726,6 @@ list(APPEND KERNEL_TARGET_LIST "kernel_host_${VARIANT}")
 set(KERNEL_TARGET_LIST "${KERNEL_TARGET_LIST}" PARENT_SCOPE)
 
 install(FILES "${KERNEL_BC}"
-        DESTINATION "${POCL_INSTALL_PRIVATE_DATADIR}" COMPONENT "lib")
+        DESTINATION "${POCL_INSTALL_PRIVATE_DATADIR_REL}" COMPONENT "lib")
 
 endforeach()

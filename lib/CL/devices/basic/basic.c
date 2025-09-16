@@ -39,7 +39,6 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <utlist.h>
 
 #include "pocl_cache.h"
@@ -150,7 +149,7 @@ pocl_basic_init_device_ops(struct pocl_device_ops *ops)
   ops->svm_migrate = NULL;
   ops->svm_copy = pocl_driver_svm_copy;
   ops->svm_fill = pocl_driver_svm_fill;
-  ops->svm_copy_rect = pocl_driver_svm_copy_rect;
+  ops->svm_copy_rect = pocl_driver_copy_rect_memcpy;
   ops->svm_fill_rect = pocl_driver_svm_fill_rect;
 
   ops->create_kernel = pocl_basic_create_kernel;
@@ -220,6 +219,17 @@ pocl_basic_init (unsigned j, cl_device_id device, const char* parameters)
   device->max_sub_devices = 0;
   device->num_partition_properties = 0;
   device->num_partition_types = 0;
+
+#ifdef HOST_CPU_ENABLE_STACK_SIZE_CHECK
+  size_t stack_size = POCL_GET_THREAD_STACK_SIZE ();
+  /* if the call fails, set a safe minimum */
+  if (stack_size == 0)
+    stack_size = 512 * 1024;
+  /* since the basic device does not have its own thread,
+   * it also doesn't have its own stack -> try to
+   * keep the max stack size very low. */
+  device->work_group_stack_size = stack_size / 2;
+#endif
 
   assert (device->printf_buffer_size > 0);
   d->printf_buffer
@@ -312,7 +322,7 @@ pocl_basic_run (void *data, _cl_command_node *cmd)
         }
       else if (meta->arg_info[i].type == POCL_ARG_TYPE_IMAGE)
         {
-          dev_image_t di;
+          dev_image_t di = { NULL };
           pocl_fill_dev_image_t (&di, al, cmd->device);
 
           void *devptr = pocl_aligned_malloc (MAX_EXTENDED_ALIGNMENT,
@@ -366,22 +376,26 @@ pocl_basic_run (void *data, _cl_command_node *cmd)
 
   pc->printf_buffer_capacity = cmd->device->printf_buffer_size;
   assert (pc->printf_buffer_capacity > 0);
+  uint32_t execution_failed = 0;
 
   pc->global_var_buffer = program->gvar_storage[dev_i];
 
-  unsigned rm = pocl_save_rm ();
-  pocl_set_default_rm ();
-  unsigned ftz = pocl_save_ftz ();
-  pocl_set_ftz (kernel->program->flush_denorms);
+  /* since basic driver runs in the user program's thread, save flags
+   * to avoid influencing the environment on return */
+  unsigned rm, ftz;
+  pocl_cpu_save_rm_and_ftz (&rm, &ftz);
+  pocl_cpu_setup_rm_and_ftz (cmd->device, program);
 
   for (z = 0; z < pc->num_groups[2]; ++z)
     for (y = 0; y < pc->num_groups[1]; ++y)
       for (x = 0; x < pc->num_groups[0]; ++x)
-        ((pocl_workgroup_func) cmd->command.run.wg)
-	  ((uint8_t *)arguments, (uint8_t *)pc, x, y, z);
+        {
+          ((pocl_workgroup_func)cmd->command.run.wg) ((uint8_t *)arguments,
+                                                      (uint8_t *)pc, x, y, z);
+          execution_failed |= pc->execution_failed;
+        }
 
-  pocl_restore_rm (rm);
-  pocl_restore_ftz (ftz);
+  pocl_cpu_restore_rm_and_ftz (rm, ftz);
 
 #ifndef ENABLE_PRINTF_IMMEDIATE_FLUSH
   pocl_write_printf_buffer ((char *)d->printf_buffer, position);
@@ -418,7 +432,7 @@ pocl_basic_run (void *data, _cl_command_node *cmd)
   if (!cmd->device->device_alloca_locals)
     for (i = 0; i < meta->num_locals; ++i)
       {
-        POCL_MEM_FREE (*(void **)(arguments[meta->num_args + i]));
+        pocl_aligned_free (*(void **)(arguments[meta->num_args + i]));
         POCL_MEM_FREE (arguments[meta->num_args + i]);
       }
   free (arguments);
@@ -508,12 +522,20 @@ pocl_basic_submit (_cl_command_node *node, cl_command_queue cq)
       cl_program program = kernel->program;
       if (!program->builtin_kernel_attributes)
         {
-          node->command.run.device_data
+          void *handle
             = pocl_check_kernel_dlhandle_cache (node, CL_TRUE, CL_TRUE);
+          if (handle == NULL)
+            {
+              pocl_update_event_running_unlocked (node->sync.event.event);
+              POCL_UNLOCK_OBJ (node->sync.event.event);
+              POCL_UPDATE_EVENT_FAILED (CL_FAILED, node->sync.event.event);
+              return;
+            }
+          node->command.run.device_data = handle;
         }
     }
 
-  node->ready = 1;
+  node->state = POCL_COMMAND_READY;
   POCL_LOCK (d->cq_lock);
   pocl_command_push(node, &d->ready_list, &d->command_list);
 
@@ -553,12 +575,26 @@ pocl_basic_notify (cl_device_id device, cl_event event, cl_event finished)
 
   if (finished->status < CL_COMPLETE)
     {
-      pocl_update_event_failed (event);
+      /* Unlock the finished event in order to prevent a lock order violation
+       * with the command queue that will be locked during
+       * pocl_update_event_failed.
+       */
+      pocl_unlock_events_inorder (event, finished);
+      pocl_update_event_failed (CL_FAILED, NULL, 0, event, NULL);
+      /* Lock events in this order to avoid a lock order violation between
+       * the finished/notifier and event/wait events.
+       */
+      pocl_lock_events_inorder (finished, event);
       return;
     }
 
-  if (!node->ready)
-    return;
+  if (node->state != POCL_COMMAND_READY)
+    {
+      POCL_MSG_PRINT_EVENTS (
+        "basic: command related to the notified event %lu not ready\n",
+        event->id);
+      return;
+    }
 
   if (pocl_command_is_ready (event))
     {
@@ -577,15 +613,19 @@ pocl_basic_notify (cl_device_id device, cl_event event, cl_event finished)
     }
 }
 
-void
-pocl_basic_compile_kernel (_cl_command_node *cmd, cl_kernel kernel,
-                           cl_device_id device, int specialize)
+int
+pocl_basic_compile_kernel (_cl_command_node *cmd,
+                           cl_kernel kernel,
+                           cl_device_id device,
+                           int specialize)
 {
   char *saved_name = NULL;
+  if (cmd == NULL || cmd->type != CL_COMMAND_NDRANGE_KERNEL)
+    return CL_INVALID_OPERATION;
   pocl_sanitize_builtin_kernel_name (kernel, &saved_name);
-  if (cmd != NULL && cmd->type == CL_COMMAND_NDRANGE_KERNEL)
-    pocl_check_kernel_dlhandle_cache (cmd, CL_FALSE, specialize);
+  void *handle = pocl_check_kernel_dlhandle_cache (cmd, CL_FALSE, specialize);
   pocl_restore_builtin_kernel_name (kernel, saved_name);
+  return handle == NULL ? CL_COMPILE_PROGRAM_FAILURE : CL_SUCCESS;
 }
 
 int
@@ -594,7 +634,7 @@ pocl_basic_free_program (cl_device_id device, cl_program program,
 {
   pocl_driver_free_program (device, program, dev_i);
   program->global_var_total_size[dev_i] = 0;
-  POCL_MEM_FREE (program->gvar_storage[dev_i]);
+  pocl_aligned_free (program->gvar_storage[dev_i]);
   return 0;
 }
 /*********************** IMAGES ********************************/
@@ -666,7 +706,7 @@ cl_int pocl_basic_write_image_rect (  void *data,
 
   const void *__restrict__ ptr
       = src_host_ptr ? src_host_ptr : src_mem_id->mem_ptr;
-  ptr += src_offset;
+  ptr = (char *)ptr + src_offset;
   const size_t zero_origin[3] = { 0 };
   size_t px = dst_image->image_elem_size * dst_image->image_channels;
   if (src_row_pitch == 0)
@@ -710,7 +750,7 @@ cl_int pocl_basic_read_image_rect(  void *data,
       dst_row_pitch, dst_slice_pitch, dst_offset);
 
   void *__restrict__ ptr = dst_host_ptr ? dst_host_ptr : dst_mem_id->mem_ptr;
-  ptr += dst_offset;
+  ptr = (char *)ptr + dst_offset;
   const size_t zero_origin[3] = { 0 };
   size_t px = src_image->image_elem_size * src_image->image_channels;
   if (dst_row_pitch == 0)
@@ -819,9 +859,6 @@ pocl_basic_svm_alloc (cl_device_id dev, cl_svm_mem_flags flags, size_t size)
   return pocl_aligned_malloc (MAX_EXTENDED_ALIGNMENT, size);
 }
 
-static struct _pocl_basic_usm_allocation_t *usm_allocations = NULL;
-static pocl_lock_t usm_lock;
-
 void *
 pocl_basic_usm_alloc (cl_device_id dev, unsigned alloc_type,
                       cl_mem_alloc_flags_intel flags, size_t size,
@@ -856,9 +893,10 @@ pocl_basic_get_device_info_ext (cl_device_id device, cl_device_info param_name,
         /* We can basically support fixing any WG size with the CPU devices,
            but let's report something semi-sensible here for vectorization aid.
          */
-        size_t sizes[] = { 1, 2, 4, 8, 16, 32, 64, 128, 256, 512 };
-        POCL_RETURN_GETINFO_ARRAY (size_t, sizeof (sizes) / sizeof (size_t),
-                                   sizes);
+        size_t *sizes = alloca (sizeof (size_t) * device->max_work_group_size);
+        for (unsigned i = 0; i < device->max_work_group_size; ++i)
+          sizes[i] = i;
+        POCL_RETURN_GETINFO_ARRAY (size_t, device->max_work_group_size, sizes);
       }
     default:
       POCL_MSG_ERR ("Unknown param_name for get_device_info_ext: %u\n",
@@ -882,7 +920,6 @@ pocl_basic_get_subgroup_info_ext (cl_device_id device,
     {
     case CL_KERNEL_MAX_SUB_GROUP_SIZE_FOR_NDRANGE:
       {
-
         /* For now assume SG == WG_x. */
         POCL_RETURN_GETINFO (size_t, ((size_t *)input_value)[0]);
       }
@@ -925,29 +962,32 @@ pocl_basic_get_subgroup_info_ext (cl_device_id device,
           }
       }
     default:
-      POCL_RETURN_ERROR_ON (1, CL_INVALID_VALUE, "Unknown param_name: %u\n",
-                            param_name);
+      POCL_RETURN_ERROR (CL_INVALID_VALUE, "Unknown param_name: %u\n",
+                         param_name);
     }
 }
 
 cl_int
 pocl_basic_set_kernel_exec_info_ext (cl_device_id dev,
                                      unsigned program_device_i,
-                                     cl_kernel Kernel, cl_uint param_name,
+                                     cl_kernel kernel, cl_uint param_name,
                                      size_t param_value_size,
                                      const void *param_value)
 {
 
   switch (param_name)
     {
-    case CL_KERNEL_EXEC_INFO_SVM_FINE_GRAIN_SYSTEM:
     case CL_KERNEL_EXEC_INFO_SVM_PTRS:
     case CL_KERNEL_EXEC_INFO_USM_PTRS_INTEL:
+      {
+        return CL_SUCCESS;
+      }
+    case CL_KERNEL_EXEC_INFO_SVM_FINE_GRAIN_SYSTEM:
     case CL_KERNEL_EXEC_INFO_DEVICE_PTRS_EXT:
     case CL_KERNEL_EXEC_INFO_INDIRECT_HOST_ACCESS_INTEL:
     case CL_KERNEL_EXEC_INFO_INDIRECT_DEVICE_ACCESS_INTEL:
     case CL_KERNEL_EXEC_INFO_INDIRECT_SHARED_ACCESS_INTEL:
-    return CL_SUCCESS;
+      return CL_SUCCESS;
     default:
       return CL_INVALID_VALUE;
     }
@@ -962,8 +1002,8 @@ static int
 get_dbk_index (cl_program p, cl_kernel k)
 {
 
-  int dbk_index = -1;
-  for (int i = 0; i < p->num_builtin_kernels; ++i)
+  size_t dbk_index = SIZE_MAX;
+  for (size_t i = 0; i < p->num_builtin_kernels; ++i)
     {
       if (strcmp (p->builtin_kernel_names[i], k->name) == 0)
         {
@@ -980,7 +1020,6 @@ pocl_basic_create_kernel (cl_device_id device,
                           cl_kernel k,
                           unsigned device_i)
 {
-
   /* no dbks, nothing to do */
   if (p->num_builtin_kernels < 1)
     return CL_SUCCESS;
@@ -991,32 +1030,51 @@ pocl_basic_create_kernel (cl_device_id device,
     return CL_INVALID_KERNEL_NAME;
 
   int status = CL_SUCCESS;
-  BuiltinKernelId dbk_id = p->builtin_kernel_ids[dbk_index];
+  cl_dbk_id_exp dbk_id = p->builtin_kernel_ids[dbk_index];
   switch (dbk_id)
     {
 #ifdef HAVE_LIBXSMM
-    case POCL_CDBI_DBK_EXP_GEMM:
-    case POCL_CDBI_DBK_EXP_MATMUL:
+    case CL_DBK_GEMM_EXP:
+    case CL_DBK_MATMUL_EXP:
       return status;
 #endif
 #ifdef HAVE_LIBJPEG_TURBO
-    case POCL_CDBI_DBK_EXP_JPEG_ENCODE:
+    case CL_DBK_JPEG_ENCODE_EXP:
       {
         k->data[device_i] = pocl_cpu_init_dbk_khr_jpeg_encode (
           p->builtin_kernel_attributes[dbk_index], &status);
         return status;
       }
-    case POCL_CDBI_DBK_EXP_JPEG_DECODE:
+    case CL_DBK_JPEG_DECODE_EXP:
       {
         k->data[device_i] = pocl_cpu_init_dbk_khr_jpeg_decode (
           p->builtin_kernel_attributes[dbk_index], &status);
         return status;
       }
 #endif
+#ifdef HAVE_ONNXRT
+    case CL_DBK_ONNX_INFERENCE_EXP:
+      {
+        status = pocl_create_ort_instance (
+            p->builtin_kernel_attributes[dbk_index],
+            (onnxrt_instance_t **)&k->data[device_i]);
+        return status;
+      }
+#endif
+    case CL_DBK_IMG_COLOR_CONVERT_EXP:
+      return CL_SUCCESS;
+#ifdef HAVE_OPENCV
+    case CL_DBK_NMS_BOX_EXP:
+      return CL_SUCCESS;
+#endif
     default:
-      POCL_ABORT ("pocl_basic_create_kernel called with unknown/unimplemented "
-                  "DBK kernel.\n");
+      POCL_RETURN_ERROR (CL_DBK_INVALID_ID_EXP,
+                         "pocl_basic_create_kernel called with "
+                         "unknown/unimplemented "
+                         "DBK kernel.\n");
     }
+  assert (!"UNREACHABLE!");
+  return CL_DBK_INVALID_ID_EXP;
 }
 
 int
@@ -1035,28 +1093,45 @@ pocl_basic_free_kernel (cl_device_id device,
     return CL_INVALID_KERNEL_NAME;
 
   int status = CL_SUCCESS;
-  BuiltinKernelId dbk_id = p->builtin_kernel_ids[dbk_index];
+  cl_dbk_id_exp dbk_id = p->builtin_kernel_ids[dbk_index];
   switch (dbk_id)
     {
 #ifdef HAVE_LIBXSMM
-    case POCL_CDBI_DBK_EXP_GEMM:
-    case POCL_CDBI_DBK_EXP_MATMUL:
+    case CL_DBK_GEMM_EXP:
+    case CL_DBK_MATMUL_EXP:
       return status;
 #endif
 #ifdef HAVE_LIBJPEG_TURBO
-    case POCL_CDBI_DBK_EXP_JPEG_ENCODE:
+    case CL_DBK_JPEG_ENCODE_EXP:
       {
         status = pocl_cpu_destroy_dbk_khr_jpeg_encode (&(k->data[device_i]));
         return status;
       }
-    case POCL_CDBI_DBK_EXP_JPEG_DECODE:
+    case CL_DBK_JPEG_DECODE_EXP:
       {
         status = pocl_cpu_destroy_dbk_khr_jpeg_decode (&(k->data[device_i]));
         return status;
       }
 #endif
+#ifdef HAVE_ONNXRT
+    case CL_DBK_ONNX_INFERENCE_EXP:
+      {
+        status = pocl_destroy_ort_instance (
+            (onnxrt_instance_t **)&(k->data[device_i]));
+        return status;
+      }
+#endif
+    case CL_DBK_IMG_COLOR_CONVERT_EXP:
+      return CL_SUCCESS;
+#ifdef HAVE_OPENCV
+    case CL_DBK_NMS_BOX_EXP:
+      return CL_SUCCESS;
+#endif
     default:
-      POCL_ABORT (
-        "pocl_basic_free_kernel called with unknown/unimplemented DBK kernel.\n");
+      POCL_RETURN_ERROR (CL_DBK_INVALID_ID_EXP,
+                         "pocl_basic_free_kernel called with "
+                         "unknown/unimplemented DBK kernel.\n");
     }
+  assert (!"UNREACHABLE");
+  return CL_DBK_INVALID_ID_EXP;
 }

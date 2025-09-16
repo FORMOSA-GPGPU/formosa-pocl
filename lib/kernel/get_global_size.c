@@ -29,15 +29,21 @@ extern const size_t _num_groups_x;
 extern const size_t _num_groups_y;
 extern const size_t _num_groups_z;
 
+#if _MSC_VER
+size_t _CL_READNONE _CL_OPTNONE
+__identifier ("?get_global_size@@$$J0YAKI@Z") (unsigned int dimindx)
+#else
 size_t _CL_OVERLOADABLE _CL_READNONE _CL_OPTNONE
 get_global_size (unsigned int dimindx)
+#endif
 {
   switch(dimindx)
     {
     case 0: return _local_size_x * _num_groups_x;
     case 1: return _local_size_y * _num_groups_y;
     case 2: return _local_size_z * _num_groups_z;
-    default: return 0;
+    default:
+      return 1;
     }
 }
 

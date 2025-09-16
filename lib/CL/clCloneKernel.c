@@ -28,8 +28,6 @@
 #include "pocl_util.h"
 #include "utlist.h"
 
-extern unsigned long kernel_c;
-
 CL_API_ENTRY cl_kernel CL_API_CALL
 POname (clCloneKernel) (cl_kernel source_kernel,
                         cl_int *errcode_ret) CL_API_SUFFIX__VERSION_2_1
@@ -92,11 +90,17 @@ POname (clCloneKernel) (cl_kernel source_kernel,
       size_t offset = 0;
       for (i = 0; i < kernel->meta->num_args; ++i)
         {
-          kernel->dyn_argument_offsets[i]
-              = kernel->dyn_argument_storage + offset;
           unsigned type_size = kernel->meta->arg_info[i].type_size;
           assert (type_size > 0);
+          size_t alignment = pocl_size_ceil2 (type_size);
+          if (offset & (alignment - 1))
+            offset = (offset | (alignment - 1)) + 1;
+
+          kernel->dyn_argument_offsets[i]
+            = kernel->dyn_argument_storage + offset;
+
           offset += type_size;
+
           kernel->dyn_arguments[i].value = kernel->dyn_argument_offsets[i];
         }
       assert (offset == kernel->meta->total_argument_storage_size);
@@ -111,8 +115,17 @@ POname (clCloneKernel) (cl_kernel source_kernel,
           struct pocl_argument_info *pi = &(kernel->meta->arg_info[i]);
           if (p->is_set && sp->value != NULL) /* local args can have NULL */
             {
-              assert (p->size > 0);
-              p->value = malloc (p->size);
+              size_t arg_alignment, arg_alloc_size;
+              arg_alignment = pocl_size_ceil2 (p->size);
+              if (arg_alignment >= MAX_EXTENDED_ALIGNMENT)
+                arg_alignment = MAX_EXTENDED_ALIGNMENT;
+
+              arg_alloc_size = p->size;
+              if (arg_alloc_size < arg_alignment)
+                arg_alloc_size = arg_alignment;
+
+              assert (arg_alloc_size > 0);
+              p->value = pocl_aligned_malloc (arg_alignment, arg_alloc_size);
               memcpy (p->value, sp->value, p->size);
             }
           else
@@ -160,7 +173,7 @@ ERROR:
           for (i = 0; i < kernel->meta->num_args; ++i)
             {
               struct pocl_argument *p = &kernel->dyn_arguments[i];
-              POCL_MEM_FREE (p->value);
+              pocl_aligned_free (p->value);
             }
         }
     }

@@ -62,16 +62,6 @@ POname(clEnqueueSVMMap) (cl_command_queue command_queue,
   if (errcode != CL_SUCCESS)
     return errcode;
 
-  if (DEVICE_MMAP_IS_NOP(command_queue->device)
-      && (num_events_in_wait_list == 0)
-      && (event == NULL))
-    {
-      if (blocking_map == CL_TRUE)
-        return POname(clFinish)(command_queue);
-      else
-        return CL_SUCCESS;
-    }
-
   pocl_raw_ptr *svm_ptr_pocl
       = pocl_find_raw_ptr_with_vm_ptr (context, svm_ptr);
 
@@ -81,8 +71,8 @@ POname(clEnqueueSVMMap) (cl_command_queue command_queue,
       assert (svm_ptr_pocl->shadow_cl_mem != NULL);
       POname (clEnqueueMapBuffer (
           command_queue, svm_ptr_pocl->shadow_cl_mem, CL_FALSE, 0 /* TODO */,
-          svm_ptr - svm_ptr_pocl->vm_ptr, size, num_events_in_wait_list,
-          event_wait_list, event, &errcode));
+          (char *)svm_ptr - (char *)svm_ptr_pocl->vm_ptr, size,
+          num_events_in_wait_list, event_wait_list, event, &errcode));
       if (errcode != CL_SUCCESS)
         return errcode;
       if (event != NULL)

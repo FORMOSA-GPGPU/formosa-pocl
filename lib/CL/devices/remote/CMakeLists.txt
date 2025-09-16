@@ -23,17 +23,31 @@
 #
 #=============================================================================
 
-if(MSVC)
-  set_source_files_properties(
-      remote.h remote.c communication.h communication.c
-      ../../pocl_networking.h ../../pocl_networking.c
-      PROPERTIES LANGUAGE CXX )
-endif(MSVC)
+set(POCL_REMOTE_CLIENT_SOURCES
+    remote.h remote.c communication.h communication.c
+      ../../pocl_networking.h ../../pocl_networking.c)
 
-add_pocl_device_library("pocl-devices-remote"
-    remote.h remote.c communication.h communication.c ../../pocl_networking.h
-    ../../pocl_networking.c)
+if(ENABLE_RDMA)
+    list(APPEND POCL_REMOTE_CLIENT_SOURCES ../../pocl_rdma.h ../../pocl_rdma.c)
+endif()
+
+set(LIBS)
 
 if(ENABLE_LOADABLE_DRIVERS AND ENABLE_RDMA)
-  target_link_libraries("pocl-devices-remote" PRIVATE RDMAcm::RDMAcm IBVerbs::verbs)
+  list(APPEND LIBS RDMAcm::RDMAcm IBVerbs::verbs)
 endif()
+
+if(ENABLE_REMOTE_DISCOVERY_AVAHI)
+  list(APPEND POCL_REMOTE_CLIENT_SOURCES network_discovery.c network_discovery.h)
+endif()
+
+if(ENABLE_REMOTE_DISCOVERY_DHT)
+  list(APPEND POCL_REMOTE_CLIENT_SOURCES network_discovery.c network_discovery.h)
+endif()
+
+if(ENABLE_REMOTE_DISCOVERY_ANDROID)
+  list(APPEND POCL_REMOTE_CLIENT_SOURCES network_discovery.c network_discovery.h)
+endif()
+
+add_pocl_device_library("pocl-devices-remote" ${POCL_REMOTE_CLIENT_SOURCES})
+target_link_libraries("pocl-devices-remote" PRIVATE ${LIBS})

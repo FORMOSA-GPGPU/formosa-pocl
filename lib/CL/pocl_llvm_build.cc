@@ -41,14 +41,14 @@ IGNORE_COMPILER_WARNING("-Wstrict-aliasing")
 #include <clang/Frontend/TextDiagnosticBuffer.h>
 #include <clang/Frontend/TextDiagnosticPrinter.h>
 
-#include "llvm/LinkAllPasses.h"
-#include "llvm/Linker/Linker.h"
-
-#include "llvm/Transforms/Utils/Cloning.h"
-
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/LinkAllPasses.h>
+#include <llvm/Linker/Linker.h>
+#include <llvm/Support/MemoryBuffer.h>
+#include <llvm/Support/VirtualFileSystem.h>
+#include <llvm/Transforms/Utils/Cloning.h>
 
 #if LLVM_VERSION_MAJOR > 15
 #include "llvm/TargetParser/Host.h"
@@ -57,8 +57,9 @@ IGNORE_COMPILER_WARNING("-Wstrict-aliasing")
 #endif
 
 #include <iostream>
-#include <sstream>
+#include <map>
 #include <regex>
+#include <sstream>
 
 // For some reason including pocl.h before including CodeGenAction.h
 // causes an error. Some kind of macro definition issue. To investigate.
@@ -71,6 +72,16 @@ IGNORE_COMPILER_WARNING("-Wstrict-aliasing")
 #include "pocl_cache.h"
 #include "LLVMUtils.h"
 #include "pocl_util.h"
+
+#ifdef ENABLE_HEADER_BUNDLING
+#include "HeaderBundle/_clang_opencl.h"
+#include "HeaderBundle/opencl-c-base.h"
+#include "HeaderBundle/opencl-c.h"
+//
+// TODO it should be possible to pass include files to Clang entirely in memory
+// (via llvm::MemoryBuffer), however this doesn't seem to not work
+// #define BUNDLED_HEADERS_IN_MEMORY
+#endif
 
 using namespace clang;
 using namespace llvm;
@@ -154,26 +165,27 @@ static llvm::Module *getKernelLibrary(cl_device_id device,
                                       PoclLLVMContextData *llvm_ctx);
 
 /**
-* \brief  This function runs various LLVM "passes" on the program.bc LLVM module;
-* the passes are not real LLVM passes, but perhaps it will make sense
-* to convert at some point. Note that this should only run passes which
-* for some reason must be run at program.bc stage rather than parallel.bc
-*
-* \param [in] Context the pocl LLVM context
-* \param [in] Mod is the LLVM module
-* \param [in] Program the cl_program corresponding to Mod
-* \param [in] Device the device used for the LLVM passes
-* \param [in] device_i index into program->devices[] corresponding to Device
-* \param [out] Log a std::string containing the error/warning log
-* \returns true if there is an error
-*
-*/
+ * Runs various LLVM "passes" on the program.bc LLVM module;
+ * the passes are not real LLVM passes, but perhaps it will make sense
+ * to convert at some point. Note that this should only run passes which
+ * for some reason must be run at program.bc stage rather than parallel.bc
+ *
+ * \param [in] Context the pocl LLVM context
+ * \param [in] Mod is the LLVM module
+ * \param [in] Program the cl_program corresponding to Mod
+ * \param [in] Device the device used for the LLVM passes
+ * \param [in] device_i index into program->devices[] corresponding to Device
+ * \param [out] Log a std::string containing the error/warning log
+ * \returns true if there is an error
+ *
+ */
 static bool generateProgramBC(PoclLLVMContextData *Context, llvm::Module *Mod,
                              cl_program Program, cl_device_id Device,
                              unsigned device_i, std::string &Log) {
 
   llvm::Module *BuiltinLib = getKernelLibrary(Device, Context);
-  assert(BuiltinLib != NULL);
+  if (BuiltinLib == nullptr)
+    return true;
 
   if (Device->run_program_scope_variables_pass) {
     size_t TotalGVarBytes = 0;
@@ -183,7 +195,11 @@ static bool generateProgramBC(PoclLLVMContextData *Context, llvm::Module *Mod,
     Program->global_var_total_size[device_i] = TotalGVarBytes;
   }
 
-  if (link(Mod, BuiltinLib, Log, Device))
+  std::string Opts;
+  if (Program->compiler_options)
+    Opts.assign(Program->compiler_options);
+  bool DebugRequested = (Opts.find("-g") != std::string::npos);
+  if (link(Mod, BuiltinLib, Log, Device, !DebugRequested))
     return true;
 
   raw_string_ostream OS(Log);
@@ -199,13 +215,84 @@ static bool generateProgramBC(PoclLLVMContextData *Context, llvm::Module *Mod,
   return false;
 }
 
+#ifdef ENABLE_HEADER_BUNDLING
+static std::map<std::string_view, std::string> UnbundledHeaders;
+static bool UnbundledHeadersInitialized = false;
+
+static void addHeader(const char *Source, unsigned SourceLen,
+                      const char *MapKey) {
+
+#ifdef BUNDLED_HEADERS_IN_MEMORY
+  std::string Temp;
+  Temp.assign(Source, SourceLen);
+  UnbundledHeaders.insert(std::make_pair(MapKey, Temp));
+#else
+  char HdrCachePath[POCL_MAX_PATHNAME_LENGTH];
+  pocl_cache_write_header(HdrCachePath, MapKey, (const char *)Source,
+                          SourceLen);
+  UnbundledHeaders.insert(std::make_pair(MapKey, std::string(HdrCachePath)));
+#endif
+}
+
+static void setupUnbundledHeaders() {
+  if (!UnbundledHeadersInitialized) {
+    addHeader(_clang_opencl_h, _clang_opencl_h_len, "_clang_opencl.h");
+    addHeader(opencl_c_base_h, opencl_c_base_h_len, "opencl-c-base.h");
+    addHeader(opencl_c_h, opencl_c_h_len, "opencl-c.h");
+    UnbundledHeadersInitialized = true;
+  }
+}
+#endif
+
+using MemBufUptr = std::unique_ptr<llvm::MemoryBuffer>;
+
+static void addHeaderInclude(PreprocessorOptions &po, FrontendOptions &fe,
+                             const char *Header, bool UseBundled) {
+#ifdef ENABLE_POCL_BUILDING
+  bool PoclBuilding = pocl_get_bool_option("POCL_BUILDING", 0);
+#else
+  bool PoclBuilding = false;
+#endif
+
+#ifdef ENABLE_HEADER_BUNDLING
+  if (UseBundled && PoclBuilding == false) {
+    auto It = UnbundledHeaders.find(Header);
+    assert(It != UnbundledHeaders.end());
+#ifdef BUNDLED_HEADERS_IN_MEMORY
+    // avoid writing anything to disk, instead use the RemappedFile feature.
+    const std::string &Content = It->second;
+    MemBufUptr MB(llvm::MemoryBuffer::getMemBufferCopy(Content, Header));
+    po.RetainRemappedFileBuffers = true;
+    po.Includes.push_back(Header);
+    // the remapping does not work
+    po.addRemappedFile(Header, MB.release());
+#else
+    const std::string &HdrCachePath = It->second;
+    po.Includes.push_back(HdrCachePath);
+#endif
+    return;
+  }
+#endif
+
+  std::string Result;
+  if (PoclBuilding) {
+    Result = SRCDIR "/include/";
+  } else {
+    char temp[POCL_MAX_PATHNAME_LENGTH];
+    pocl_get_private_datadir(temp);
+    Result = temp;
+    Result.append("/include/");
+  }
+  Result.append(Header);
+  po.Includes.push_back(Result);
+}
+
 int pocl_llvm_build_program(cl_program program,
                             unsigned device_i,
                             cl_uint num_input_headers,
                             const cl_program *input_headers,
                             const char **header_include_names,
                             int linking_program)
-
 {
   char tempfile[POCL_MAX_PATHNAME_LENGTH];
   char program_bc_path[POCL_MAX_PATHNAME_LENGTH];
@@ -293,7 +380,7 @@ int pocl_llvm_build_program(cl_program program,
   if (device->has_64bit_long)
     ss << "-Dcl_khr_int64 ";
 
-  if (device->use_only_clang_opencl_headers == CL_FALSE) {
+  if (!device->use_only_clang_opencl_headers) {
     ss << "-DPOCL_DEVICE_ADDRESS_BITS=" << device->address_bits << " ";
     ss << "-D__USE_CLANG_OPENCL_C_H ";
   }
@@ -569,39 +656,33 @@ int pocl_llvm_build_program(cl_program program,
   la->PICLevel = PICLevel::BigPIC;
   la->PIE = 0;
 
-  std::string IncludeRoot;
-  std::string KernelH;
-  std::string BuiltinRenamesH;
-  std::string PoclTypesH;
-
-#ifdef ENABLE_POCL_BUILDING
-  if (pocl_get_bool_option("POCL_BUILDING", 0)) {
-    IncludeRoot = SRCDIR;
-#else
-  if (0) {
+#ifdef ENABLE_HEADER_BUNDLING
+  setupUnbundledHeaders();
 #endif
-  } else {
-    char temp[POCL_MAX_PATHNAME_LENGTH];
-    pocl_get_private_datadir(temp);
-    IncludeRoot = temp;
-  }
-  KernelH = IncludeRoot + "/include/_kernel.h";
-  BuiltinRenamesH = IncludeRoot + "/include/_builtin_renames.h";
-  PoclTypesH = IncludeRoot + "/include/pocl_types.h";
 
-  if (device->use_only_clang_opencl_headers == CL_FALSE) {
-    po.Includes.push_back(PoclTypesH);
-    po.Includes.push_back(BuiltinRenamesH);
-  }
-  // Use Clang's opencl-c.h header.
-  po.Includes.push_back(IncludeRoot + "/include/opencl-c-base.h");
-  po.Includes.push_back(IncludeRoot + "/include/opencl-c.h");
+  FrontendOptions &fe = pocl_build.getFrontendOpts();
+  // The CreateFromArgs created an stdin input which we should remove first.
+  fe.Inputs.clear();
 
   if (device->use_only_clang_opencl_headers) {
-    po.Includes.push_back(IncludeRoot + "/include/_clang_opencl.h");
+#ifdef ENABLE_HEADER_BUNDLING
+    po.Macros.push_back(
+        std::make_pair(std::string("SKIP_HEADER_INCLUDE"), false));
+    bool UseBundledHeaders = true;
+#else
+    bool UseBundledHeaders = false;
+#endif
+    addHeaderInclude(po, fe, "opencl-c-base.h", UseBundledHeaders);
+    addHeaderInclude(po, fe, "opencl-c.h", UseBundledHeaders);
+    addHeaderInclude(po, fe, "_clang_opencl.h", UseBundledHeaders);
   } else {
-    po.Includes.push_back(KernelH);
+    addHeaderInclude(po, fe, "pocl_types.h", false);
+    addHeaderInclude(po, fe, "_builtin_renames.h", false);
+    addHeaderInclude(po, fe, "opencl-c-base.h", false);
+    addHeaderInclude(po, fe, "opencl-c.h", false);
+    addHeaderInclude(po, fe, "_kernel.h", false);
   }
+
   clang::TargetOptions &ta = pocl_build.getTargetOpts();
   ta.Triple = device->llvm_target_triplet;
   if (device->llvm_cpu != NULL)
@@ -610,11 +691,11 @@ int pocl_llvm_build_program(cl_program program,
 #ifdef DEBUG_POCL_LLVM_API
   std::cout << "### Triple: " << ta.Triple.c_str() <<  ", CPU: " << ta.CPU.c_str();
 #endif
+#if LLVM_MAJOR < 20
   CI.createDiagnostics(diagsBuffer, false);
-
-  FrontendOptions &fe = pocl_build.getFrontendOpts();
-  // The CreateFromArgs created an stdin input which we should remove first.
-  fe.Inputs.clear();
+#else
+  CI.createDiagnostics(*llvm::vfs::getRealFileSystem(), diagsBuffer, false);
+#endif
 
   // Read input source to clang::FrontendOptions.
   // The source is contained in the program->source array,
@@ -841,15 +922,16 @@ int pocl_llvm_link_program(cl_program program, unsigned device_i,
   PoclLLVMContextData *llvm_ctx = (PoclLLVMContextData *)ctx->llvm_context_data;
   PoclCompilerMutexGuard lockHolder(&llvm_ctx->Lock);
 
-  llvm::Module *libmodule = getKernelLibrary(device, llvm_ctx);
-  assert(libmodule != NULL);
+  llvm::Module *LibraryModule = getKernelLibrary(device, llvm_ctx);
+  if (LibraryModule == nullptr)
+    return CL_LINK_PROGRAM_FAILURE;
 
   std::unique_ptr<llvm::Module> mod(
       new llvm::Module(StringRef("linked_program"), *llvm_ctx->Context));
   llvm::Module *LinkedModule = nullptr;
   std::unique_ptr<llvm::Module> TempModule;
-  mod->setTargetTriple(libmodule->getTargetTriple());
-  mod->setDataLayout(libmodule->getDataLayout());
+  mod->setTargetTriple(LibraryModule->getTargetTriple());
+  mod->setDataLayout(LibraryModule->getDataLayout());
   mod->setPICLevel(PICLevel::BigPIC);
 
 
@@ -872,10 +954,10 @@ int pocl_llvm_link_program(cl_program program, unsigned device_i,
       TempModule.reset(Ptr);
     }
 
-    error = pocl_convert_spir_bitcode_to_target(TempModule.get(), libmodule,
+    error = pocl_convert_spir_bitcode_to_target(TempModule.get(), LibraryModule,
                                                 device);
     POCL_RETURN_ERROR_ON((error != CL_SUCCESS), CL_LINK_PROGRAM_FAILURE,
-                         "could connvert SPIR to Target\n");
+                         "could not convert SPIR to Target\n");
 
     if (Linker::linkModules(*mod, std::move(TempModule))) {
       std::string msg = getDiagString(ctx);
@@ -968,53 +1050,53 @@ static llvm::Module *getKernelLibrary(cl_device_id device,
   if (kernelLibraryMap->find(device) != kernelLibraryMap->end())
     return kernelLibraryMap->at(device);
 
-  std::string kernellib_common, kernellib, kernellib_fallback;
+  std::string BuiltinLibraryCommon, BuiltinLibrary, BuiltinLibraryFallback;
 
 #ifdef ENABLE_POCL_BUILDING
   if (pocl_get_bool_option("POCL_BUILDING", 0)) {
-    kernellib_common = BUILDDIR;
-    kernellib_common += "/lib/kernel/";
-    kernellib_common += device->kernellib_subdir;
+    BuiltinLibraryCommon = BUILDDIR;
+    BuiltinLibraryCommon += "/lib/kernel/";
+    BuiltinLibraryCommon += device->kernellib_subdir;
   } else // POCL_BUILDING == 0, use install dir
 #endif
   {
     char temp[POCL_MAX_PATHNAME_LENGTH];
     pocl_get_private_datadir(temp);
-    kernellib_common = temp;
+    BuiltinLibraryCommon = temp;
   }
 
-  kernellib_common += "/";
+  BuiltinLibraryCommon += "/";
 
-  kernellib = kernellib_common + device->kernellib_name;
-  kernellib += ".bc";
+  BuiltinLibrary = BuiltinLibraryCommon + device->kernellib_name;
+  BuiltinLibrary += ".bc";
 
   if (device->kernellib_fallback_name) {
-    kernellib_fallback = kernellib_common + device->kernellib_fallback_name;
-    kernellib_fallback += ".bc";
+    BuiltinLibraryFallback =
+        BuiltinLibraryCommon + device->kernellib_fallback_name;
+    BuiltinLibraryFallback += ".bc";
   }
 
-  llvm::Module *lib;
+  llvm::Module *BuiltinLibModule = nullptr;
 
-  if (pocl_exists(kernellib.c_str()))
-    {
-      POCL_MSG_PRINT_LLVM("Using %s as the built-in lib.\n", kernellib.c_str());
-      lib = parseModuleIR(kernellib.c_str(), llvmContext);
-    }
-  else
-    {
-      if (device->kernellib_fallback_name && pocl_exists(kernellib_fallback.c_str()))
-        {
-          POCL_MSG_WARN("Using fallback %s as the built-in lib.\n",
-                        kernellib_fallback.c_str());
-          lib = parseModuleIR(kernellib_fallback.c_str(), llvmContext);
-        }
-      else
-        POCL_ABORT("Kernel library file %s doesn't exist.\n", kernellib.c_str());
-    }
-  assert (lib != NULL);
-  kernelLibraryMap->insert(std::make_pair(device, lib));
+  if (pocl_exists(BuiltinLibrary.c_str())) {
+    POCL_MSG_PRINT_LLVM("Using %s as the built-in lib.\n",
+                        BuiltinLibrary.c_str());
+    BuiltinLibModule = parseModuleIR(BuiltinLibrary.c_str(), llvmContext);
+  } else {
+    if (device->kernellib_fallback_name &&
+        pocl_exists(BuiltinLibraryFallback.c_str())) {
+      POCL_MSG_WARN("Using fallback %s as the built-in lib.\n",
+                    BuiltinLibraryFallback.c_str());
+      BuiltinLibModule =
+          parseModuleIR(BuiltinLibraryFallback.c_str(), llvmContext);
+    } else
+      POCL_MSG_ERR("Can't find either kernel library file %s or fallback %s.\n",
+                   BuiltinLibrary.c_str(), BuiltinLibraryFallback.c_str());
+  }
+  if (BuiltinLibModule)
+    kernelLibraryMap->insert(std::make_pair(device, BuiltinLibModule));
 
-  return lib;
+  return BuiltinLibModule;
 }
 
 /**
@@ -1026,7 +1108,7 @@ static llvm::Module *getKernelLibrary(cl_device_id device,
  *             the Clang binary.
  * @return 0 on success, error code otherwise.
  */
-int pocl_invoke_clang(cl_device_id Device, const char** Args) {
+int pocl_invoke_clang(const char* TTriple, const char** Args) {
 
   // Borrowed from driver.cpp (clang driver). We do not really care about
   // diagnostics, but just want to get the compilation command invoked with
@@ -1040,16 +1122,25 @@ int pocl_invoke_clang(cl_device_id Device, const char** Args) {
 
   DiagnosticsEngine Diags(DiagID, &*DiagOpts, DiagClient);
 
-  clang::driver::Driver TheDriver(pocl_get_path("CLANG", CLANG),
-                                  Device->llvm_target_triplet, Diags);
+  clang::driver::Driver TheDriver(pocl_get_path("CLANG", CLANGCC),
+                                  TTriple, Diags);
 
   const char **ArgsEnd = Args;
-  while (*ArgsEnd++ != nullptr) {}
+  while (*ArgsEnd != nullptr) { ArgsEnd++; }
+  llvm::SmallVector<const char*, 0> ArgsArray(Args, ArgsEnd);
 
-  llvm::ArrayRef<const char*> ArgsArray(Args, ArgsEnd);
+  int NumExtraArgs;
+  const char *ExtraArgs = pocl_get_args("CLANG", &NumExtraArgs);
+  const char *ExtraArg = ExtraArgs;
+  for (int i = 0; i < NumExtraArgs; ++i) {
+    ArgsArray.push_back(ExtraArg);
+    ExtraArg += strlen(ExtraArg) + 1;
+  }
 
   std::unique_ptr<clang::driver::Compilation> C(
       TheDriver.BuildCompilation(ArgsArray));
+
+  free((void *)ExtraArgs);
 
   if (C && !C->containsError()) {
     SmallVector<std::pair<int, const clang::driver::Command *>, 4> FailingCommands;

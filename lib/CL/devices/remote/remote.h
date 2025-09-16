@@ -26,7 +26,6 @@
 #define POCL_REMOTE_H
 
 #include "bufalloc.h"
-#include "config.h"
 #include "pocl_cl.h"
 #include "pocl_icd.h"
 
@@ -79,6 +78,10 @@ typedef struct peer_list_s peer_list_t;
 
 peer_list_t *pocl_remote_get_peer_list (int base_id, unsigned device_count);
 
-cl_int pocl_remote_setup_peer_mesh ();
+/** Post-init helper function that instructs all remote servers to form P2P
+ * connections with each other.
+ * TODO: Allow P2P connections to fail and fall back to host for migrations for
+ * those device pairs */
+cl_int pocl_remote_setup_peer_mesh (struct pocl_device_ops *ops);
 
 #endif /* POCL_REMOTE_H */

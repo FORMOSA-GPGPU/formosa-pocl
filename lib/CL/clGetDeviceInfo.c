@@ -1,13 +1,13 @@
 /* OpenCL runtime library: clGetDeviceInfo()
 
    Copyright (c) 2011-2012 Kalle Raiskila and Pekka Jääskeläinen
-                 2022-2023 Pekka Jääskeläinen / Intel Finland Oy
+                 2022-2024 Pekka Jääskeläinen / Intel Finland Oy
 
    Permission is hereby granted, free of charge, to any person obtaining a copy
-   of this software and associated documentation files (the "Software"), to deal
-   in the Software without restriction, including without limitation the rights
-   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-   copies of the Software, and to permit persons to whom the Software is
+   of this software and associated documentation files (the "Software"), to
+   deal in the Software without restriction, including without limitation the
+   rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+   sell copies of the Software, and to permit persons to whom the Software is
    furnished to do so, subject to the following conditions:
 
    The above copyright notice and this permission notice shall be included in
@@ -17,17 +17,17 @@
    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-   THE SOFTWARE.
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+   FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+   IN THE SOFTWARE.
 */
 
 #include "pocl_util.h"
 
 #ifdef DEVELOPER_MODE
-/* A version for querying the info and in case the device returns 
-   a zero, assume the device info query hasn't been implemented 
-   for the device driver at hand. Warns about an incomplete 
+/* A version for querying the info and in case the device returns
+   a zero, assume the device info query hasn't been implemented
+   for the device driver at hand. Warns about an incomplete
    implementation. */
 #define POCL_RETURN_DEVICE_INFO_WITH_IMPL_CHECK(__TYPE__, __VALUE__)          \
   if (__VALUE__ == (__TYPE__)0)                                               \
@@ -63,9 +63,6 @@ POname(clGetDeviceInfo)(cl_device_id   device,
                 size_t *       param_value_size_ret) CL_API_SUFFIX__VERSION_1_0
 {
   POCL_RETURN_ERROR_COND ((!IS_CL_OBJECT_VALID (device)), CL_INVALID_DEVICE);
-
-  POCL_RETURN_ERROR_COND ((*(device->available) == CL_FALSE),
-                          CL_DEVICE_NOT_AVAILABLE);
 
   POCL_MSG_PRINT_INFO ("clGetDeviceInfo query of param %x for %s\n",
                        param_name, device->short_name);
@@ -243,7 +240,10 @@ POname(clGetDeviceInfo)(cl_device_id   device,
   case CL_DEVICE_DOUBLE_FP_CONFIG                  :
     POCL_RETURN_GETINFO (cl_ulong, device->double_fp_config);
   case CL_DEVICE_HALF_FP_CONFIG                    :
-    POCL_RETURN_GETINFO (cl_ulong, device->half_fp_config);
+    if (strstr (device->extensions, "cl_khr_fp16"))
+      POCL_RETURN_GETINFO (cl_ulong, device->half_fp_config);
+    else
+      return CL_INVALID_VALUE;
   case CL_DEVICE_PREFERRED_VECTOR_WIDTH_HALF       :
     POCL_RETURN_DEVICE_INFO_WITH_EXT_CHECK(cl_uint, device->preferred_vector_width_half, cl_khr_fp16);
   case CL_DEVICE_HOST_UNIFIED_MEMORY:
@@ -412,13 +412,19 @@ POname(clGetDeviceInfo)(cl_device_id   device,
   /** cl_khr_command_buffer queries **/
   case CL_DEVICE_COMMAND_BUFFER_CAPABILITIES_KHR:
     POCL_RETURN_GETINFO (cl_device_command_buffer_capabilities_khr,
-                         CL_COMMAND_BUFFER_CAPABILITY_KERNEL_PRINTF_KHR
-                           | CL_COMMAND_BUFFER_CAPABILITY_SIMULTANEOUS_USE_KHR
-                           | CL_COMMAND_BUFFER_CAPABILITY_OUT_OF_ORDER_KHR
-                           | CL_COMMAND_BUFFER_CAPABILITY_MULTIPLE_QUEUE_KHR);
+                         device->cmdbuf_capabilities);
 
   case CL_DEVICE_COMMAND_BUFFER_REQUIRED_QUEUE_PROPERTIES_KHR:
-    POCL_RETURN_GETINFO (cl_command_queue_properties, 0);
+    POCL_RETURN_GETINFO (cl_command_queue_properties,
+                         device->cmdbuf_required_properties);
+
+  case CL_DEVICE_COMMAND_BUFFER_SUPPORTED_QUEUE_PROPERTIES_KHR:
+    POCL_RETURN_GETINFO (cl_command_queue_properties,
+                         device->cmdbuf_supported_properties);
+
+  case CL_DEVICE_MUTABLE_DISPATCH_CAPABILITIES_KHR:
+    POCL_RETURN_GETINFO (cl_mutable_dispatch_fields_khr,
+                         device->cmdbuf_mutable_dispatch_capabilities);
 
   case CL_DEVICE_COMMAND_BUFFER_NUM_SYNC_DEVICES_KHR:
     if (device->ops->get_device_info_ext != NULL

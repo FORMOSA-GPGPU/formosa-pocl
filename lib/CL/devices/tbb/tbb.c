@@ -48,10 +48,6 @@
 #include "tbb.h"
 #include "tbb_scheduler.h"
 
-#ifdef OCS_AVAILABLE
-#include "pocl_llvm.h"
-#endif
-
 /* Initializes scheduler. Must be called before any kernel enqueue */
 static void tbb_scheduler_init (cl_device_id device);
 static void tbb_scheduler_uninit (cl_device_id device);
@@ -120,9 +116,21 @@ cl_int pocl_tbb_init(unsigned j, cl_device_id device, const char *parameters) {
 
   pocl_tbb_scheduler_data *dd = calloc (1, sizeof (pocl_tbb_scheduler_data));
   device->data = (void *)dd;
-  tbb_init_arena (dd, one_device_per_numa_node);
 
+  /* note: this is deliberately not using device->max_compute_units,
+   * even though it has been setup by pocl_cpu_init_common() earlier.
+   * The setup in that code does not take into account NUMA nodes.
+   * TBD unify behaviour between drivers (make pthread NUMA aware?).
+   */
+  int max_threads = pocl_get_int_option ("POCL_CPU_MAX_CU_COUNT", -1);
+  if (max_threads <= 0)
+    max_threads = pocl_get_int_option ("POCL_MAX_COMPUTE_UNITS", -1);
+  if (max_threads <= 0)
+    max_threads = -1;
+
+  tbb_init_arena (dd, one_device_per_numa_node, max_threads);
   device->max_compute_units = tbb_get_num_threads (dd);
+
   /* subdevices not supported ATM */
   device->max_sub_devices = 0;
   device->num_partition_properties = 0;
@@ -157,7 +165,7 @@ static void
 tbb_scheduler_init (cl_device_id device)
 {
   pocl_tbb_scheduler_data *dd = (pocl_tbb_scheduler_data *)device->data;
-  POCL_FAST_INIT (dd->wq_lock_fast);
+  POCL_INIT_LOCK (dd->wq_lock_fast);
   dd->work_queue = NULL;
 
   POCL_INIT_COND (dd->wake_meta_thread);
@@ -235,14 +243,14 @@ tbb_scheduler_uninit (cl_device_id device)
 {
   pocl_tbb_scheduler_data *dd = (pocl_tbb_scheduler_data *)device->data;
 
-  POCL_FAST_LOCK (dd->wq_lock_fast);
+  POCL_LOCK (dd->wq_lock_fast);
   dd->meta_thread_shutdown_requested = 1;
   POCL_BROADCAST_COND (dd->wake_meta_thread);
-  POCL_FAST_UNLOCK (dd->wq_lock_fast);
+  POCL_UNLOCK (dd->wq_lock_fast);
 
   POCL_JOIN_THREAD (dd->meta_thread);
 
-  POCL_FAST_DESTROY (dd->wq_lock_fast);
+  POCL_DESTROY_LOCK (dd->wq_lock_fast);
   POCL_DESTROY_COND (dd->wake_meta_thread);
 
   dd->meta_thread_shutdown_requested = 0;
@@ -258,14 +266,14 @@ tbb_scheduler_push_command (_cl_command_node *cmd)
 {
   cl_device_id device = cmd->device;
   pocl_tbb_scheduler_data *dd = (pocl_tbb_scheduler_data *)device->data;
-  POCL_FAST_LOCK (dd->wq_lock_fast);
+  POCL_LOCK (dd->wq_lock_fast);
   DL_APPEND (dd->work_queue, cmd);
   POCL_SIGNAL_COND (dd->wake_meta_thread);
-  POCL_FAST_UNLOCK (dd->wq_lock_fast);
+  POCL_UNLOCK (dd->wq_lock_fast);
 }
 
 void pocl_tbb_submit(_cl_command_node *node, cl_command_queue cq) {
-  node->ready = 1;
+  node->state = POCL_COMMAND_READY;
   if (pocl_command_is_ready(node->sync.event.event)) {
     pocl_update_event_submitted(node->sync.event.event);
     tbb_scheduler_push_command(node);
@@ -278,13 +286,28 @@ void pocl_tbb_notify(cl_device_id device, cl_event event, cl_event finished) {
   cl_bool wake_thread = CL_FALSE;
   _cl_command_node *node = event->command;
 
-  if (finished->status < CL_COMPLETE) {
-    pocl_update_event_failed(event);
+  if (finished->status < CL_COMPLETE)
+  {
+    /* Unlock the finished event in order to prevent a lock order violation
+     * with the command queue that will be locked during
+     * pocl_update_event_failed.
+     */
+    pocl_unlock_events_inorder (event, finished);
+    pocl_update_event_failed (CL_FAILED, NULL, 0, event, NULL);
+    /* Lock events in this order to avoid a lock order violation between
+     * the finished/notifier and event/wait events.
+     */
+    pocl_lock_events_inorder (finished, event);
     return;
   }
 
-  if (!node->ready)
-    return;
+  if (node->state != POCL_COMMAND_READY)
+    {
+      POCL_MSG_PRINT_EVENTS (
+        "tbb: command related to the notified event %lu not ready\n",
+        event->id);
+      return;
+    }
 
   if (pocl_command_is_ready(node->sync.event.event)) {
     if (event->status == CL_QUEUED) {

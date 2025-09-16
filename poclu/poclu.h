@@ -41,6 +41,24 @@
 extern "C" {
 #endif
 
+#if defined(__clang__) || defined(__GNUC__)
+#define POCLU_FUNCTION_ID __PRETTY_FUNCTION__
+#else
+#define POCLU_FUNCTION_ID __func__
+#endif
+
+#if __cplusplus >= 201103L
+#  define POCLU_ALIGNAS(x) alignas(x)
+#elif __STDC_VERSION__ >= 201112L /* C11 */
+#  define POCLU_ALIGNAS(x) _Alignas(x)
+#elif defined(_MSC_VER)
+#  define POCLU_ALIGNAS(x) __declspec(align(x))
+#elif defined(__clang__) || defined(__GNUC__)
+#  define POCLU_ALIGNAS(x) __attribute__ ((aligned (x)))
+#else
+#  error "Don't know alignas/aligned/align counterpart for this compiler!"
+#endif
+
 /**
 * \brief Byte swap functions for endianness swapping between the host
 * (current CPU) and a target device.
@@ -220,28 +238,14 @@ POCLU_API cl_int POCLU_CALL poclu_get_any_device (cl_context *context,
  * @return CL_SUCCESS on success, or a descriptive OpenCL error code upon
  * failure.
  */
-POCLU_API cl_int POCLU_CALL poclu_get_multiple_devices (
-    cl_platform_id *platform, cl_context *context, cl_char include_custom_dev,
-    cl_uint *num_devices, cl_device_id **devices, cl_command_queue **queues,
-    int ooo_queues);
-
-/**
- * Convert a float to a cl_half (uint16_t).
- *
- * \param value [in] float to be converted.
- * \return a converted cl_half.
- */
-POCLU_API cl_half POCLU_CALL
-poclu_float_to_cl_half(float value);
-
-/**
- * Convert a cl_half to a float.
- *
- * \param value [in] cl_half to be converted.
- * \return a converted float.
- */
-POCLU_API float POCLU_CALL
-poclu_cl_half_to_float(cl_half value);
+POCLU_API cl_int POCLU_CALL
+poclu_get_multiple_devices (cl_platform_id *platform,
+                            cl_context *context,
+                            cl_char include_custom_dev,
+                            cl_uint *num_devices,
+                            cl_device_id **devices,
+                            cl_command_queue **queues,
+                            cl_command_queue_properties optional_props);
 
 /**
  * \brief read the contents of a file.
@@ -282,25 +286,47 @@ POCLU_API int POCLU_CALL poclu_supports_extension (cl_device_id dev,
  */
 POCLU_API char *POCLU_CALL poclu_read_binfile (const char *filename,
                                                size_t *len);
+
 /**
- * \brief write content to a file.
+ * Write content to a file in the given mode.
  *
- * filename can absolute or relative, according to the fopen
+ * The file can absolute or relative path, according to the fopen
  * implementation on system.
- * @param filename [in] string to the file.
- * @param content [in] string to be written.
- * @param size [in] size of the content.
- * @return -1 if there is any error otherwise 0.
+ *
+ * \param size The number of bytes to be written.
+ * \param mode The mode is in fopen().
+ * \return -1 if there is any error, otherwise 0.
  */
-POCLU_API int POCLU_CALL poclu_write_file (const char *filename, char *content,
-                                           size_t size);
+POCLU_API int POCLU_CALL poclu_write_file_in_mode (const char *file,
+                                                   char *content, size_t size,
+                                                   const char *mode);
+
+/**
+ * Parse a platform or device version string.
+ *
+ * \param string [in] string in the format specified by OpenCL.
+ * \return An integer in the form of \<major\>\<minor\>0 or -1 on an error.
+ */
+int poclu_parse_version_string (const char *string);
+
+/**
+ * Same as poclu_write_file(file, content, size, "wb").
+ */
+POCLU_API int POCLU_CALL poclu_write_binfile (const char *file, char *content,
+                                              size_t size);
+
 /**
  * \brief wrapper for poclu_load_program_multidev, see it for details.
  */
-int poclu_load_program (cl_context context, cl_device_id device,
-                        const char *basename, int spirv, int poclbin,
+int poclu_load_program (cl_platform_id platform,
+                        cl_context context,
+                        cl_device_id device,
+                        const char *basename,
+                        int spirv,
+                        int poclbin,
                         const char *explicit_binary,
-                        const char *extra_build_opts, cl_program *p);
+                        const char *extra_build_opts,
+                        cl_program *p);
 /**
  * \brief create a program from different sources
  *
@@ -325,10 +351,16 @@ int poclu_load_program (cl_context context, cl_device_id device,
  *
  * \warning all devices need to be of the same type or else an error will be thrown.
  */
-int poclu_load_program_multidev (cl_context context, cl_device_id *devices,
-                                 cl_uint num_devices, const char *basename, int spirv, int poclbin,
+int poclu_load_program_multidev (cl_platform_id platform,
+                                 cl_context context,
+                                 cl_device_id *devices,
+                                 cl_uint num_devices,
+                                 const char *basename,
+                                 int spirv,
+                                 int poclbin,
                                  const char *explicit_binary,
-                                 const char *extra_build_opts, cl_program *p);
+                                 const char *extra_build_opts,
+                                 cl_program *p);
 
 /**
  * \brief print program build log of each device to stderr.
@@ -336,6 +368,14 @@ int poclu_load_program_multidev (cl_context context, cl_device_id *devices,
  * @return CL_SUCCESS or else a CL related error.
  */
 POCLU_API cl_int POCLU_CALL poclu_show_program_build_log (cl_program program);
+
+/**
+ * \brief check if a device supports a particular version of SPIR-V
+ * \param il [in] a string like "SPIR-V_1.2" of the requested version
+ * \return 1 if true, 0 if false or error
+ */
+POCLU_API int POCLU_CALL poclu_device_supports_il (cl_device_id device,
+                                                   const char *il);
 
 /**
  * \brief check a return value of CL function or print the error to stderr.
@@ -362,7 +402,8 @@ POCLU_API int POCLU_CALL check_cl_error (cl_int cl_err, int line,
  * \brief check a CL return value and if it is an error: print it and exit function on failure
  * @param cond [in] cl_int value to check.
  */
-#define CHECK_CL_ERROR(cond) _POCLU_CHECK_CL_ERROR_INNER(cond, __PRETTY_FUNCTION__, __LINE__)
+#define CHECK_CL_ERROR(cond)                                                  \
+  _POCLU_CHECK_CL_ERROR_INNER (cond, POCLU_FUNCTION_ID, __LINE__)
 
 /**
  * \brief check a CL return value and if it is an error: print the message and exit function on failure.
@@ -390,7 +431,7 @@ do {                                                                    \
  * \warning macro assumes "ERROR" statement exists
  */
 #define CHECK_CL_ERROR2(err)                                                  \
-  if (check_cl_error (err, __LINE__, __PRETTY_FUNCTION__))                    \
+  if (check_cl_error (err, __LINE__, POCLU_FUNCTION_ID))                      \
   goto ERROR
 
 #ifdef __cplusplus

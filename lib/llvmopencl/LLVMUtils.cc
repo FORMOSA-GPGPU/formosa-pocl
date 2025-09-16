@@ -1,7 +1,7 @@
 // Implementation of LLVMUtils, useful common LLVM-related functionality.
 //
 // Copyright (c) 2013-2019 Pekka Jääskeläinen
-//               2023 Pekka Jääskeläinen / Intel Finland Oy
+//               2023-2024 Pekka Jääskeläinen / Intel Finland Oy
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -47,14 +47,16 @@ IGNORE_COMPILER_WARNING("-Wunused-parameter")
 #include "ImplicitLoopBarriers.h"
 #include "InlineKernels.hh"
 #include "IsolateRegions.h"
+#include "KernelCompilerUtils.h"
 #include "LoopBarriers.h"
 #include "MinLegalVecSize.hh"
-#include "OptimizeWorkItemFuncCalls.h"
 #include "OptimizeWorkItemGVars.h"
 #include "PHIsToAllocas.h"
 #include "ParallelRegion.h"
 #include "RemoveBarrierCalls.h"
+#include "SanitizeUBofDivRem.h"
 #include "SubCFGFormation.h"
+#include "UnreachablesToReturns.h"
 #include "VariableUniformityAnalysis.h"
 #include "WorkItemAliasAnalysis.h"
 #include "Workgroup.h"
@@ -184,7 +186,11 @@ void breakConstantExpressions(llvm::Value *Val, llvm::Function *Func) {
 
       // Convert this constant expression to an instruction.
       llvm::Instruction *I = CE->getAsInstruction();
+#if LLVM_MAJOR < 20
       I->insertBefore(&*Func->begin()->begin());
+#else
+      I->insertBefore(Func->begin()->begin());
+#endif
       CE->replaceAllUsesWith(I);
       CE->destroyConstant();
     }
@@ -413,6 +419,7 @@ void markFunctionAlwaysInline(llvm::Function *F) {
   for (auto U: F->users()) {
     if (CallInst *CI = dyn_cast<CallInst>(U)) {
       CI->removeFnAttr(Attribute::NoInline);
+      CI->removeFnAttr(Attribute::OptimizeNone);
     }
   }
 }
@@ -457,68 +464,6 @@ bool isKernelToProcess(const llvm::Function &F) {
   }
 
   return false;
-}
-
-//#define DEBUG_UNREACHABLE_SWITCH_REMOVAL
-
-void removeUnreachableSwitchCases(llvm::Function &F) {
-  std::vector<BasicBlock *> BBsToDel;
-  for (Function::iterator FI = F.begin(), FE = F.end(); FI != FE; ++FI) {
-    BasicBlock *BB = &*FI;
-
-    if (BB->hasName() && BB->getName().starts_with("default.unreachable")) {
-#ifdef DEBUG_UNREACHABLE_SWITCH_REMOVAL
-      std::cerr << "##################################################\n";
-      std::cerr << "### converting unreachable block: " << (void *)BB << "\n";
-#endif
-      BBsToDel.push_back(BB);
-
-      std::set<SwitchInst *> SwUsers;
-      for (auto U : BB->users()) {
-        if (SwitchInst *SwI = dyn_cast<SwitchInst>(U)) {
-          SwUsers.insert(SwI);
-        } else {
-#ifdef DEBUG_UNREACHABLE_SWITCH_REMOVAL
-          // we can ignore BBlocks with a single "br label default.unreachable"
-          if (!isa<BranchInst>(U)) {
-            std::cerr << "Unhandled unreachable user:\n";
-            U->dump();
-          }
-#endif
-        }
-      }
-
-      for (SwitchInst *SwI : SwUsers) {
-#ifdef DEBUG_UNREACHABLE_SWITCH_REMOVAL
-        std::cerr << "Found a switch user, replacing the unr label:\n";
-        SwI->dump();
-#endif
-        if (SwI->getDefaultDest() == BB) {
-#ifdef DEBUG_UNREACHABLE_SWITCH_REMOVAL
-          std::cerr << "... default switch user is the unr BB\n";
-#endif
-          // remove the last case, and make its BB as the default
-          auto FinalCaseIt = std::prev(SwI->case_end());
-          BasicBlock *FinalBB = FinalCaseIt->getCaseSuccessor();
-          SwI->removeCase(FinalCaseIt);
-          SwI->setDefaultDest(FinalBB);
-#ifdef DEBUG_UNREACHABLE_SWITCH_REMOVAL
-          std::cerr << "Final fixed switch:\n";
-          SwI->dump();
-#endif
-        } else {
-#ifdef DEBUG_UNREACHABLE_SWITCH_REMOVAL
-          std::cerr << "Unhandled switch, the default branch is not unr:\n";
-          SwI->dump();
-#endif
-        }
-      }
-    }
-  }
-
-  for (auto BB : BBsToDel) {
-    BB->eraseFromParent();
-  }
 }
 
 // Returns true in case the given function is a kernel with work-group
@@ -653,20 +598,34 @@ const std::vector<std::string>
     WorkgroupVariablesVector(WorkgroupVariablesArray,
                              WorkgroupVariablesArray+NumWorkgroupVariables);
 
-const char *WIFuncNameArray[NumWIFuncNames] = {"_Z13get_global_idj",
-                                               "_Z17get_global_offsetj",
-                                               "_Z15get_global_sizej",
-                                               "_Z12get_group_idj",
-                                               "_Z12get_local_idj",
-                                               "_Z14get_local_sizej",
-                                               "_Z23get_enqueued_local_sizej",
-                                               "_Z14get_num_groupsj",
-                                               "_Z20get_global_linear_idv",
-                                               "_Z19get_local_linear_idv",
-                                               "_Z12get_work_dimv"};
+const char *WIFuncNameArray[] = {
+    GID_BUILTIN_NAME,        GOFF_BUILTIN_NAME,    GS_BUILTIN_NAME,
+    GROUP_ID_BUILTIN_NAME,   LID_BUILTIN_NAME,     LS_BUILTIN_NAME,
+    ENQUEUE_LS_BUILTIN_NAME, NGROUPS_BUILTIN_NAME, GLID_BUILTIN_NAME,
+    LLID_BUILTIN_NAME,       WDIM_BUILTIN_NAME,    "__pocl_work_group_alloca"};
+
+constexpr unsigned NumWIFuncNames =
+    sizeof(WIFuncNameArray) / sizeof(const char *);
 
 const std::vector<std::string> WIFuncNameVec(WIFuncNameArray,
                                              WIFuncNameArray + NumWIFuncNames);
+
+const char *DIFuncNameArray[NumDIFuncNames] = {GID_BUILTIN_NAME,
+                                               GOFF_BUILTIN_NAME,
+                                               GS_BUILTIN_NAME,
+                                               GROUP_ID_BUILTIN_NAME,
+                                               LID_BUILTIN_NAME,
+                                               LS_BUILTIN_NAME,
+                                               ENQUEUE_LS_BUILTIN_NAME,
+                                               NGROUPS_BUILTIN_NAME,
+                                               GLID_BUILTIN_NAME,
+                                               LLID_BUILTIN_NAME,
+                                               WDIM_BUILTIN_NAME,
+                                               "pocl_printf_alloc",
+                                               "pocl_printf_alloc_stub"};
+
+const std::vector<std::string> DIFuncNameVec(DIFuncNameArray,
+                                             DIFuncNameArray + NumDIFuncNames);
 
 // register all PoCL analyses & passes with an LLVM PassBuilder instance,
 // so that it can parse them from string representation
@@ -675,6 +634,8 @@ void registerPassBuilderPasses(llvm::PassBuilder &PB) {
   AutomaticLocals::registerWithPB(PB);
   BarrierTailReplication::registerWithPB(PB);
   CanonicalizeBarriers::registerWithPB(PB);
+  SanitizeUBofDivRem::registerWithPB(PB);
+  ConvertUnreachablesToReturns::registerWithPB(PB);
   FlattenAll::registerWithPB(PB);
   FlattenBarrierSubs::registerWithPB(PB);
   FlattenGlobals::registerWithPB(PB);
@@ -685,7 +646,6 @@ void registerPassBuilderPasses(llvm::PassBuilder &PB) {
   IsolateRegions::registerWithPB(PB);
   LoopBarriers::registerWithPB(PB);
   FixMinVecSize::registerWithPB(PB);
-  OptimizeWorkItemFuncCalls::registerWithPB(PB);
   OptimizeWorkItemGVars::registerWithPB(PB);
   PHIsToAllocas::registerWithPB(PB);
   RemoveBarrierCalls::registerWithPB(PB);
@@ -708,6 +668,38 @@ llvm::Type *SizeT(llvm::Module *M) {
   unsigned long AddressBits;
   getModuleIntMetadata(*M, "device_address_bits", AddressBits);
   return IntegerType::get(M->getContext(), AddressBits);
+}
+
+bool isWorkitemFunctionWithOnlyCompilerExpandableCalls(
+    const llvm::Function &F) {
+
+  if (F.getName() != GID_BUILTIN_NAME && F.getName() != GS_BUILTIN_NAME &&
+      F.getName() != GROUP_ID_BUILTIN_NAME && F.getName() != LID_BUILTIN_NAME &&
+      F.getName() != LS_BUILTIN_NAME && F.getName() != NGROUPS_BUILTIN_NAME)
+    return false;
+
+  for (const auto &U : F.uses()) {
+    llvm::CallInst *Call = dyn_cast<llvm::CallInst>(U.getUser());
+    if (Call == nullptr)
+      continue;
+    if (!isCompilerExpandableWIFunctionCall(*Call))
+      return false;
+  }
+  return true;
+}
+
+bool isCompilerExpandableWIFunctionCall(const llvm::CallInst &Call) {
+  auto Callee = Call.getCalledFunction();
+  if (Callee == nullptr /* Inline asm? */)
+    return false;
+  if (Callee->getName() != GID_BUILTIN_NAME &&
+      Callee->getName() != GS_BUILTIN_NAME &&
+      Callee->getName() != GROUP_ID_BUILTIN_NAME &&
+      Callee->getName() != LID_BUILTIN_NAME &&
+      Callee->getName() != LS_BUILTIN_NAME &&
+      Callee->getName() != NGROUPS_BUILTIN_NAME)
+    return false;
+  return isa<llvm::ConstantInt>(Call.getArgOperand(0));
 }
 
 } // namespace pocl

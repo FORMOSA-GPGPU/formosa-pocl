@@ -35,7 +35,7 @@ extern "C" {
   void InitializeLLVM ();
   void UnInitializeLLVM ();
 
-  /* Returns the cpu name as reported by LLVM. */
+  /* Returns the host cpu name as reported by LLVM. */
   POCL_EXPORT
   char *pocl_get_llvm_cpu_name ();
 
@@ -95,6 +95,13 @@ extern "C" {
       _cl_command_node *Command, void **output, int Specialize);
 
   POCL_EXPORT
+  int pocl_llvm_link_multiple_modules (cl_program program,
+                                       unsigned device_i,
+                                       const char *OutputBCPath,
+                                       void **LLVMIRBinaries,
+                                       size_t NumBinaries);
+
+  POCL_EXPORT
   int pocl_llvm_run_passes_on_program (cl_program Program, unsigned DeviceI);
 
   /* Parse program file and populate program's llvm_irs */
@@ -113,7 +120,8 @@ extern "C" {
   POCL_EXPORT
   void pocl_destroy_llvm_module (void *modp, cl_context ctx);
 
-  int pocl_llvm_remove_file_on_signal (const char *file);
+  int pocl_llvm_remove_file_on_signal_create (const char *file);
+  int pocl_llvm_remove_file_on_signal_destroy (const char *file);
 
   void pocl_llvm_create_context (cl_context ctx);
   void pocl_llvm_release_context (cl_context ctx);
@@ -143,7 +151,8 @@ extern "C" {
   void *pocl_llvm_create_context_for_program (char *ProgramBcContent,
                                               size_t ProgramBcSize,
                                               char **LinkinSpirvContent,
-                                              uint64_t *LinkinSpirvSize);
+                                              uint64_t *LinkinSpirvSize,
+                                              pocl_version_t TargetVersion);
 
   /**
   * \brief extracts SPIR-V of a single Kernel (plus all functions it uses)
@@ -158,11 +167,12 @@ extern "C" {
   *
   */
   POCL_EXPORT
-  int pocl_llvm_extract_kernel_spirv(void* ProgCtx,
-                                     const char* KernelName,
-                                     void* BuildLogStr,
-                                     char **SpirvContent,
-                                     uint64_t *SpirvSize);
+  int pocl_llvm_extract_kernel_spirv (void *ProgCtx,
+                                      const char *KernelName,
+                                      void *BuildLogStr,
+                                      char **SpirvContent,
+                                      uint64_t *SpirvSize,
+                                      pocl_version_t TargetVersion);
 
   /**
   * \brief destroys the instance of hidden class used to extract kernel SPIR-V
@@ -179,11 +189,32 @@ extern "C" {
    */
   unsigned pocl_llvm_get_kernel_count (cl_program program, unsigned device_i);
 
-  /** Compile the kernel in infile from LLVM bitcode to native object file for
-   * device, into outfile.
-   */
-  int pocl_llvm_codegen (cl_device_id device, cl_program program, void *modp,
-                         char **output, uint64_t *output_size);
+  /**
+  * \brief Compile the kernel in infile from LLVM bitcode to native object file for
+  * device, into outfile.
+  *
+  * \param [in] Device the device for which to compile
+  * \param [in] Program the cl_program
+  * \param [in] Features passed as features string to the TargetMachine
+  * \param [in] Modp the input LLVM IR (llvm::Module *)
+  * \param [in] EmitAsm - request emitting Asm (if EmitObj==true, also
+  *                       permits fallback from Obj to Clang via Asm)
+  * \param [in] EmitObj - request emitting Obj
+  * \returns 0 on success
+  *
+  */
+  POCL_EXPORT
+  int pocl_llvm_codegen (cl_device_id Device, cl_program Program,
+                         const char *Features, void *Modp, int EmitAsm,
+                         int EmitObj, char **Output, uint64_t *OutputSize);
+  POCL_EXPORT
+  int pocl_llvm_codegen2(const char* TTriple,
+                         const char* MCPU,
+                         const char *Features,
+                         cl_device_type DevType,
+                         pocl_lock_t *Lock,
+                         void *Modp, int EmitAsm,
+                         int EmitObj, char **Output, uint64_t *OutputSize);
 
   int pocl_llvm_link_program (cl_program program, unsigned device_i,
                               cl_uint num_input_programs,
@@ -193,7 +224,7 @@ extern "C" {
                               int link_device_builtin_library,
                               int linking_into_new_cl_program);
 
-  int pocl_invoke_clang (cl_device_id Device, const char **Args);
+  int pocl_invoke_clang (const char *TTriple, const char **Args);
 
   /**
    * \brief converts LLVM IR with "spir64-unknown-unknown" triple to SPIR-V
@@ -213,6 +244,7 @@ extern "C" {
    * nullptr \param [out] SpirvContent pointer where to store the raw output.
    *              can be nullptr
    * \param [out] SpirvSize size of data stored at SpirvContent
+   * \param [in] TargetVersion The SPIR-V version to emit.
    * \returns 0 on success
    *
    */
@@ -221,10 +253,11 @@ extern "C" {
                                                  uint64_t BitcodeSize,
                                                  cl_program Program,
                                                  cl_uint DeviceI,
-                                                 int UseIntelExts,
+                                                 const char *SPVExtensions,
                                                  char *TempSpirvPathOut,
                                                  char **SpirvContent,
-                                                 uint64_t *SpirvSize);
+                                                 uint64_t *SpirvSize,
+                                                 pocl_version_t TargetVersion);
 
   /**
    * \brief converts LLVM IR with "spir64-unknown-unknown" triple to SPIR-V
@@ -232,14 +265,16 @@ extern "C" {
    * The same as pocl_convert_bitcode_to_spirv, but takes a std::string*
    * cast to void* as buildLog argument
    */
-  POCL_EXPORT int pocl_convert_bitcode_to_spirv2 (char *TempBitcodePath,
-                                                  const char *Bitcode,
-                                                  uint64_t BitcodeSize,
-                                                  void *BuildLog,
-                                                  int UseIntelExts,
-                                                  char *TempSpirvPathOut,
-                                                  char **SpirvContent,
-                                                  uint64_t *SpirvSize);
+  POCL_EXPORT int
+  pocl_convert_bitcode_to_spirv2 (char *TempBitcodePath,
+                                  const char *Bitcode,
+                                  uint64_t BitcodeSize,
+                                  void *BuildLog,
+                                  const char *SPVExtensions,
+                                  char *TempSpirvPathOut,
+                                  char **SpirvContent,
+                                  uint64_t *SpirvSize,
+                                  pocl_version_t TargetVersion);
 
   /**
    * \brief converts SPIR-V to LLVM IR with "spir64-unknown-unknown" triple
@@ -251,10 +286,45 @@ extern "C" {
                                                  uint64_t SpirvSize,
                                                  cl_program Program,
                                                  cl_uint DeviceI,
-                                                 int UseIntelExts,
+                                                 const char *SPVExtensions,
                                                  char *TempBitcodePathOut,
                                                  char **BitcodeContent,
                                                  uint64_t *BitcodeSize);
+
+  /**
+   * \brief Initializes the LLVM option "--spirv-ext=...".
+   *
+   * This is necessary when using LLVM's SPIRV backend
+   */
+  POCL_EXPORT int pocl_llvm_initialize_spirv_ext_option ();
+
+  /**
+   * \brief sets up the SPIR-V SpecConstants in the program struct
+   *
+   * The same input is provided twice, once as a path to file, then as memory
+   * buffer (void* + size). The implementation (llvm-spirv, LLVMSPIRVLib) then
+   * uses the more suitable version to extract the SpecConstants
+   *
+   * \param program [in,out] the program which we're setting up
+   * \param spirv_path [in] path to tempfile which contains the SPIR-V
+   * \param spirv_content [in] memory buffer with SPIR-V content
+   * \param spirv_len [in] # of bytes in spirv_content
+   * \returns 0 on success
+   *
+   */
+  int pocl_get_program_spec_constants (cl_program program,
+                                       char *spirv_path,
+                                       const void *spirv_content,
+                                       size_t spirv_len);
+
+  /* if some SPIR-V spec constants were changed, use LLVMSPIRVLib
+   * to generate new LLVM bitcode from SPIR-V with updated SpecConstants.
+   * might change program->program_il & program_il_size */
+  int pocl_regen_spirv_binary (cl_program program, cl_uint device_i);
+
+  /* applies fixes to SPIR-V input
+   * (currently only applyAtomicCmpXchgWorkaroundInPlace) */
+  int pocl_preprocess_spirv_input (cl_program program);
 
 #ifdef __cplusplus
 }

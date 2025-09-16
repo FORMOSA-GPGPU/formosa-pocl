@@ -29,11 +29,11 @@
 #include <string>
 #include <thread>
 
-#include "common.hh"
-
 #ifdef __GNUC__
 #pragma GCC visibility push(hidden)
 #endif
+
+class ExitHelper;
 
 class TrafficMonitor {
   std::atomic_uint64_t tx_bytes_submitted;

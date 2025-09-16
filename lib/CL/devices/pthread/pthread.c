@@ -27,8 +27,6 @@
 
 #include <assert.h>
 #include <errno.h>
-#include <pthread.h>
-#include <sched.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -54,10 +52,15 @@
 /**
  * Per event data.
  */
-struct event_data {
-  pthread_cond_t event_cond;
-};
+typedef struct event_data
+{
+  pocl_cond_t event_cond;
+} event_data;
 
+typedef struct queue_data
+{
+  pocl_cond_t cq_cond;
+} queue_data;
 
 void
 pocl_pthread_init_device_ops(struct pocl_device_ops *ops)
@@ -134,7 +137,7 @@ pocl_pthread_init (unsigned j, cl_device_id device, const char* parameters)
 
   /* pthread has elementary partitioning support,
    * but only if OpenMP is disabled */
-#ifdef ENABLE_HOST_CPU_DEVICES_OPENMP
+#if  defined(ENABLE_HOST_CPU_DEVICES_OPENMP) || defined(ENABLE_CONFORMANCE)
   device->max_sub_devices = 0;
   device->num_partition_properties = 0;
   device->num_partition_types = 0;
@@ -167,13 +170,24 @@ pocl_pthread_uninit (unsigned j, cl_device_id device)
 {
   if (scheduler_initialized)
     {
-      pthread_scheduler_uninit (device);
+      pthread_scheduler_uninit ();
       scheduler_initialized = 0;
     }
 
   POCL_MEM_FREE (device->data);
   return CL_SUCCESS;
 }
+
+#ifdef ENABLE_PTHREAD_FINISH_FN
+void __attribute__ ((destructor)) pthread_finish_fn (void)
+{
+  if (scheduler_initialized)
+    {
+      pthread_scheduler_uninit ();
+      scheduler_initialized = 0;
+    }
+}
+#endif
 
 cl_int
 pocl_pthread_reinit (unsigned j, cl_device_id device, const char *parameters)
@@ -201,7 +215,7 @@ pocl_pthread_run (void *data, _cl_command_node *cmd)
 void
 pocl_pthread_submit (_cl_command_node *node, cl_command_queue cq)
 {
-  node->ready = 1;
+  node->state = POCL_COMMAND_READY;
   if (pocl_command_is_ready (node->sync.event.event))
     {
       pocl_update_event_submitted (node->sync.event.event);
@@ -221,7 +235,7 @@ void
 pocl_pthread_join(cl_device_id device, cl_command_queue cq)
 {
   POCL_LOCK_OBJ (cq);
-  pthread_cond_t *cq_cond = (pthread_cond_t *)cq->data;
+  queue_data *qdata = (queue_data *)cq->data;
   while (1)
     {
       if (cq->command_count == 0)
@@ -231,7 +245,7 @@ pocl_pthread_join(cl_device_id device, cl_command_queue cq)
         }
       else
         {
-          PTHREAD_CHECK (pthread_cond_wait (cq_cond, &cq->pocl_lock));
+          POCL_WAIT_COND (qdata->cq_cond, cq->pocl_lock);
         }
     }
   return;
@@ -244,12 +258,26 @@ pocl_pthread_notify (cl_device_id device, cl_event event, cl_event finished)
 
   if (finished->status < CL_COMPLETE)
     {
-      pocl_update_event_failed (event);
+      /* Unlock the finished event in order to prevent a lock order violation
+       * with the command queue that will be locked during
+       * pocl_update_event_failed.
+       */
+      pocl_unlock_events_inorder (event, finished);
+      pocl_update_event_failed (CL_FAILED, NULL, 0, event, NULL);
+      /* Lock events in this order to avoid a lock order violation between
+       * the finished/notifier and event/wait events.
+       */
+      pocl_lock_events_inorder (finished, event);
       return;
     }
 
-  if (!node->ready)
-    return;
+  if (node->state != POCL_COMMAND_READY)
+    {
+      POCL_MSG_PRINT_EVENTS (
+        "pthread: command related to the notified event %lu not ready\n",
+        event->id);
+      return;
+    }
 
   if (pocl_command_is_ready (node->sync.event.event))
     {
@@ -270,27 +298,27 @@ pocl_pthread_notify_cmdq_finished (cl_command_queue cq)
    * this must be a broadcast since there could be multiple
    * user threads waiting on the same command queue
    * in pthread_scheduler_wait_cq(). */
-  pthread_cond_t *cq_cond = (pthread_cond_t *)cq->data;
-  PTHREAD_CHECK (pthread_cond_broadcast (cq_cond));
+  queue_data *qdata = (queue_data *)cq->data;
+  POCL_BROADCAST_COND (qdata->cq_cond);
 }
 
 void
 pocl_pthread_notify_event_finished (cl_event event)
 {
-  struct event_data *e_d = event->data;
-  PTHREAD_CHECK (pthread_cond_broadcast (&e_d->event_cond));
+  event_data *e_d = (event_data *)event->data;
+  POCL_BROADCAST_COND (e_d->event_cond);
 }
 
 void
 pocl_pthread_update_event (cl_device_id device, cl_event event)
 {
-  struct event_data *e_d = NULL;
+  event_data *e_d = NULL;
   if (event->data == NULL && event->status == CL_QUEUED)
     {
-      e_d = malloc(sizeof(struct event_data));
+      e_d = pocl_aligned_malloc (HOST_CPU_CACHELINE_SIZE, sizeof (event_data));
       assert(e_d);
 
-      PTHREAD_CHECK (pthread_cond_init (&e_d->event_cond, NULL));
+      POCL_INIT_COND (e_d->event_cond);
       event->data = (void *) e_d;
 
       VG_ASSOC_COND_VAR (e_d->event_cond, event->pocl_lock);
@@ -299,34 +327,35 @@ pocl_pthread_update_event (cl_device_id device, cl_event event)
 
 void pocl_pthread_wait_event (cl_device_id device, cl_event event)
 {
-  struct event_data *e_d = event->data;
+  event_data *e_d = (event_data *)event->data;
 
   POCL_LOCK_OBJ (event);
   while (event->status > CL_COMPLETE)
     {
-      PTHREAD_CHECK (pthread_cond_wait (&e_d->event_cond, &event->pocl_lock));
+      POCL_WAIT_COND (e_d->event_cond, event->pocl_lock);
     }
   POCL_UNLOCK_OBJ (event);
 }
 
-
 void pocl_pthread_free_event_data (cl_event event)
 {
   assert(event->data != NULL);
-  free(event->data);
+  event_data *e_d = (event_data *)event->data;
+  POCL_DESTROY_COND (e_d->event_cond);
+  pocl_aligned_free (event->data);
   event->data = NULL;
 }
 
 int
 pocl_pthread_init_queue (cl_device_id device, cl_command_queue queue)
 {
-  queue->data
-      = pocl_aligned_malloc (HOST_CPU_CACHELINE_SIZE, sizeof (pthread_cond_t));
-  pthread_cond_t *cond = (pthread_cond_t *)queue->data;
-  PTHREAD_CHECK (pthread_cond_init (cond, NULL));
+  queue_data *qdata
+    = pocl_aligned_malloc (HOST_CPU_CACHELINE_SIZE, sizeof (queue_data));
+  POCL_INIT_COND (qdata->cq_cond);
+  queue->data = qdata;
 
   POCL_LOCK_OBJ (queue);
-  VG_ASSOC_COND_VAR ((*cond), queue->pocl_lock);
+  VG_ASSOC_COND_VAR (qdata->cq_cond, queue->pocl_lock);
   POCL_UNLOCK_OBJ (queue);
 
   return CL_SUCCESS;
@@ -335,8 +364,9 @@ pocl_pthread_init_queue (cl_device_id device, cl_command_queue queue)
 int
 pocl_pthread_free_queue (cl_device_id device, cl_command_queue queue)
 {
-  pthread_cond_t *cond = (pthread_cond_t *)queue->data;
-  PTHREAD_CHECK (pthread_cond_destroy (cond));
-  POCL_MEM_FREE (queue->data);
+  queue_data *qdata = (queue_data *)queue->data;
+  assert (qdata);
+  POCL_DESTROY_COND (qdata->cq_cond);
+  pocl_aligned_free (queue->data);
   return CL_SUCCESS;
 }

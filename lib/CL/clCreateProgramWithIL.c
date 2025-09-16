@@ -29,82 +29,6 @@
 #include "pocl_shared.h"
 #include "pocl_util.h"
 
-/* max number of lines in output of 'llvm-spirv --spec-const-info' */
-#define MAX_SPEC_CONSTANT_LINES 4096
-/* max bytes in output of 'llvm-spirv --spec-const-info' */
-#define MAX_OUTPUT_BYTES 65536
-
-#ifdef ENABLE_SPIRV
-static int
-get_program_spec_constants (cl_program program, char *program_bc_spirv)
-{
-  const char *args[] = { pocl_get_path ("LLVM_SPIRV", LLVM_SPIRV),
-                         "--spec-const-info", program_bc_spirv, NULL };
-  char captured_output[MAX_OUTPUT_BYTES];
-  size_t captured_bytes = MAX_OUTPUT_BYTES;
-  int errcode = CL_SUCCESS;
-
-  errcode = pocl_run_command_capture_output (captured_output, &captured_bytes,
-                                             args);
-  POCL_RETURN_ERROR_ON ((errcode != 0), CL_INVALID_BINARY, "External command "
-                        "(llvm-spirv --spec-const-info) failed!\n");
-
-  captured_output[captured_bytes] = 0;
-  char *lines[MAX_SPEC_CONSTANT_LINES];
-  unsigned num_lines = 0;
-  char delim[2] = { 0x0A, 0x0 };
-  char *token = strtok (captured_output, delim);
-  while (num_lines < MAX_SPEC_CONSTANT_LINES && token != NULL)
-    {
-      lines[num_lines++] = strdup (token);
-      token = strtok (NULL, delim);
-    }
-  POCL_GOTO_ERROR_ON ((num_lines == 0 || num_lines >= MAX_SPEC_CONSTANT_LINES),
-                      CL_INVALID_BINARY,
-                      "Can't parse output from llvm-spirv\n");
-
-  unsigned num_const = 0;
-  int r = sscanf (
-      lines[0], "Number of scalar specialization constants in the module = %u",
-      &num_const);
-  POCL_GOTO_ERROR_ON ((r < 1 || num_const > num_lines), CL_INVALID_BINARY,
-                      "Can't parse first line of output");
-
-  program->num_spec_consts = num_const;
-  if (num_const > 0)
-    {
-      program->spec_const_ids = calloc (num_const, sizeof (cl_uint));
-      program->spec_const_sizes = calloc (num_const, sizeof (cl_uint));
-      program->spec_const_values = calloc (num_const, sizeof (uint64_t));
-      program->spec_const_is_set = calloc (num_const, sizeof (char));
-      for (unsigned i = 0; i < program->num_spec_consts; ++i)
-        {
-          unsigned spec_id, spec_size;
-          int r
-              = sscanf (lines[i + 1], "Spec const id = %u, size in bytes = %u",
-                        &spec_id, &spec_size);
-          POCL_GOTO_ERROR_ON ((r < 2), CL_INVALID_BINARY,
-                              "Can't parse %u-th line of output:\n%s\n",
-                              i+1, lines[i+1]);
-          program->spec_const_ids[i] = spec_id;
-          program->spec_const_sizes[i] = spec_size;
-          program->spec_const_values[i] = 0;
-          program->spec_const_is_set[i] = CL_FALSE;
-        }
-    }
-  errcode = CL_SUCCESS;
-ERROR:
-  for (unsigned i = 0; i < num_lines; ++i)
-    free (lines[i]);
-  if (errcode != CL_SUCCESS)
-    {
-      program->num_spec_consts = 0;
-    }
-  return errcode;
-}
-#endif
-
-
 CL_API_ENTRY cl_program CL_API_CALL
 POname(clCreateProgramWithIL)(cl_context context,
                               const void *il,
@@ -131,7 +55,7 @@ CL_API_SUFFIX__VERSION_2_1
 
   int is_spirv = 0;
   int is_spirv_kernel
-      = pocl_bitcode_is_spirv_execmodel_kernel ((const char *)il, length);
+    = pocl_bitcode_is_spirv_execmodel_kernel ((const char *)il, length, 0);
   is_spirv += is_spirv_kernel;
 
   int is_spirv_shader
@@ -176,14 +100,26 @@ CL_API_SUFFIX__VERSION_2_1
     goto ERROR;
 
   /* save the IL into cl_program, and find out spec constants */
+
   program->program_il = (char *)malloc (length);
   memcpy (program->program_il, il, length);
   program->program_il_size = length;
-  errcode = pocl_cache_write_spirv (program_bc_spirv, (const char *)il,
-                                    (uint64_t)length);
 #ifdef ENABLE_SPIRV
-  get_program_spec_constants (program, program_bc_spirv);
+  /* this might change the size */
+  pocl_preprocess_spirv_input (program);
 #endif
+
+  errcode = pocl_cache_write_spirv (program_bc_spirv,
+                                    program->program_il,
+                                    program->program_il_size);
+
+#ifdef ENABLE_SPIRV
+  pocl_get_program_spec_constants (program, program_bc_spirv,
+                                   program->program_il,
+                                   program->program_il_size);
+
+#endif
+
 
 ERROR:
   if (errcode_ret)

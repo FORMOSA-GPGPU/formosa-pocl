@@ -24,6 +24,7 @@
 */
 
 #include "remote.h"
+#include "CL/cl_platform.h"
 #include "common.h"
 #include "config.h"
 #include "devices.h"
@@ -37,17 +38,25 @@
 #include <unistd.h>
 
 #include "common_driver.h"
+#include "pocl_builtin_kernels.h"
 #include "pocl_cache.h"
 #include "pocl_cl.h"
+#include "pocl_debug.h"
 #include "pocl_file_util.h"
 #include "pocl_mem_management.h"
+#include "pocl_tensor_util.h"
 #include "pocl_timing.h"
 #include "pocl_util.h"
 #include "utlist.h"
-#include <CL/cl.h>
 
 #include "communication.h"
 #include "messages.h"
+
+#if defined(ENABLE_REMOTE_DISCOVERY_AVAHI)                                    \
+  || defined(ENABLE_REMOTE_DISCOVERY_DHT)                                     \
+  || defined(ENABLE_REMOTE_DISCOVERY_ANDROID)
+#include "network_discovery.h"
+#endif
 
 /*
   TODO / problematic:
@@ -99,6 +108,7 @@ pocl_remote_alloc_mem_obj (cl_device_id device, cl_mem mem, void *host_ptr)
   remote_device_data_t *d = (remote_device_data_t *)device->data;
   pocl_mem_identifier *p = &mem->device_ptrs[device->global_mem_id];
   assert (p->mem_ptr == NULL);
+  int r = 0;
 
   POCL_LOCK (d->mem_lock);
 
@@ -106,7 +116,6 @@ pocl_remote_alloc_mem_obj (cl_device_id device, cl_mem mem, void *host_ptr)
   if ((mem->flags & CL_MEM_ALLOC_HOST_PTR) && (mem->mem_host_ptr == NULL))
     goto ERROR;
 
-  int r;
   if (host_ptr == NULL
       && (device->svm_caps & CL_DEVICE_SVM_COARSE_GRAIN_BUFFER))
     {
@@ -349,9 +358,11 @@ pocl_remote_init_device_ops (struct pocl_device_ops *ops)
   ops->link_program = pocl_remote_link_program;
   ops->build_binary = pocl_remote_build_binary;
   ops->build_builtin = pocl_remote_build_builtin;
+  ops->build_defined_builtin = pocl_remote_build_defined_builtin;
   ops->free_program = pocl_remote_free_program;
   ops->setup_metadata = pocl_remote_setup_metadata;
   ops->supports_binary = pocl_remote_supports_binary;
+  ops->supports_dbk = pocl_remote_supports_dbk;
 
   ops->join = pocl_remote_join;
   ops->submit = pocl_remote_submit;
@@ -367,6 +378,16 @@ pocl_remote_init_device_ops (struct pocl_device_ops *ops)
 
   ops->create_sampler = pocl_remote_create_sampler;
   ops->free_sampler = pocl_remote_free_sampler;
+
+  ops->create_finalized_command_buffer
+    = pocl_remote_create_finalized_command_buffer;
+  ops->free_command_buffer = pocl_remote_free_command_buffer;
+
+#if defined(ENABLE_REMOTE_DISCOVERY_AVAHI)                                    \
+  || defined(ENABLE_REMOTE_DISCOVERY_DHT)                                     \
+  || defined(ENABLE_REMOTE_DISCOVERY_ANDROID)
+  ops->init_discovery = pocl_remote_init_device_discovery;
+#endif
 }
 
 char *
@@ -564,7 +585,10 @@ pocl_remote_init (unsigned j, cl_device_id device, const char *parameters)
 
   // TODO: add list of all remotes to create_or_find_server from here
   if (pocl_network_init_device (device, d, j, parameters))
-    return CL_DEVICE_NOT_FOUND;
+    {
+      POCL_MEM_FREE (d);
+      return CL_DEVICE_NOT_FOUND;
+    }
 
   const char *magic = "pocl";
   device->vendor_id
@@ -606,11 +630,14 @@ pocl_remote_init (unsigned j, cl_device_id device, const char *parameters)
                                      " cl_intel_unified_shared_memory";
       unsigned exts_str_size
           = strlen (device->extensions) + 1 + strlen (bonus_extensions);
-      char *exts_w_pinned = calloc (exts_str_size + 1, 1);
+      char *exts_w_pinned = malloc (exts_str_size + 1);
+      if (exts_w_pinned == NULL)
+        return CL_OUT_OF_HOST_MEMORY;
       strncpy (exts_w_pinned, device->extensions, strlen (device->extensions));
       exts_w_pinned[strlen (device->extensions)] = ' ';
       strncpy (exts_w_pinned + strlen (device->extensions) + 1,
                bonus_extensions, strlen (bonus_extensions));
+      exts_w_pinned[exts_str_size] = 0;
       /* The const char * to void * cast is fine here since this value is
          set in pocl_network_setup_devinfo with a strdup. */
       free ((void *)device->extensions);
@@ -619,6 +646,20 @@ pocl_remote_init (unsigned j, cl_device_id device, const char *parameters)
 
   return CL_SUCCESS;
 }
+
+#if defined(ENABLE_REMOTE_DISCOVERY_AVAHI)                                    \
+  || defined(ENABLE_REMOTE_DISCOVERY_DHT)                                     \
+  || defined(ENABLE_REMOTE_DISCOVERY_ANDROID)
+cl_int
+pocl_remote_init_device_discovery (
+  cl_int (*add_discovered_device) (const char *, unsigned),
+  unsigned pocl_dev_type_idx)
+{
+  return init_network_discovery (add_discovered_device,
+                                 pocl_remote_reconnect_rediscover,
+                                 pocl_dev_type_idx);
+}
+#endif
 
 cl_int
 pocl_remote_setup_peer_mesh (struct pocl_device_ops *ops)
@@ -748,7 +789,8 @@ setup_relevant_devices (cl_program program, cl_device_id device,
               assert (pocl_exists (program_bc_path));
               assert (program->binaries[real_i]);
 
-              binaries[num_relevant_devices] = program->binaries[real_i];
+              binaries[num_relevant_devices]
+                = (char *)program->binaries[real_i];
               *total_binary_request_size += sizeof (uint32_t);
               binary_sizes[num_relevant_devices]
                   = program->binary_sizes[real_i];
@@ -842,14 +884,14 @@ pocl_remote_build_source (cl_program program, cl_uint device_i,
   unsigned num_relevant_devices = 0;
   unsigned num_devices = program->num_devices;
 
-  uint32_t relevant_devices[num_devices];
-  uint32_t relevant_platforms[num_devices];
+  uint32_t *relevant_devices = alloca (sizeof (uint32_t) * num_devices);
+  uint32_t *relevant_platforms = alloca (sizeof (uint32_t) * num_devices);
 
-  unsigned build_indexes[num_devices];
-  char *build_logs[num_devices];
+  unsigned *build_indexes = alloca (sizeof (unsigned) * num_devices);
+  char **build_logs = alloca (sizeof (char *) * num_devices);
 
-  char *binaries[num_devices];
-  size_t binary_sizes[num_devices];
+  char **binaries = alloca (sizeof (char *) * num_devices);
+  size_t *binary_sizes = alloca (sizeof (size_t) * num_devices);
 
   size_t total_binary_request_size = sizeof (uint32_t);
   int err;
@@ -866,11 +908,11 @@ pocl_remote_build_source (cl_program program, cl_uint device_i,
   size_t kernel_meta_size = 0;
 
   err = pocl_network_build_or_link_program (
-      d, program->source, strlen (program->source), CL_FALSE, CL_FALSE,
-      CL_FALSE, prog_id, program->compiler_options, &kernel_meta_bytes,
-      &kernel_meta_size, relevant_devices, relevant_platforms,
-      num_relevant_devices, build_logs, binaries, binary_sizes,
-      d->svm_region_offset, !link_program, 0);
+    d, program->source, strlen (program->source), CL_FALSE, CL_FALSE, CL_FALSE,
+    CL_FALSE, prog_id, program->compiler_options, &kernel_meta_bytes,
+    &kernel_meta_size, relevant_devices, relevant_platforms,
+    num_relevant_devices, build_logs, binaries, binary_sizes,
+    d->svm_region_offset, !link_program, 0);
 
   setup_build_logs (program, num_relevant_devices, build_indexes, build_logs);
 
@@ -896,7 +938,7 @@ pocl_remote_build_source (cl_program program, cl_uint device_i,
         program->data[real_i] = pd;
         program->binary_sizes[real_i] = binary_sizes[i];
         binary_sizes[i] = 0;
-        program->binaries[real_i] = binaries[i];
+        program->binaries[real_i] = (unsigned char *)binaries[i];
         binaries[i] = NULL;
 
         assert (program->binary_sizes[real_i] > 0);
@@ -942,14 +984,14 @@ pocl_remote_build_binary (cl_program program, cl_uint device_i,
   unsigned num_relevant_devices = 0;
   unsigned num_devices = program->num_devices;
 
-  uint32_t relevant_devices[num_devices];
-  uint32_t relevant_platforms[num_devices];
+  uint32_t *relevant_devices = alloca (sizeof (uint32_t) * num_devices);
+  uint32_t *relevant_platforms = alloca (sizeof (uint32_t) * num_devices);
 
-  unsigned build_indexes[num_devices];
-  char *build_logs[num_devices];
+  unsigned *build_indexes = alloca (sizeof (unsigned) * num_devices);
+  char **build_logs = alloca (sizeof (char *) * num_devices);
 
-  char *binaries[num_devices];
-  size_t binary_sizes[num_devices];
+  char **binaries = alloca (sizeof (char *) * num_devices);
+  size_t *binary_sizes = alloca (sizeof (size_t) * num_devices);
 
   size_t total_binary_request_size = sizeof (uint32_t);
   int err;
@@ -983,11 +1025,11 @@ pocl_remote_build_binary (cl_program program, cl_uint device_i,
     assert ((size_t)(buf - buffer) == total_binary_request_size);
 
     err = pocl_network_build_or_link_program (
-        d, buffer, total_binary_request_size, CL_TRUE, CL_FALSE, spirv_build,
-        prog_id, program->compiler_options, &kernel_meta_bytes,
-        &kernel_meta_size, relevant_devices, relevant_platforms,
-        num_relevant_devices, build_logs, NULL, NULL, d->svm_region_offset,
-        !link_program, 0);
+      d, buffer, total_binary_request_size, CL_TRUE, CL_FALSE, CL_FALSE,
+      spirv_build, prog_id, program->compiler_options, &kernel_meta_bytes,
+      &kernel_meta_size, relevant_devices, relevant_platforms,
+      num_relevant_devices, build_logs, NULL, NULL, d->svm_region_offset,
+      !link_program, 0);
     free (buffer);
   }
 
@@ -1011,7 +1053,7 @@ pocl_remote_build_binary (cl_program program, cl_uint device_i,
 
       program->data[real_i] = pd;
       assert ((!spirv_build && program->binary_sizes[real_i] > 0)
-              || spirv_build && program->program_il_size > 0);
+              || (spirv_build && program->program_il_size > 0));
       assert ((!spirv_build && program->binaries[real_i] != NULL)
               || (spirv_build && program->program_il != NULL));
 
@@ -1067,14 +1109,88 @@ pocl_remote_build_builtin (cl_program program, cl_uint device_i)
   char *build_log = NULL;
 
   int err = pocl_network_build_or_link_program (
-      d, program->concated_builtin_names,
-      strlen (program->concated_builtin_names), CL_FALSE, CL_TRUE, CL_FALSE,
-      prog_id, program->compiler_options, &kernel_meta_bytes,
-      &kernel_meta_size,
-      &d->remote_device_index,   // relevant_devices,
-      &d->remote_platform_index, // relevant_platforms,,
-      1, &build_log, NULL, 0, 0, 0, 0);
+    d, program->concated_builtin_names,
+    strlen (program->concated_builtin_names), CL_FALSE, CL_TRUE, CL_FALSE,
+    CL_FALSE, prog_id, program->compiler_options, &kernel_meta_bytes,
+    &kernel_meta_size,
+    &d->remote_device_index,   // relevant_devices,
+    &d->remote_platform_index, // relevant_platforms,,
+    1, &build_log, NULL, 0, 0, 0, 0);
 
+  if (err)
+    return err;
+
+  program_data_t *pd = malloc (sizeof (program_data_t));
+  pd->kernel_meta_bytes = kernel_meta_bytes;
+  pd->kernel_meta_size = kernel_meta_size;
+  pd->refcount = 1;
+
+  program->data[device_i] = pd;
+
+  return CL_SUCCESS;
+}
+
+int
+pocl_remote_build_defined_builtin (cl_program program, cl_uint device_i)
+{
+  cl_device_id device = program->devices[device_i];
+  remote_device_data_t *d = device->data;
+  assert (strncmp (device->ops->device_name, remote_device_name, 7) == 0);
+
+  assert (program->num_builtin_kernels > 0);
+
+  uint32_t prog_id = program->id;
+  assert (prog_id);
+
+  if (program->data[device_i] != NULL)
+    {
+      POCL_MSG_PRINT_REMOTE ("Program %i already built for device %u \n",
+                             prog_id, device_i);
+      return CL_SUCCESS;
+    }
+  else
+    POCL_MSG_PRINT_REMOTE (
+      "Building Program %i with defined builtins for device %u \n", prog_id,
+      device_i);
+
+  size_t payload_size = sizeof (uint64_t);
+  for (size_t i = 0; i < program->num_builtin_kernels; ++i)
+    {
+      payload_size += sizeof (uint64_t);
+      payload_size += strlen (program->builtin_kernel_names[i]) + 1;
+      payload_size += pocl_serialize_dbk_attribs (
+        program->builtin_kernel_ids[i], program->builtin_kernel_attributes[i],
+        NULL);
+    }
+  char *payload = malloc (payload_size);
+  char *cursor = payload;
+  uint64_t num_dbks = program->num_builtin_kernels;
+  memcpy (cursor, &num_dbks, sizeof (num_dbks));
+  cursor += sizeof (num_dbks);
+  for (size_t i = 0; i < program->num_builtin_kernels; ++i)
+    {
+      uint64_t name_len = strlen (program->builtin_kernel_names[i]) + 1;
+      memcpy (cursor, &name_len, sizeof (name_len));
+      cursor += sizeof (name_len);
+      memcpy (cursor, program->builtin_kernel_names[i], name_len);
+      cursor += name_len;
+      pocl_serialize_dbk_attribs (program->builtin_kernel_ids[i],
+                                  program->builtin_kernel_attributes[i],
+                                  &cursor);
+    }
+
+  char *kernel_meta_bytes = NULL;
+  size_t kernel_meta_size = 0;
+  char *build_log = NULL;
+
+  int err = pocl_network_build_or_link_program (
+    d, payload, payload_size, CL_FALSE, CL_TRUE, CL_TRUE, CL_FALSE, prog_id,
+    program->compiler_options, &kernel_meta_bytes, &kernel_meta_size,
+    &d->remote_device_index,   // relevant_devices,
+    &d->remote_platform_index, // relevant_platforms,,
+    1, &build_log, NULL, 0, 0, 0, 0);
+
+  free(payload);
   if (err)
     return err;
 
@@ -1111,14 +1227,14 @@ int pocl_remote_link_program (cl_program program, cl_uint device_i,
   unsigned num_relevant_devices = 0;
   unsigned num_devices = program->num_devices;
 
-  uint32_t relevant_devices[num_devices];
-  uint32_t relevant_platforms[num_devices];
+  uint32_t *relevant_devices = alloca (sizeof (uint32_t) * num_devices);
+  uint32_t *relevant_platforms = alloca (sizeof (uint32_t) * num_devices);
 
-  unsigned build_indexes[num_devices];
-  char *build_logs[num_devices];
+  unsigned *build_indexes = alloca (sizeof (unsigned) * num_devices);
+  char **build_logs = alloca (sizeof (char *) * num_devices);
 
-  char *binaries[num_devices];
-  size_t binary_sizes[num_devices];
+  char **binaries = alloca (sizeof (char *) * num_devices);
+  size_t *binary_sizes = alloca (sizeof (size_t) * num_devices);
 
   size_t total_binary_request_size = sizeof (uint32_t);
   int err;
@@ -1140,7 +1256,8 @@ int pocl_remote_link_program (cl_program program, cl_uint device_i,
   char *kernel_meta_bytes = NULL;
   size_t kernel_meta_size = 0;
 
-  uint32_t input_prog_ids[num_input_programs + 1];
+  uint32_t *input_prog_ids
+      = alloca (sizeof (uint32_t) * (num_input_programs + 1));
   input_prog_ids[0] = num_input_programs;
   for (i = 0; i < num_input_programs; ++i)
     input_prog_ids[i + 1] = input_programs[i]->id;
@@ -1149,10 +1266,11 @@ int pocl_remote_link_program (cl_program program, cl_uint device_i,
       = sizeof (uint32_t) + sizeof (uint32_t) * num_input_programs;
 
   err = pocl_network_build_or_link_program (
-      d, (const void *)&input_prog_ids[0], total_binary_request_size, 0, 0, 0,
-      target_prog_id, program->compiler_options, &kernel_meta_bytes,
-      &kernel_meta_size, relevant_devices, relevant_platforms,
-      num_relevant_devices, build_logs, binaries, binary_sizes, 0, 0, 1);
+    d, (const void *)&input_prog_ids[0], total_binary_request_size, CL_FALSE,
+    CL_FALSE, CL_FALSE, CL_FALSE, target_prog_id, program->compiler_options,
+    &kernel_meta_bytes, &kernel_meta_size, relevant_devices,
+    relevant_platforms, num_relevant_devices, build_logs, binaries,
+    binary_sizes, 0, 0, 1);
 
   ///////////////////////////////////////////////////////////////////////////
 
@@ -1181,21 +1299,20 @@ int pocl_remote_link_program (cl_program program, cl_uint device_i,
         program->data[real_i] = pd;
         program->binary_sizes[real_i] = binary_sizes[i];
         binary_sizes[i] = 0;
-        program->binaries[real_i] = binaries[i];
+        program->binaries[real_i] = (unsigned char *)binaries[i];
         binaries[i] = NULL;
 
         assert (program->binary_sizes[real_i] > 0);
         POCL_MSG_PRINT_REMOTE ("BINARY SIZE [%u]: %zu \n", real_i,
                                program->binary_sizes[real_i]);
 
-        if (pocl_exists (program_bc_path) == 0)
-          {
-            err = pocl_cache_write_generic_objfile (
-                temp_path, (char *)program->binaries[real_i],
-                program->binary_sizes[real_i]);
-            assert (err == 0);
-            pocl_rename (temp_path, program_bc_path);
-          }
+        pocl_cache_program_bc_path (program_bc_path, program, real_i);
+        err = pocl_cache_write_generic_objfile (
+          temp_path, (char *)program->binaries[real_i],
+          program->binary_sizes[real_i]);
+        if (err)
+          return err;
+        pocl_rename (temp_path, program_bc_path);
       }
   }
 
@@ -1206,12 +1323,39 @@ int
 pocl_remote_supports_binary (cl_device_id device, size_t length,
                              const char *binary)
 {
-  if (pocl_bitcode_is_spirv_execmodel_kernel (binary, length)
+  if (pocl_bitcode_is_spirv_execmodel_kernel (binary, length,
+                                              device->address_bits)
       && device->supported_spir_v_versions != NULL
       && strncmp (device->supported_spir_v_versions, "SPIR-V", 6) == 0)
     return 1;
   /* We should delegate to the remote here to be strict. */
   return 0;
+}
+
+extern pocl_kernel_metadata_t pocl_BIDescriptors[BIKERNELS];
+
+int
+pocl_remote_supports_dbk (cl_device_id device,
+                          cl_dbk_id_exp kernel_id,
+                          const void *kernel_attributes)
+{
+  if (strstr (device->extensions, "cl_exp_defined_builtin_kernels") != NULL)
+    {
+      for (size_t i = 0; i < BIKERNELS; ++i)
+        {
+          pocl_kernel_metadata_t *meta = &pocl_BIDescriptors[i];
+          if (kernel_id != meta->builtin_kernel_id)
+            continue;
+
+          if (strstr (device->builtin_kernel_list, meta->name) != NULL)
+            return pocl_validate_dbk_attributes (kernel_id, kernel_attributes,
+                                                 NULL);
+
+          return CL_DBK_UNSUPPORTED_EXP;
+        }
+    }
+
+  return CL_DBK_UNSUPPORTED_EXP;
 }
 
 int
@@ -1380,10 +1524,10 @@ remote_push_command (_cl_command_node *node)
   cl_device_id device = node->device;
   remote_device_data_t *d = (remote_device_data_t *)device->data;
 
-  POCL_FAST_LOCK (d->wq_lock);
+  POCL_LOCK (d->wq_lock);
   DL_APPEND (d->work_queue, node);
   POCL_SIGNAL_COND (d->wakeup_cond);
-  POCL_FAST_UNLOCK (d->wq_lock);
+  POCL_UNLOCK (d->wq_lock);
 }
 
 void
@@ -1398,7 +1542,7 @@ pocl_remote_submit (_cl_command_node *node, cl_command_queue cq)
   POCL_INIT_COND (e_d->event_cond);
   e->data = (void *)e_d;
 
-  node->ready = 1;
+  node->state = POCL_COMMAND_READY;
   if (pocl_command_is_ready (node->sync.event.event))
     {
       pocl_update_event_submitted (node->sync.event.event);
@@ -1434,8 +1578,8 @@ pocl_remote_join (cl_device_id device, cl_command_queue cq)
       else
         {
           POCL_MSG_PRINT_EVENTS (
-            "remote: waiting for commands(s), last event id %zu\n",
-            cq->last_event.event->id);
+            "remote: waiting for %lu commands(s), last event id %zu\n",
+            cq->command_count, cq->last_event.event->id);
           POCL_WAIT_COND (dd->cq_cond, cq->pocl_lock);
         }
     }
@@ -1457,11 +1601,20 @@ pocl_remote_notify (cl_device_id device, cl_event event, cl_event finished)
 
   if (finished->status < CL_COMPLETE)
     {
-      pocl_update_event_failed (event);
+      /* Unlock the finished event in order to prevent a lock order violation
+       * with the command queue that will be locked during
+       * pocl_update_event_failed.
+       */
+      pocl_unlock_events_inorder (event, finished);
+      pocl_update_event_failed (CL_FAILED, NULL, 0, event, NULL);
+      /* Lock events in this order to avoid a lock order violation between
+       * the finished/notifier and event/wait events.
+       */
+      pocl_lock_events_inorder (finished, event);
       return;
     }
 
-  if (!node->ready)
+  if (node->state != POCL_COMMAND_READY)
     {
       POCL_MSG_PRINT_EVENTS (
           "remote: command related to the notified event %lu not ready\n",
@@ -1559,10 +1712,413 @@ remote_finish_command (void *arg, _cl_command_node *node,
       break;
     }
 
-  POCL_FAST_LOCK (d->wq_lock);
+  POCL_LOCK (d->wq_lock);
   DL_APPEND (d->finished_list, node);
   POCL_SIGNAL_COND (d->wakeup_cond);
-  POCL_FAST_UNLOCK (d->wq_lock);
+  POCL_UNLOCK (d->wq_lock);
+}
+
+static void
+prepare_kernel_args (cl_device_id device,
+                     cl_kernel kernel,
+                     kernel_data_t *kd,
+                     struct pocl_argument *dynamic_args,
+                     int *requires_kernarg_update)
+{
+  struct pocl_argument *al = NULL;
+  pocl_kernel_metadata_t *kernel_md = kernel->meta;
+  remote_device_data_t *ddata = (remote_device_data_t *)device->data;
+
+  /* TODO this is unecessarily rerun if pod_total_size == 0. */
+  if (kd->pod_arg_storage == NULL)
+    {
+      assert (kd->pod_total_size == 0);
+      for (unsigned i = 0; i < kernel_md->num_args; ++i)
+        {
+          al = &(dynamic_args[i]);
+          if (ARG_IS_LOCAL (kernel_md->arg_info[i]))
+            continue;
+          if (kernel_md->arg_info[i].type == POCL_ARG_TYPE_NONE)
+            {
+              kd->pod_total_size += al->size;
+            }
+        }
+      if (kd->pod_total_size > 0)
+        kd->pod_arg_storage = calloc (1, kd->pod_total_size);
+    }
+
+  char *pod_arg_pointer = kd->pod_arg_storage;
+  uint64_t *arg_array = kd->arg_array;
+  unsigned char *ptr_is_svm = kd->ptr_is_svm;
+
+  /* Process the kernel arguments.  */
+  for (unsigned i = 0; i < kernel_md->num_args; ++i)
+    {
+      ptr_is_svm[i] = 0;
+      al = &(dynamic_args[i]);
+      assert (al->is_set > 0);
+      if (ARG_IS_LOCAL (kernel_md->arg_info[i]))
+        {
+          *requires_kernarg_update = 1;
+          arg_array[i] = al->size;
+        }
+      else if (al->is_raw_ptr)
+        {
+          arg_array[i] = (uint64_t) * (void **)al->value;
+          POCL_MSG_PRINT_MEMORY (
+            "Adding SVM pool offset %zu to an SVM ptr arg %u (%p to %p)\n",
+            ddata->svm_region_offset, i, (void *)arg_array[i],
+            (char *)arg_array[i] + ddata->svm_region_offset);
+          arg_array[i] = arg_array[i] + ddata->svm_region_offset;
+          *requires_kernarg_update = 1;
+          ptr_is_svm[i] = 1;
+        }
+      else if ((kernel_md->arg_info[i].type == POCL_ARG_TYPE_POINTER)
+               || (kernel_md->arg_info[i].type == POCL_ARG_TYPE_IMAGE))
+        {
+          /* cl_mem and cl_image refer to opaque identifiers */
+          uint32_t mem_id = 0;
+          if (al->value)
+            {
+              cl_mem mem = (*(cl_mem *)(al->value));
+              if (mem)
+                mem_id = (uintptr_t)(mem->device_ptrs[device->global_mem_id]
+                                       .mem_ptr);
+            }
+          else
+            {
+              POCL_MSG_WARN ("NULL PTR ARG DETECTED: %s / ARG %i: %s \n",
+                             kernel->name, i, kernel_md->arg_info[i].name);
+            }
+
+          if (arg_array[i] != mem_id)
+            {
+              *requires_kernarg_update = 1;
+              arg_array[i] = mem_id;
+            }
+        }
+      else if (kernel_md->arg_info[i].type == POCL_ARG_TYPE_SAMPLER)
+        {
+          cl_sampler s = *(cl_sampler *)(al->value);
+          uint32_t remote_id = (uintptr_t)(s->device_data[device->dev_id]);
+          if (arg_array[i] != remote_id)
+            {
+              *requires_kernarg_update = 1;
+              arg_array[i] = remote_id;
+            }
+        }
+      else
+        {
+          assert (kernel_md->arg_info[i].type == POCL_ARG_TYPE_NONE);
+          arg_array[i] = al->size;
+          if (memcmp (pod_arg_pointer, al->value, al->size) != 0)
+            {
+              *requires_kernarg_update = 1;
+              memcpy (pod_arg_pointer, al->value, al->size);
+              assert (pod_arg_pointer
+                      <= (kd->pod_arg_storage + kd->pod_total_size));
+            }
+          pod_arg_pointer += al->size;
+        }
+    }
+
+  assert (pod_arg_pointer <= (kd->pod_arg_storage + kd->pod_total_size));
+}
+
+static cl_int
+copy_deferred_command (char *buf,
+                       _cl_command_node *node,
+                       cl_command_buffer_khr cmdbuf,
+                       size_t *size_out)
+{
+#define COPY(src, size)                                                       \
+  do                                                                          \
+    {                                                                         \
+      if (buf && (size))                                                      \
+        {                                                                     \
+          memcpy (buf + copied_size, (src), (size));                          \
+        }                                                                     \
+      copied_size += (size);                                                  \
+    }                                                                         \
+  while (0)
+  uint32_t command_size = 0;
+  size_t copied_size = 0;
+  size_t extra_size = 0;
+  char *extra_data = NULL;
+  size_t extra_size2 = 0;
+  char *extra_data2 = NULL;
+  size_t dev_i = cmdbuf->queues[node->queue_idx]->device->global_mem_id;
+  RequestMsg_t req;
+  memset (&req, 0, sizeof (req));
+  req.cq_id = node->queue_idx;
+  req.waitlist_size = node->sync.syncpoint.num_sync_points_in_wait_list;
+  // TODO: unify this with the normal command handling somehow (currently
+  // mostly done in remote.c)
+  switch (node->type)
+    {
+    case CL_COMMAND_BARRIER:
+      req.message_type = MessageType_Barrier;
+      break;
+    case CL_COMMAND_COPY_BUFFER:
+      req.message_type = MessageType_CopyBuffer;
+
+      req.m.copy.src_buffer_id
+        = (uintptr_t)node->command.copy.src->device_ptrs[dev_i].mem_ptr;
+      req.m.copy.dst_buffer_id
+        = (uintptr_t)node->command.copy.dst->device_ptrs[dev_i].mem_ptr;
+      req.m.copy.size_buffer_id
+        = node->command.copy.src_content_size_mem_id
+            ? (uintptr_t)node->command.copy.src_content_size_mem_id->mem_ptr
+            : 0;
+
+      req.m.copy.src_offset = node->command.copy.src_offset;
+      req.m.copy.dst_offset = node->command.copy.dst_offset;
+      req.m.copy.size = node->command.copy.size;
+      break;
+    case CL_COMMAND_COPY_BUFFER_RECT:
+      req.message_type = MessageType_CopyBufferRect;
+
+      req.m.copy_rect.src_buffer_id
+        = (uintptr_t)node->command.copy_rect.src->device_ptrs[dev_i].mem_ptr;
+      req.m.copy_rect.dst_buffer_id
+        = (uintptr_t)node->command.copy_rect.dst->device_ptrs[dev_i].mem_ptr;
+
+      req.m.copy_rect.dst_origin.x = node->command.copy_rect.dst_origin[0];
+      req.m.copy_rect.dst_origin.y = node->command.copy_rect.dst_origin[1];
+      req.m.copy_rect.dst_origin.z = node->command.copy_rect.dst_origin[2];
+      req.m.copy_rect.src_origin.x = node->command.copy_rect.src_origin[0];
+      req.m.copy_rect.src_origin.y = node->command.copy_rect.src_origin[1];
+      req.m.copy_rect.src_origin.z = node->command.copy_rect.src_origin[2];
+      req.m.copy_rect.region.x = node->command.copy_rect.region[0];
+      req.m.copy_rect.region.y = node->command.copy_rect.region[1];
+      req.m.copy_rect.region.z = node->command.copy_rect.region[2];
+      req.m.copy_rect.dst_row_pitch = node->command.copy_rect.dst_row_pitch;
+      req.m.copy_rect.dst_slice_pitch
+        = node->command.copy_rect.dst_slice_pitch;
+      req.m.copy_rect.src_row_pitch = node->command.copy_rect.src_row_pitch;
+      req.m.copy_rect.src_slice_pitch
+        = node->command.copy_rect.src_slice_pitch;
+      break;
+    case CL_COMMAND_COPY_BUFFER_TO_IMAGE:
+      req.message_type = MessageType_CopyBuffer2Image;
+
+      req.m.copy_buf2img.src_buf_id
+        = (uintptr_t)node->command.write_image.src->device_ptrs[dev_i].mem_ptr;
+      req.obj_id
+        = (uintptr_t)node->command.write_image.dst->device_ptrs[dev_i].mem_ptr;
+
+      req.m.copy_buf2img.origin.x = node->command.write_image.origin[0];
+      req.m.copy_buf2img.origin.y = node->command.write_image.origin[1];
+      req.m.copy_buf2img.origin.z = node->command.write_image.origin[2];
+      req.m.copy_buf2img.region.x = node->command.write_image.region[0];
+      req.m.copy_buf2img.region.y = node->command.write_image.region[1];
+      req.m.copy_buf2img.region.z = node->command.write_image.region[2];
+      req.m.copy_buf2img.src_offset = node->command.write_image.src_offset;
+      break;
+    case CL_COMMAND_COPY_IMAGE:
+      req.message_type = MessageType_CopyImage2Image;
+
+      req.m.copy_img2img.src_image_id
+        = (uintptr_t)node->command.copy_image.src->device_ptrs[dev_i].mem_ptr;
+      req.m.copy_img2img.dst_image_id
+        = (uintptr_t)node->command.copy_image.dst->device_ptrs[dev_i].mem_ptr;
+
+      req.m.copy_img2img.dst_origin.x = node->command.copy_image.dst_origin[0];
+      req.m.copy_img2img.dst_origin.y = node->command.copy_image.dst_origin[1];
+      req.m.copy_img2img.dst_origin.z = node->command.copy_image.dst_origin[2];
+      req.m.copy_img2img.src_origin.x = node->command.copy_image.src_origin[0];
+      req.m.copy_img2img.src_origin.y = node->command.copy_image.src_origin[1];
+      req.m.copy_img2img.src_origin.z = node->command.copy_image.src_origin[2];
+      req.m.copy_img2img.region.x = node->command.copy_image.region[0];
+      req.m.copy_img2img.region.y = node->command.copy_image.region[1];
+      req.m.copy_img2img.region.z = node->command.copy_image.region[2];
+      break;
+    case CL_COMMAND_COPY_IMAGE_TO_BUFFER:
+      req.message_type = MessageType_CopyImage2Buffer;
+
+      req.obj_id
+        = (uintptr_t)node->command.read_image.src->device_ptrs[dev_i].mem_ptr;
+      req.m.copy_img2buf.dst_buf_id
+        = (uintptr_t)node->command.read_image.dst->device_ptrs[dev_i].mem_ptr;
+
+      req.m.copy_img2buf.origin.x = node->command.read_image.origin[0];
+      req.m.copy_img2buf.origin.y = node->command.read_image.origin[1];
+      req.m.copy_img2buf.origin.z = node->command.read_image.origin[2];
+      req.m.copy_img2buf.region.x = node->command.read_image.region[0];
+      req.m.copy_img2buf.region.y = node->command.read_image.region[1];
+      req.m.copy_img2buf.region.z = node->command.read_image.region[2];
+      req.m.copy_img2buf.dst_offset = node->command.read_image.dst_offset;
+      break;
+    case CL_COMMAND_FILL_BUFFER:
+      req.message_type = MessageType_FillBuffer;
+
+      req.obj_id
+        = (uintptr_t)node->command.memfill.dst->device_ptrs[dev_i].mem_ptr;
+
+      req.m.fill_buffer.dst_offset = node->command.memfill.offset;
+      req.m.fill_buffer.size = node->command.memfill.size;
+      req.m.fill_buffer.pattern_size = node->command.memfill.pattern_size;
+
+      extra_data = (char *)node->command.memfill.pattern;
+      extra_size = node->command.memfill.pattern_size;
+
+      break;
+    case CL_COMMAND_FILL_IMAGE:
+      req.message_type = MessageType_FillImageRect;
+
+      req.obj_id
+        = (uintptr_t)node->command.fill_image.dst->device_ptrs[dev_i].mem_ptr;
+
+      req.m.fill_image.origin.x = node->command.fill_image.origin[0];
+      req.m.fill_image.origin.y = node->command.fill_image.origin[1];
+      req.m.fill_image.origin.z = node->command.fill_image.origin[2];
+      req.m.fill_image.region.x = node->command.fill_image.region[0];
+      req.m.fill_image.region.y = node->command.fill_image.region[1];
+      req.m.fill_image.region.z = node->command.fill_image.region[2];
+
+      extra_data = (char *)&node->command.fill_image.orig_pixel;
+      extra_size = 16;
+      break;
+    case CL_COMMAND_NDRANGE_KERNEL:
+      {
+        int requires_kernarg_update;
+        cl_kernel kernel = node->command.run.kernel;
+        kernel_data_t *kd
+          = (kernel_data_t *)(kernel->data[node->program_device_i]);
+
+        req.message_type = MessageType_RunKernel;
+        req.obj_id = (uint32_t)node->command.run.kernel->id;
+
+        pocl_kernel_metadata_t *kernel_md = node->command.run.kernel->meta;
+
+        req.m.run_kernel.local.x = node->command.run.pc.local_size[0];
+        req.m.run_kernel.local.y = node->command.run.pc.local_size[1];
+        req.m.run_kernel.local.z = node->command.run.pc.local_size[2];
+        ulong *ngroups = node->command.run.pc.num_groups;
+        req.m.run_kernel.global.x = req.m.run_kernel.local.x * ngroups[0];
+        req.m.run_kernel.global.y = req.m.run_kernel.local.y * ngroups[1];
+        req.m.run_kernel.global.z = req.m.run_kernel.local.z * ngroups[2];
+        req.m.run_kernel.offset.x = node->command.run.pc.global_offset[0];
+        req.m.run_kernel.offset.y = node->command.run.pc.global_offset[1];
+        req.m.run_kernel.offset.z = node->command.run.pc.global_offset[2];
+        req.m.run_kernel.has_local = 1;
+        req.m.run_kernel.dim = node->command.run.pc.work_dim;
+        req.m.run_kernel.has_new_args
+          = 1; //(uint8_t)node->command.run.requires_kernarg_update;
+
+        req.m.run_kernel.args_num = kernel_md->num_args;
+        req.m.run_kernel.pod_arg_size = kd->pod_total_size;
+        extra_size = (kernel_md->num_args * sizeof (uint64_t))
+                     + (kernel_md->num_args * sizeof (unsigned char));
+        extra_size2 = kd->pod_total_size;
+        if (buf)
+          {
+            // Update kernel args from command node
+            cl_device_id queue_dev = cmdbuf->queues[node->queue_idx]->device;
+            prepare_kernel_args (queue_dev, kernel, kd,
+                                 node->command.run.arguments,
+                                 &requires_kernarg_update);
+
+            extra_data = malloc (extra_size);
+            unsigned char *ptr_is_svm_pos
+              = (unsigned char *)extra_data
+                + (kernel_md->num_args * sizeof (uint64_t));
+            memcpy (extra_data, kd->arg_array,
+                    kernel_md->num_args * sizeof (uint64_t));
+            memcpy (ptr_is_svm_pos, kd->ptr_is_svm,
+                    kernel_md->num_args * sizeof (unsigned char));
+            extra_data2 = kd->pod_arg_storage;
+          }
+      }
+      break;
+
+    default:
+      POCL_MSG_ERR (
+        "Remote does not support command 0x%X in command buffers yet\n",
+        node->type);
+      return CL_INVALID_COMMAND_BUFFER_KHR;
+      break;
+    }
+
+  command_size = request_size (req.message_type);
+
+  COPY (&command_size, sizeof (command_size));
+  COPY (&req, command_size);
+  {
+    /* Waitlists are uint64_t for events, expand syncpoints to match */
+    uint64_t *waitlist_tmp = NULL;
+    if (req.waitlist_size != 0)
+      {
+        waitlist_tmp = malloc (req.waitlist_size * sizeof (uint64_t));
+      }
+    for (uint32_t i = 0; i < req.waitlist_size; ++i)
+      {
+        waitlist_tmp[i]
+          = (uint64_t)node->sync.syncpoint.sync_point_wait_list[i];
+      }
+    COPY (waitlist_tmp, req.waitlist_size * sizeof (uint64_t));
+    POCL_MEM_FREE (waitlist_tmp);
+  }
+  COPY (extra_data, extra_size);
+  COPY (extra_data2, extra_size2);
+
+#undef COPY
+
+  if (node->type == CL_COMMAND_NDRANGE_KERNEL)
+    free (extra_data);
+
+  if (size_out)
+    *size_out = copied_size;
+
+  return 0;
+}
+
+int
+pocl_remote_create_finalized_command_buffer (cl_device_id device,
+                                             cl_command_buffer_khr cmdbuf)
+{
+  int r = CL_SUCCESS;
+  size_t commands_size = 0;
+  size_t num_commands = 0;
+  size_t queues_size = sizeof (uint32_t) * cmdbuf->num_queues;
+  uint64_t queues_offset = 0;
+  _cl_command_node *node;
+  LL_FOREACH (cmdbuf->cmds, node)
+    {
+      size_t cmd_size;
+      copy_deferred_command (NULL, node, cmdbuf, &cmd_size);
+      commands_size += cmd_size;
+      num_commands += 1;
+    }
+
+  char *payload = malloc (commands_size + queues_size);
+  char *payload_cursor = payload;
+  for (cl_uint i = 0; i < cmdbuf->num_queues; ++i)
+    {
+      *((uint32_t *)payload_cursor) = (uint32_t)cmdbuf->queues[i]->id;
+      payload_cursor += sizeof (uint32_t);
+    }
+
+  uint64_t commands_offset = (uint64_t)(payload_cursor - payload);
+  LL_FOREACH (cmdbuf->cmds, node)
+    {
+      size_t cmd_size;
+      copy_deferred_command (payload_cursor, node, cmdbuf, &cmd_size);
+      payload_cursor += cmd_size;
+    }
+
+  r = pocl_network_create_command_buffer (
+    device->data, cmdbuf->id, cmdbuf->num_syncpoints, commands_offset,
+    commands_size, cmdbuf->num_queues, queues_offset, payload);
+  POCL_MEM_FREE (payload);
+  return r;
+}
+
+int
+pocl_remote_free_command_buffer (cl_device_id device,
+                                 cl_command_buffer_khr cmdbuf)
+{
+  return pocl_network_free_command_buffer (device->data, cmdbuf->id);
 }
 
 int
@@ -1942,114 +2498,19 @@ pocl_remote_async_run (void *data, _cl_command_node *cmd)
 {
   uint32_t queue_id = (uint32_t)cmd->sync.event.event->queue->id;
 
-  struct pocl_argument *al = NULL;
   unsigned i;
   cl_kernel kernel = cmd->command.run.kernel;
   unsigned dev_i = cmd->program_device_i;
   int requires_kernarg_update = 0;
 
-  pocl_kernel_metadata_t *kernel_md = kernel->meta;
   remote_device_data_t *ddata = (remote_device_data_t *)data;
 
+  assert (kernel != NULL);
   kernel_data_t *kd = (kernel_data_t *)(kernel->data[dev_i]);
   assert (kd != NULL);
 
-  /* TODO this is unecessarily rerun if pod_total_size == 0. */
-  if (kd->pod_arg_storage == NULL)
-    {
-      assert (kd->pod_total_size == 0);
-      for (i = 0; i < kernel_md->num_args; ++i)
-        {
-          al = &(cmd->command.run.arguments[i]);
-          if (ARG_IS_LOCAL (kernel_md->arg_info[i]))
-            continue;
-          if (kernel_md->arg_info[i].type == POCL_ARG_TYPE_NONE)
-            {
-              kd->pod_total_size += al->size;
-            }
-        }
-      if (kd->pod_total_size > 0)
-        kd->pod_arg_storage = calloc (1, kd->pod_total_size);
-    }
-
-  char *pod_arg_pointer = kd->pod_arg_storage;
-  uint64_t *arg_array = kd->arg_array;
-  unsigned char *ptr_is_svm = kd->ptr_is_svm;
-
-  /* Process the kernel arguments.  */
-  for (i = 0; i < kernel_md->num_args; ++i)
-    {
-      ptr_is_svm[i] = 0;
-      al = &(cmd->command.run.arguments[i]);
-      assert (al->is_set > 0);
-      if (ARG_IS_LOCAL (kernel_md->arg_info[i]))
-        {
-          requires_kernarg_update = 1;
-          arg_array[i] = al->size;
-        }
-      else if (al->is_raw_ptr)
-        {
-          arg_array[i] = (uint64_t) * (void **)al->value;
-          POCL_MSG_PRINT_MEMORY (
-            "Adding SVM pool offset %zu to an SVM ptr arg %u (%p to %p)\n",
-            ddata->svm_region_offset, i, (void *)arg_array[i],
-            (char *)arg_array[i] + ddata->svm_region_offset);
-          arg_array[i] = arg_array[i] + ddata->svm_region_offset;
-          requires_kernarg_update = 1;
-          ptr_is_svm[i] = 1;
-        }
-      else if ((kernel_md->arg_info[i].type == POCL_ARG_TYPE_POINTER)
-               || (kernel_md->arg_info[i].type == POCL_ARG_TYPE_IMAGE))
-        {
-          /* cl_mem and cl_image refer to opaque identifiers */
-          uint32_t mem_id = 0;
-          if (al->value)
-            {
-              cl_mem mem = (*(cl_mem *)(al->value));
-              if (mem)
-                mem_id
-                    = (uintptr_t)(mem->device_ptrs[cmd->device->global_mem_id]
-                                      .mem_ptr);
-            }
-          else
-            {
-              POCL_MSG_WARN ("NULL PTR ARG DETECTED: %s / ARG %i: %s \n",
-                             kernel->name, i, kernel_md->arg_info[i].name);
-            }
-
-          if (arg_array[i] != mem_id)
-            {
-              requires_kernarg_update = 1;
-              arg_array[i] = mem_id;
-            }
-        }
-      else if (kernel_md->arg_info[i].type == POCL_ARG_TYPE_SAMPLER)
-        {
-          cl_sampler s = *(cl_sampler *)(al->value);
-          uint32_t remote_id
-              = (uintptr_t)(s->device_data[cmd->device->dev_id]);
-          if (arg_array[i] != remote_id)
-            {
-              requires_kernarg_update = 1;
-              arg_array[i] = remote_id;
-            }
-        }
-      else
-        {
-          assert (kernel_md->arg_info[i].type == POCL_ARG_TYPE_NONE);
-          arg_array[i] = al->size;
-          if (memcmp (pod_arg_pointer, al->value, al->size) != 0)
-            {
-              requires_kernarg_update = 1;
-              memcpy (pod_arg_pointer, al->value, al->size);
-              assert (pod_arg_pointer
-                      <= (kd->pod_arg_storage + kd->pod_total_size));
-            }
-          pod_arg_pointer += al->size;
-        }
-    }
-
-  assert (pod_arg_pointer <= (kd->pod_arg_storage + kd->pod_total_size));
+  prepare_kernel_args (cmd->device, kernel, kd, cmd->command.run.arguments,
+                       &requires_kernarg_update);
 
   vec3_t local
       = { cmd->command.run.pc.local_size[0], cmd->command.run.pc.local_size[1],
@@ -2067,6 +2528,14 @@ pocl_remote_async_run (void *data, _cl_command_node *cmd)
                                    cmd->command.run.pc.work_dim, local, global,
                                    offset, remote_finish_command, data, cmd);
   assert (r == 0);
+}
+
+cl_int
+pocl_remote_async_run_command_buffer (void *data, _cl_command_node *cmd)
+{
+  int r
+    = pocl_network_run_command_buffer (data, remote_finish_command, data, cmd);
+  return r;
 }
 
 cl_int
@@ -2286,7 +2755,7 @@ remote_start_command (remote_device_data_t *d, _cl_command_node *node)
 
   if (*(cq->device->available) == CL_FALSE)
     {
-      pocl_update_event_device_lost (event);
+      node->state = POCL_COMMAND_FAILED;
       goto EARLY_FINISH;
     }
   pocl_update_event_running (event);
@@ -2543,17 +3012,20 @@ remote_start_command (remote_device_data_t *d, _cl_command_node *node)
 
     case CL_COMMAND_MARKER:
     case CL_COMMAND_BARRIER:
-    case CL_COMMAND_COMMAND_BUFFER_KHR:
       goto EARLY_FINISH;
+
+    case CL_COMMAND_COMMAND_BUFFER_KHR:
+      pocl_remote_async_run_command_buffer (d, node);
+      return;
 
     default:
       POCL_ABORT_UNIMPLEMENTED ("Unimplemented remote command.\n");
     }
 
 EARLY_FINISH:
-  POCL_FAST_LOCK (d->wq_lock);
+  POCL_LOCK (d->wq_lock);
   DL_APPEND (d->finished_list, node);
-  POCL_FAST_UNLOCK (d->wq_lock);
+  POCL_UNLOCK (d->wq_lock);
 }
 
 static void *
@@ -2566,13 +3038,13 @@ pocl_remote_driver_pthread (void *cldev)
 
   /* Sleep so we have time to run the task graph dumper in main(). */
   /* sleep (2); */
-  POCL_FAST_LOCK (d->wq_lock);
+  POCL_LOCK (d->wq_lock);
 
   while (1)
     {
       if (d->driver_thread_exit_requested)
         {
-          POCL_FAST_UNLOCK (d->wq_lock);
+          POCL_UNLOCK (d->wq_lock);
           return NULL;
         }
 
@@ -2580,20 +3052,20 @@ pocl_remote_driver_pthread (void *cldev)
       if (cmd)
         {
           DL_DELETE (d->work_queue, cmd);
-          POCL_FAST_UNLOCK (d->wq_lock);
+          POCL_UNLOCK (d->wq_lock);
 
           assert (cmd->sync.event.event->status == CL_SUBMITTED);
 
           remote_start_command (d, cmd);
 
-          POCL_FAST_LOCK (d->wq_lock);
+          POCL_LOCK (d->wq_lock);
         }
 
       finished = d->finished_list;
       if (finished)
         {
           DL_DELETE (d->finished_list, finished);
-          POCL_FAST_UNLOCK (d->wq_lock);
+          POCL_UNLOCK (d->wq_lock);
 
           cl_event event = finished->sync.event.event;
 
@@ -2601,9 +3073,20 @@ pocl_remote_driver_pthread (void *cldev)
           char msg[128] = "Event ";
           strcat (msg, cstr);
 
-          POCL_UPDATE_EVENT_COMPLETE_MSG (event, msg);
+          /* update event status */
+          if (finished->state == POCL_COMMAND_READY)
+            {
+              POCL_UPDATE_EVENT_COMPLETE_MSG (event, msg);
+            }
+          else
+            {
+              cl_int status = CL_FAILED;
+              if (*(event->queue->device->available) == CL_FALSE)
+                status = CL_DEVICE_NOT_AVAILABLE;
+              POCL_UPDATE_EVENT_FAILED_MSG (status, event, msg);
+            }
 
-          POCL_FAST_LOCK (d->wq_lock);
+          POCL_LOCK (d->wq_lock);
         }
 
       if ((d->work_queue == NULL) && (d->finished_list == NULL)
@@ -2627,17 +3110,7 @@ pocl_remote_set_kernel_exec_info_ext (cl_device_id dev,
     {
     case CL_KERNEL_EXEC_INFO_SVM_PTRS:
     case CL_KERNEL_EXEC_INFO_USM_PTRS_INTEL:
-      {
-        for (int i = 0; i < param_value_size / sizeof (void *); ++i)
-          {
-            struct _pocl_ptr_list_node *n
-                = malloc (sizeof (struct _pocl_ptr_list_node));
-            n->ptr = ((void **)param_value)[i];
-            DL_APPEND (kernel->indirect_raw_ptrs, n);
-            POCL_MSG_PRINT_MEMORY ("Set a indirect SVM/USM ptr %p\n", n->ptr);
-          }
-        return CL_SUCCESS;
-      }
+      return CL_SUCCESS;
     case CL_KERNEL_EXEC_INFO_INDIRECT_HOST_ACCESS_INTEL:
     case CL_KERNEL_EXEC_INFO_INDIRECT_DEVICE_ACCESS_INTEL:
     case CL_KERNEL_EXEC_INFO_INDIRECT_SHARED_ACCESS_INTEL:
@@ -2666,6 +3139,20 @@ pocl_remote_get_device_info_ext (cl_device_id device,
         POCL_RETURN_GETINFO_INNER (
           traffic_data_size,
           pocl_remote_get_traffic_stats (param_value, device));
+      }
+
+    case CL_DEVICE_REMOTE_SERVER_IP_POCL:
+      {
+        remote_device_data_t *dev_data = (remote_device_data_t *)device->data;
+        remote_server_data_t *server = dev_data->server;
+        POCL_RETURN_GETINFO_STR (server->address);
+      }
+
+    case CL_DEVICE_REMOTE_SERVER_PORT_POCL:
+      {
+        remote_device_data_t *dev_data = (remote_device_data_t *)device->data;
+        remote_server_data_t *server = dev_data->server;
+        POCL_RETURN_GETINFO (unsigned, server->fast_port);
       }
     }
 

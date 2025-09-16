@@ -30,8 +30,8 @@
 
 #include <assert.h>
 
-static cl_int
-pocl_kernel_calc_wg_size (cl_command_queue command_queue, cl_kernel kernel,
+cl_int
+pocl_kernel_calc_wg_size (cl_device_id dev, cl_kernel kernel,
                           unsigned device_i,
                           cl_uint work_dim, const size_t *global_work_offset,
                           const size_t *global_work_size,
@@ -51,15 +51,15 @@ pocl_kernel_calc_wg_size (cl_command_queue command_queue, cl_kernel kernel,
    * since we are going to access them repeatedly */
   size_t max_group_size;
 
+  assert (kernel->meta);
+
   POCL_RETURN_ERROR_COND ((work_dim < 1), CL_INVALID_WORK_DIMENSION);
   POCL_RETURN_ERROR_ON (
-      (work_dim > command_queue->device->max_work_item_dimensions),
+      (work_dim > dev->max_work_item_dimensions),
       CL_INVALID_WORK_DIMENSION,
       "work_dim exceeds devices' max workitem dimensions\n");
 
-  assert (command_queue->device->max_work_item_dimensions <= 3);
-
-  cl_device_id realdev = pocl_real_dev (command_queue->device);
+  assert (dev->max_work_item_dimensions <= 3);
 
   if (global_work_size == NULL)
     {
@@ -101,23 +101,34 @@ pocl_kernel_calc_wg_size (cl_command_queue command_queue, cl_kernel kernel,
       goto SKIP_WG_SIZE_CALCULATION;
     }
 
-  max_local_x = command_queue->device->max_work_item_sizes[0];
+  max_local_x = dev->max_work_item_sizes[0];
   max_local_y
-      = work_dim > 1 ? command_queue->device->max_work_item_sizes[1] : 1;
+      = work_dim > 1 ? dev->max_work_item_sizes[1] : 1;
   max_local_z
-      = work_dim > 2 ? command_queue->device->max_work_item_sizes[2] : 1;
-  max_group_size = command_queue->device->max_work_group_size;
+      = work_dim > 2 ? dev->max_work_item_sizes[2] : 1;
+  max_group_size = dev->max_work_group_size;
+  if (kernel->meta->max_workgroup_size
+      && kernel->meta->max_workgroup_size[device_i])
+    {
+      max_group_size = kernel->meta->max_workgroup_size[device_i];
+    }
 
   if (local_work_size != NULL)
     {
       local_x = local_work_size[0];
       local_y = work_dim > 1 ? local_work_size[1] : 1;
       local_z = work_dim > 2 ? local_work_size[2] : 1;
+      size_t total_local_size = local_x * local_y * local_z;
 
       POCL_RETURN_ERROR_ON (
-          (local_x * local_y * local_z > max_group_size),
+          (total_local_size == 0),
           CL_INVALID_WORK_GROUP_SIZE,
-          "Local worksize dimensions exceed device's max workgroup size\n");
+          "Local worksize dimensions are equal to zero\n");
+
+      POCL_RETURN_ERROR_ON (
+        (total_local_size > max_group_size), CL_INVALID_WORK_GROUP_SIZE,
+        "Local worksize dimensions (%zu) exceed the device's (or kernel's) "
+        "max workgroup size (%zu)\n", total_local_size, max_group_size);
 
       POCL_RETURN_ERROR_ON (
           (local_x > max_local_x), CL_INVALID_WORK_ITEM_SIZE,
@@ -145,14 +156,14 @@ pocl_kernel_calc_wg_size (cl_command_queue command_queue, cl_kernel kernel,
                               CL_INVALID_WORK_GROUP_SIZE);
     }
 
-  if (realdev->ops->verify_ndrange_sizes)
+  if (dev->ops->verify_ndrange_sizes)
     {
       // verify the sanitized NDRange values
       size_t OFS[3] = { offset_x, offset_y, offset_z };
       size_t GWS[3] = { global_x, global_y, global_z };
       size_t LWS[3] = { local_x, local_y, local_z };
 
-      int errcode = realdev->ops->verify_ndrange_sizes (OFS, GWS, LWS);
+      int errcode = dev->ops->verify_ndrange_sizes (OFS, GWS, LWS);
       if (errcode != CL_SUCCESS)
         return errcode;
     }
@@ -179,16 +190,14 @@ pocl_kernel_calc_wg_size (cl_command_queue command_queue, cl_kernel kernel,
    */
   else if (local_work_size == NULL)
     {
-      if (realdev->ops->compute_local_size)
-        realdev->ops->compute_local_size (realdev, kernel, device_i,
-                                          global_x, global_y,
-                                          global_z, &local_x, &local_y,
-                                          &local_z);
+      if (dev->ops->compute_local_size)
+        dev->ops->compute_local_size (dev, kernel, device_i, max_group_size,
+                                      global_x, global_y, global_z, &local_x,
+                                      &local_y, &local_z);
       else
-        pocl_default_local_size_optimizer (realdev, kernel, device_i,
-                                           global_x, global_y,
-                                           global_z, &local_x, &local_y,
-                                           &local_z);
+        pocl_default_local_size_optimizer (
+          dev, kernel, device_i, max_group_size, global_x, global_y, global_z,
+          &local_x, &local_y, &local_z);
     }
 
   POCL_MSG_PRINT_INFO (
@@ -222,23 +231,53 @@ SKIP_WG_SIZE_CALCULATION:
   return CL_SUCCESS;
 }
 
+static void *
+find_raw_ptr (void *value, cl_context context)
+{
+  /* Find the shadow cl_mem wrapper which is used for tracking
+               migrations. */
+  void *ptr = *(void **)(value);
+  pocl_raw_ptr *raw_ptr = pocl_find_raw_ptr_with_vm_ptr (context, ptr);
+
+  /* TODO: The case where some of the args are SVM-allocated VM
+               pointers, some device pointers. These address spaces are
+               allowed to overlap and we could have the SVM and dev buffer
+               having the same addr in theory. */
+  if (raw_ptr == NULL)
+    raw_ptr = pocl_find_raw_ptr_with_dev_ptr (context, ptr);
+  if (raw_ptr == NULL)
+    {
+      POCL_MSG_PRINT_MEMORY ("Couldn't find the shadow cl_mem for an SVM ptr, "
+                             "assuming system SVM.\n");
+      return NULL;
+    }
+  else
+    return raw_ptr->shadow_cl_mem;
+}
+
 /**
  * Collect the kernel's buffer usage for implicit migration.
  */
 static cl_int
 pocl_kernel_collect_mem_objs (
-  cl_command_queue command_queue,
+  cl_device_id realdev,
+  cl_context context,
   cl_kernel kernel,
   struct pocl_argument *src_arguments,
   pocl_buffer_migration_info **dst_migr_infos)
 {
-  cl_device_id realdev = pocl_real_dev (command_queue->device);
   pocl_buffer_migration_info *migr_infos = NULL;
+  cl_mem *bufs = NULL;
+  cl_mem buf = NULL;
+  if (kernel->meta->num_args)
+    bufs = (cl_mem *)alloca (kernel->meta->num_args * sizeof (cl_mem));
 
+  /* check argument correctness */
   for (unsigned i = 0; i < kernel->meta->num_args; ++i)
     {
       struct pocl_argument_info *a = &kernel->meta->arg_info[i];
       struct pocl_argument *al = &(src_arguments[i]);
+      bufs[i] = NULL;
 
       POCL_RETURN_ERROR_ON ((!al->is_set), CL_INVALID_KERNEL_ARGS,
                             "The %i-th kernel argument is not set!\n", i);
@@ -247,40 +286,17 @@ pocl_kernel_collect_mem_objs (
           || (!ARGP_IS_LOCAL (a) && a->type == POCL_ARG_TYPE_POINTER
               && al->value != NULL))
         {
-          cl_mem buf = *(cl_mem *)(al->value);
           if (al->is_raw_ptr)
-            {
-              /* Find the shadow cl_mem wrapper which is used for tracking
-                 migrations. */
-              void *ptr = *(void **)(al->value);
-              pocl_raw_ptr *raw_ptr = pocl_find_raw_ptr_with_vm_ptr (
-                  command_queue->context, ptr);
+            bufs[i] = buf = find_raw_ptr (al->value, context);
+          else
+            bufs[i] = buf = *(cl_mem *)(al->value);
 
-              /* TODO: The case where some of the args are SVM-allocated VM
-                 pointers, some device pointers. These address spaces are
-                 allowed to overlap and we could have the SVM and dev buffer
-                 having the same addr in theory. */
-              if (raw_ptr == NULL)
-                raw_ptr = pocl_find_raw_ptr_with_dev_ptr (
-                    command_queue->context, ptr);
-              if (raw_ptr == NULL)
-                {
-                  POCL_MSG_PRINT_MEMORY (
-                      "Couldn't find the shadow cl_mem for an SVM ptr, "
-                      "assuming system SVM.\n");
-                  continue;
-                }
-              else
-                buf = raw_ptr->shadow_cl_mem;
-            }
-
-          if (buf == NULL) /* Likely USM. */
-            continue;
           if (a->type == POCL_ARG_TYPE_IMAGE)
             {
               POCL_RETURN_ON_UNSUPPORTED_IMAGE (buf, realdev);
             }
-          else
+
+          if (buf)
             {
               if (buf->origin > 0)
                 POCL_RETURN_ERROR_ON (
@@ -291,17 +307,28 @@ pocl_kernel_collect_mem_objs (
 
               POCL_RETURN_ERROR_ON ((buf->size > realdev->max_mem_alloc_size),
                                     CL_OUT_OF_RESOURCES,
-                                    "ARG %u: buffer is larger than "
-                                    "device's MAX_MEM_ALLOC_SIZE\n",
-                                    i);
+                                    "ARG %u: buffer is larger (%lu) than "
+                                    "device's MAX_MEM_ALLOC_SIZE (%lu).\n",
+                                    i, buf->size, realdev->max_mem_alloc_size);
             }
+        }
+    }
+
+  /* create migr infos */
+  for (unsigned i = 0; i < kernel->meta->num_args; ++i)
+    {
+      struct pocl_argument *al = &(src_arguments[i]);
+
+      if (bufs[i])
+        {
+          buf = bufs[i];
 
           char read_only = 0;
           if (al->is_readonly || (buf->flags & CL_MEM_READ_ONLY))
             {
               if (al->is_readonly == 0)
-                POCL_MSG_WARN ("readonly buffer used as kernel arg, but arg "
-                               "type is not const\n");
+                POCL_MSG_PRINT_INFO ("readonly buffer used as kernel arg, "
+                                     "but arg type is not const\n");
               read_only = 1;
             }
           migr_infos
@@ -329,7 +356,7 @@ pocl_kernel_collect_mem_objs (
       DL_FOREACH (kernel->indirect_raw_ptrs, n)
       {
         pocl_raw_ptr *svm_ptr
-          = pocl_find_raw_ptr_with_vm_ptr (command_queue->context, n->ptr);
+          = pocl_find_raw_ptr_with_vm_ptr (context, n->ptr);
 
         if (svm_ptr == NULL)
           {
@@ -379,6 +406,7 @@ pocl_kernel_copy_args (cl_kernel kernel,
             arg_alloc_size = arg_alignment;
 
           arg->value = pocl_aligned_malloc (arg_alignment, arg_alloc_size);
+          POCL_RETURN_ERROR_COND ((arg->value == NULL), CL_OUT_OF_HOST_MEMORY);
           memcpy (arg->value, src_arguments[i].value, arg->size);
         }
     }
@@ -388,13 +416,15 @@ pocl_kernel_copy_args (cl_kernel kernel,
 
 static int
 process_command_ndrange_properties (
-  const cl_ndrange_kernel_command_properties_khr *properties)
+  int *assert_no_additional_wgs,
+  cl_mutable_dispatch_fields_khr *updatable_fields,
+  const cl_command_properties_khr *properties)
 {
   if (properties == NULL)
     return CL_SUCCESS;
 
   cl_uint num_properties = 0;
-  const cl_ndrange_kernel_command_properties_khr *key = NULL;
+  const cl_command_properties_khr *key = NULL;
   for (key = properties; *key != 0; key += 2)
     num_properties += 1;
   POCL_RETURN_ERROR_ON ((num_properties == 0), CL_INVALID_VALUE,
@@ -405,15 +435,37 @@ process_command_ndrange_properties (
       switch (*key)
         {
         case CL_MUTABLE_DISPATCH_ASSERTS_KHR:
-        case CL_MUTABLE_DISPATCH_UPDATABLE_FIELDS_KHR:
+          /* An assertion by the user that the number of work-groups of
+           * this ND-range kernel will not be updated beyond the number
+           * defined when the ND-range kernel was recorded */
           POCL_RETURN_ERROR_ON (
-            1, CL_INVALID_VALUE,
-            "cl_khr_command_buffer_mutable_dispatch is not supported\n");
-          break;
+            key[1] != CL_MUTABLE_DISPATCH_ASSERT_NO_ADDITIONAL_WORK_GROUPS_KHR,
+            CL_INVALID_VALUE,
+            "unknown value for key "
+            "CL_MUTABLE_DISPATCH_ASSERTS_KHR\n");
+          *assert_no_additional_wgs = CL_TRUE;
+          continue;
+        case CL_MUTABLE_DISPATCH_UPDATABLE_FIELDS_KHR:
+          {
+            cl_mutable_dispatch_fields_khr val
+              = (cl_mutable_dispatch_fields_khr)key[1];
+            cl_mutable_dispatch_fields_khr unknown
+              = val
+                & ~(CL_MUTABLE_DISPATCH_GLOBAL_OFFSET_KHR
+                    | CL_MUTABLE_DISPATCH_GLOBAL_SIZE_KHR
+                    | CL_MUTABLE_DISPATCH_LOCAL_SIZE_KHR
+                    | CL_MUTABLE_DISPATCH_ARGUMENTS_KHR
+                    | CL_MUTABLE_DISPATCH_EXEC_INFO_KHR);
+            POCL_RETURN_ERROR_ON (
+              unknown != 0, CL_INVALID_VALUE,
+              "unknown flags in property "
+              "CL_MUTABLE_DISPATCH_UPDATABLE_FIELDS_KHR\n");
+            *updatable_fields = val;
+            continue;
+          }
         default:
-          POCL_RETURN_ERROR_ON (1, CL_INVALID_VALUE,
-                                "Unknown property value in "
-                                "cl_ndrange_kernel_command_properties_khr\n");
+          POCL_RETURN_ERROR (CL_INVALID_VALUE, "Unknown property value in "
+                                               "cl_command_properties_khr\n");
         }
     }
 
@@ -421,39 +473,43 @@ process_command_ndrange_properties (
 }
 
 cl_int
-pocl_record_ndrange_kernel (
-  cl_command_buffer_khr command_buffer,
-  cl_command_queue command_queue,
-  const cl_ndrange_kernel_command_properties_khr *properties,
-  cl_kernel kernel,
-  struct pocl_argument *src_arguments,
-  cl_uint work_dim,
-  const size_t *global_work_offset,
-  const size_t *global_work_size,
-  const size_t *local_work_size,
-  cl_uint num_items_in_wait_list,
-  const cl_sync_point_khr *sync_point_wait_list,
-  cl_sync_point_khr *sync_point_p)
+pocl_record_ndrange_kernel (cl_command_buffer_khr command_buffer,
+                            cl_command_queue command_queue,
+                            const cl_command_properties_khr *properties,
+                            cl_kernel kernel,
+                            struct pocl_argument *src_arguments,
+                            cl_uint work_dim,
+                            const size_t *global_work_offset,
+                            const size_t *global_work_size,
+                            const size_t *local_work_size,
+                            cl_uint num_items_in_wait_list,
+                            const cl_sync_point_khr *sync_point_wait_list,
+                            cl_sync_point_khr *sync_point_p,
+                            _cl_command_node **cmd_ptr)
 {
-  _cl_command_node *cmd = NULL;
+  int assert_no_add_wgs = CL_FALSE;
+  cl_mutable_dispatch_fields_khr updatable_fields = 0;
 
-  int errcode = process_command_ndrange_properties (properties);
+  int errcode = process_command_ndrange_properties (
+    &assert_no_add_wgs, &updatable_fields, properties);
   if (errcode != CL_SUCCESS)
     goto ERROR;
 
   errcode = pocl_ndrange_kernel_common (
-    command_buffer, command_queue, properties, kernel, src_arguments, work_dim,
-    global_work_offset, global_work_size, local_work_size,
+    command_buffer, command_queue, updatable_fields, kernel, src_arguments,
+    work_dim, global_work_offset, global_work_size, local_work_size,
     num_items_in_wait_list, NULL, NULL, sync_point_wait_list, sync_point_p,
-    &cmd);
+    cmd_ptr);
   if (errcode != CL_SUCCESS)
     goto ERROR;
 
+  assert(cmd_ptr);
+  _cl_command_node *cmd = *cmd_ptr;
+  /* TODO should this retain be done also from RemapCommandBuffer ? */
   for (unsigned i = 0; i < kernel->meta->num_args; ++i)
     {
       struct pocl_argument_info *ai
         = &cmd->command.run.kernel->meta->arg_info[i];
-      struct pocl_argument *a = &cmd->command.run.kernel->dyn_arguments[i];
       if (ai->type == POCL_ARG_TYPE_SAMPLER)
         POname (clRetainSampler) (cmd->command.run.arguments[i].value);
     }
@@ -465,27 +521,27 @@ pocl_record_ndrange_kernel (
   return CL_SUCCESS;
 
 ERROR:
-  pocl_mem_manager_free_command (cmd);
+  pocl_mem_manager_free_command (*cmd_ptr);
+  *cmd_ptr = NULL;
   return errcode;
 }
 
 cl_int
-pocl_ndrange_kernel_common (
-  cl_command_buffer_khr command_buffer,
-  cl_command_queue command_queue,
-  const cl_ndrange_kernel_command_properties_khr *properties,
-  cl_kernel kernel,
-  struct pocl_argument *src_arguments,
-  cl_uint work_dim,
-  const size_t *global_work_offset,
-  const size_t *global_work_size,
-  const size_t *local_work_size,
-  cl_uint num_items_in_wait_list,
-  const cl_event *event_wait_list,
-  cl_event *event_p,
-  const cl_sync_point_khr *sync_point_wait_list,
-  cl_sync_point_khr *sync_point_p,
-  _cl_command_node **cmd)
+pocl_ndrange_kernel_common (cl_command_buffer_khr command_buffer,
+                            cl_command_queue command_queue,
+                            cl_mutable_dispatch_fields_khr updatable_fields,
+                            cl_kernel kernel,
+                            struct pocl_argument *src_arguments,
+                            cl_uint work_dim,
+                            const size_t *global_work_offset,
+                            const size_t *global_work_size,
+                            const size_t *local_work_size,
+                            cl_uint num_items_in_wait_list,
+                            const cl_event *event_wait_list,
+                            cl_event *event_p,
+                            const cl_sync_point_khr *sync_point_wait_list,
+                            cl_sync_point_khr *sync_point_p,
+                            _cl_command_node **cmd_ptr)
 {
   size_t offset[3] = { 0, 0, 0 };
   size_t num_groups[3] = { 0, 0, 0 };
@@ -524,35 +580,45 @@ pocl_ndrange_kernel_common (
     }
   assert (program_dev_i < CL_UINT_MAX);
 
+  cl_mutable_dispatch_fields_khr dev_mut_supp
+    = realdev->cmdbuf_mutable_dispatch_capabilities;
+
+  if (updatable_fields)
+    POCL_RETURN_ERROR_ON (
+      ((dev_mut_supp & updatable_fields) != updatable_fields),
+      CL_INVALID_VALUE,
+      "The device (%zu) does not support requested updatable fields (%zu)\n",
+      (size_t)updatable_fields, (size_t)dev_mut_supp);
+
   errcode = pocl_kernel_calc_wg_size (
-      command_queue, kernel, program_dev_i, work_dim,
+      realdev, kernel, program_dev_i, work_dim,
       global_work_offset, global_work_size,
       local_work_size, offset, local, num_groups);
   POCL_RETURN_ERROR_ON (errcode != CL_SUCCESS, errcode,
                         "Error calculating wg size\n");
 
-  errcode = pocl_kernel_collect_mem_objs (command_queue, kernel, src_arguments,
-                                          &buf_migrations);
+  errcode = pocl_kernel_collect_mem_objs (realdev,
+      command_queue->context, kernel, src_arguments, &buf_migrations);
   POCL_RETURN_ERROR_ON (errcode != CL_SUCCESS, errcode,
                         "Error collecting mem objects for kernel arguments\n");
 
   if (command_buffer == NULL)
     {
       errcode = pocl_create_command (
-        cmd, command_queue, CL_COMMAND_NDRANGE_KERNEL, event_p,
+        cmd_ptr, command_queue, CL_COMMAND_NDRANGE_KERNEL, event_p,
         num_items_in_wait_list, event_wait_list, buf_migrations);
     }
   else
     {
       errcode = pocl_create_recorded_command (
-        cmd, command_buffer, command_queue, CL_COMMAND_NDRANGE_KERNEL,
+        cmd_ptr, command_buffer, command_queue, CL_COMMAND_NDRANGE_KERNEL,
         num_items_in_wait_list, sync_point_wait_list, buf_migrations);
     }
 
   POCL_RETURN_ERROR_ON (errcode != CL_SUCCESS, errcode,
                         "Error constructing command struct\n");
 
-  _cl_command_node *c = *cmd;
+  _cl_command_node *c = *cmd_ptr;
   c->program_device_i = program_dev_i;
   c->next = NULL;
 
@@ -573,15 +639,15 @@ pocl_ndrange_kernel_common (
   if (errcode != CL_SUCCESS)
     goto ERROR;
 
-  errcode
-    = pocl_kernel_copy_args (kernel, src_arguments, &(*cmd)->command.run);
+  errcode = pocl_kernel_copy_args (kernel, src_arguments, &c->command.run);
   if (errcode != CL_SUCCESS)
     goto ERROR;
 
   return CL_SUCCESS;
 
 ERROR:
-  pocl_ndrange_node_cleanup (*cmd);
-  pocl_mem_manager_free_command (*cmd);
+  pocl_ndrange_node_cleanup (*cmd_ptr);
+  pocl_mem_manager_free_command (*cmd_ptr);
+
   return errcode;
 }

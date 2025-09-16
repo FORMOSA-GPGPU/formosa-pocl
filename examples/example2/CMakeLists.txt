@@ -25,12 +25,9 @@
 
 add_compile_options(${OPENCL_CFLAGS})
 
-if (MSVC)
-  set_source_files_properties( example2.c PROPERTIES LANGUAGE CXX )
-endif(MSVC)
 add_executable("example2" example2.c example2.cl)
-
 target_link_libraries("example2" ${POCLU_LINK_OPTIONS})
+add_symlink_to_built_opencl_dynlib("example2")
 
 add_test(NAME "examples/example2" COMMAND "example2")
 
@@ -46,7 +43,7 @@ set_tests_properties( "examples/example2"
     COST 3.0
     ${PROPS}
     PROCESSORS 1
-    LABELS "internal;cuda;level0;tce;hsa;hsa-native;vulkan"
+    LABELS "cpu;cuda;level0;tce;hsa;hsa-native;vulkan"
     DEPENDS "pocl_version_check")
 
 
@@ -63,5 +60,5 @@ set_tests_properties( "examples/example2_poclbin"
     ${PROPS}
     PROCESSORS 1
     ENVIRONMENT "POCL_KERNEL_CACHE=0"
-    LABELS "poclbin;internal;level0"
+    LABELS "poclbin;cpu;level0"
     DEPENDS "pocl_version_check")

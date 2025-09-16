@@ -28,7 +28,6 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "pocl_cl.h"
 #include "pocl_timing.h"
@@ -40,8 +39,7 @@
 
 #include "pocl_workgroup_func.h"
 
-int pocl_setup_builtin_metadata (cl_device_id device, cl_program program,
-                                 unsigned program_device_i);
+#include "pocl_builtin_kernels.h"
 
 #ifdef ENABLE_LLVM
 #include "pocl_llvm.h"
@@ -53,7 +51,7 @@ int pocl_setup_builtin_metadata (cl_device_id device, cl_program program,
   do                                                                          \
     {                                                                         \
       char temp[1024];                                                        \
-      ssize_t written = snprintf (temp, 1024, __VA_ARGS__);                   \
+      int written = snprintf (temp, 1024, __VA_ARGS__);                       \
       if (written > 0)                                                        \
         {                                                                     \
           size_t l = strlen (program->build_log[device_i]);                   \
@@ -64,7 +62,7 @@ int pocl_setup_builtin_metadata (cl_device_id device, cl_program program,
           newp[newl] = 0;                                                     \
           program->build_log[device_i] = newp;                                \
         }                                                                     \
-      POCL_RETURN_ERROR_ON (1, err, __VA_ARGS__);                             \
+      POCL_RETURN_ERROR (err, __VA_ARGS__);                                   \
     }                                                                         \
   while (0)
 
@@ -132,18 +130,17 @@ pocl_driver_copy_with_size (void *data, pocl_mem_identifier *dst_mem_id,
     memcpy (dst_ptr + dst_offset, src_ptr + src_offset, size);
 }
 
-/* required for PoCL's command buffer extensions */
 void
-pocl_driver_svm_copy_rect (cl_device_id dev,
-                           void *__restrict__ dst_ptr,
-                           const void *__restrict__ src_ptr,
-                           const size_t *__restrict__ const dst_origin,
-                           const size_t *__restrict__ const src_origin,
-                           const size_t *__restrict__ const region,
-                           size_t dst_row_pitch,
-                           size_t dst_slice_pitch,
-                           size_t src_row_pitch,
-                           size_t src_slice_pitch)
+pocl_driver_copy_rect_memcpy (cl_device_id dev,
+                              void *__restrict__ dst_ptr,
+                              const void *__restrict__ src_ptr,
+                              const size_t *__restrict__ const dst_origin,
+                              const size_t *__restrict__ const src_origin,
+                              const size_t *__restrict__ const region,
+                              size_t dst_row_pitch,
+                              size_t dst_slice_pitch,
+                              size_t src_row_pitch,
+                              size_t src_slice_pitch)
 {
   char const *__restrict const adjusted_src_ptr
       = (char const *)src_ptr + src_origin[0] + src_row_pitch * src_origin[1]
@@ -205,9 +202,9 @@ pocl_driver_copy_rect (void *data,
   void *__restrict__ src_ptr = src_mem_id->mem_ptr;
   void *__restrict__ dst_ptr = dst_mem_id->mem_ptr;
 
-  pocl_driver_svm_copy_rect (NULL, dst_ptr, src_ptr, dst_origin, src_origin,
-                             region, dst_row_pitch, dst_slice_pitch,
-                             src_row_pitch, src_slice_pitch);
+  pocl_driver_copy_rect_memcpy (NULL, dst_ptr, src_ptr, dst_origin, src_origin,
+                                region, dst_row_pitch, dst_slice_pitch,
+                                src_row_pitch, src_slice_pitch);
 }
 
 void
@@ -257,18 +254,17 @@ pocl_driver_svm_fill_rect (cl_device_id dev,
 }
 
 void
-pocl_driver_write_rect (void *data, const void *__restrict__ const host_ptr,
-                        pocl_mem_identifier *dst_mem_id, cl_mem dst_buf,
-                        const size_t *__restrict__ const buffer_origin,
-                        const size_t *__restrict__ const host_origin,
-                        const size_t *__restrict__ const region,
-                        size_t const buffer_row_pitch,
-                        size_t const buffer_slice_pitch,
-                        size_t const host_row_pitch,
-                        size_t const host_slice_pitch)
+pocl_driver_write_rect_memcpy (void *dev_data,
+                               const void *__restrict__ const host_ptr,
+                               char *device_ptr,
+                               const size_t *__restrict__ const buffer_origin,
+                               const size_t *__restrict__ const host_origin,
+                               const size_t *__restrict__ const region,
+                               size_t const buffer_row_pitch,
+                               size_t const buffer_slice_pitch,
+                               size_t const host_row_pitch,
+                               size_t const host_slice_pitch)
 {
-  void *__restrict__ device_ptr = dst_mem_id->mem_ptr;
-
   char *__restrict const adjusted_device_ptr
       = (char *)device_ptr + buffer_origin[0]
         + buffer_row_pitch * buffer_origin[1]
@@ -316,18 +312,36 @@ pocl_driver_write_rect (void *data, const void *__restrict__ const host_ptr,
 }
 
 void
-pocl_driver_read_rect (void *data, void *__restrict__ const host_ptr,
-                       pocl_mem_identifier *src_mem_id, cl_mem src_buf,
-                       const size_t *__restrict__ const buffer_origin,
-                       const size_t *__restrict__ const host_origin,
-                       const size_t *__restrict__ const region,
-                       size_t const buffer_row_pitch,
-                       size_t const buffer_slice_pitch,
-                       size_t const host_row_pitch,
-                       size_t const host_slice_pitch)
+pocl_driver_write_rect (void *data,
+                        const void *__restrict__ const host_ptr,
+                        pocl_mem_identifier *dst_mem_id,
+                        cl_mem dst_buf,
+                        const size_t *__restrict__ const buffer_origin,
+                        const size_t *__restrict__ const host_origin,
+                        const size_t *__restrict__ const region,
+                        size_t const buffer_row_pitch,
+                        size_t const buffer_slice_pitch,
+                        size_t const host_row_pitch,
+                        size_t const host_slice_pitch)
 {
-  void *__restrict__ device_ptr = src_mem_id->mem_ptr;
+  void *__restrict__ device_ptr = dst_mem_id->mem_ptr;
+  pocl_driver_write_rect_memcpy (
+    data, host_ptr, device_ptr, buffer_origin, host_origin, region,
+    buffer_row_pitch, buffer_slice_pitch, host_row_pitch, host_slice_pitch);
+}
 
+void
+pocl_driver_read_rect_memcpy (void *data,
+                              void *__restrict__ const host_ptr,
+                              char *device_ptr,
+                              const size_t *__restrict__ const buffer_origin,
+                              const size_t *__restrict__ const host_origin,
+                              const size_t *__restrict__ const region,
+                              size_t const buffer_row_pitch,
+                              size_t const buffer_slice_pitch,
+                              size_t const host_row_pitch,
+                              size_t const host_slice_pitch)
+{
   char const *__restrict const adjusted_device_ptr
       = (char const *)device_ptr + buffer_origin[2] * buffer_slice_pitch
         + buffer_origin[1] * buffer_row_pitch + buffer_origin[0];
@@ -370,6 +384,25 @@ pocl_driver_read_rect (void *data, void *__restrict__ const host_ptr,
                       + buffer_slice_pitch * k,
                   region[0]);
     }
+}
+
+void
+pocl_driver_read_rect (void *data,
+                       void *__restrict__ const host_ptr,
+                       pocl_mem_identifier *src_mem_id,
+                       cl_mem src_buf,
+                       const size_t *__restrict__ const buffer_origin,
+                       const size_t *__restrict__ const host_origin,
+                       const size_t *__restrict__ const region,
+                       size_t const buffer_row_pitch,
+                       size_t const buffer_slice_pitch,
+                       size_t const host_row_pitch,
+                       size_t const host_slice_pitch)
+{
+  void *__restrict__ device_ptr = src_mem_id->mem_ptr;
+  pocl_driver_read_rect_memcpy (
+    data, host_ptr, device_ptr, buffer_origin, host_origin, region,
+    buffer_row_pitch, buffer_slice_pitch, host_row_pitch, host_slice_pitch);
 }
 
 void
@@ -430,7 +463,7 @@ pocl_driver_get_mapping_ptr (void *data, pocl_mem_identifier *mem_id,
 
   if (mem->mem_host_ptr != NULL)
     {
-      map->host_ptr = mem->mem_host_ptr + map->offset;
+      map->host_ptr = (char *)mem->mem_host_ptr + map->offset;
     }
   else
     {
@@ -451,7 +484,7 @@ pocl_driver_free_mapping_ptr (void *data, pocl_mem_identifier *mem_id,
 
   /* e.g. remote never has a mem_host_ptr but can have a map host_ptr */
   if (((mem->mem_host_ptr != NULL)
-       && map->host_ptr != (mem->mem_host_ptr + map->offset))
+       && map->host_ptr != ((char *)mem->mem_host_ptr + map->offset))
       || (mem->mem_host_ptr == NULL && map->host_ptr != NULL))
     pocl_aligned_free (map->host_ptr);
 
@@ -487,8 +520,7 @@ pocl_driver_alloc_mem_obj (cl_device_id device, cl_mem mem, void *host_ptr)
   if (mem->has_device_address)
     p->is_pinned = 1;
 
-  POCL_MSG_PRINT_MEMORY ("Basic device ALLOC %p / size %zu \n", p->mem_ptr,
-                         mem->size);
+  POCL_MSG_PRINT_MEMORY ("ALLOC %p / size %zu \n", p->mem_ptr, mem->size);
 
   return CL_SUCCESS;
 }
@@ -538,116 +570,25 @@ pocl_driver_svm_copy (cl_device_id dev,
 
 #ifdef ENABLE_LLVM
 
-#define MAX_SPEC_CONST_CMDLINE_LEN 8192
-#define MAX_SPEC_CONST_OPT_LEN 256
-
 /* load LLVM IR binary from disk, deletes existing in-memory IR */
-static int
-pocl_reload_program_bc (char *program_bc_path, cl_program program,
+int
+pocl_reload_program_bc (char *program_bc_path,
+                        cl_program program,
                         cl_uint device_i)
 {
   char *temp_binary = NULL;
   uint64_t temp_size = 0;
   int errcode = pocl_read_file (program_bc_path, &temp_binary, &temp_size);
   if (errcode != 0 || temp_size == 0)
-    return -1;
+    {
+      assert (temp_binary == NULL);
+      return -1;
+    }
   if (program->binaries[device_i])
     POCL_MEM_FREE (program->binaries[device_i]);
-  program->binaries[device_i] = (unsigned char*)temp_binary;
+  program->binaries[device_i] = (unsigned char *)temp_binary;
   program->binary_sizes[device_i] = temp_size;
   return 0;
-}
-
-/* if some SPIR-V spec constants were changed, use llvm-spirv --spec-const=...
- * to generate new LLVM bitcode from SPIR-V */
-static int
-pocl_regen_spirv_binary (cl_program program, cl_uint device_i)
-{
-#ifdef LLVM_SPIRV
-  int errcode = CL_SUCCESS;
-  cl_device_id device = program->devices[device_i];
-  int spec_constants_changed = 0;
-  char concated_spec_const_option[MAX_SPEC_CONST_CMDLINE_LEN];
-  concated_spec_const_option[0] = 0;
-  char program_bc_spirv[POCL_MAX_PATHNAME_LENGTH];
-  char unlinked_program_bc_temp[POCL_MAX_PATHNAME_LENGTH];
-  program_bc_spirv[0] = 0;
-  unlinked_program_bc_temp[0] = 0;
-
-  /* using --spirv-target-env=CL2.0 here enables llvm-spirv to produce proper
-   * OpenCL 2.0 atomics, unfortunately it also enables generic ptrs, which not
-   * all PoCL devices support, hence check the device */
-  char* spirv_target_env = (device->generic_as_support != CL_FALSE) ?
-                        "--spirv-target-env=CL2.0" :  "--spirv-target-env=CL1.2";
-  const char *args[8] = { pocl_get_path ("LLVM_SPIRV", LLVM_SPIRV),
-                          concated_spec_const_option,
-                          spirv_target_env,
-                          "-r",
-                          "-o",
-                          unlinked_program_bc_temp,
-                          program_bc_spirv,
-                          NULL };
-  const char **final_args = args;
-
-  errcode = pocl_cache_tempname(unlinked_program_bc_temp, ".bc", NULL);
-  POCL_RETURN_ERROR_ON ((errcode != 0), CL_BUILD_PROGRAM_FAILURE,
-                        "failed to create tmpfile in pocl cache\n");
-
-  errcode = pocl_cache_write_spirv (program_bc_spirv,
-                                    (const char *)program->program_il,
-                                    (uint64_t)program->program_il_size);
-  POCL_RETURN_ERROR_ON ((errcode != 0), CL_BUILD_PROGRAM_FAILURE,
-                        "failed to write into pocl cache\n");
-
-  for (unsigned i = 0; i < program->num_spec_consts; ++i)
-    spec_constants_changed += program->spec_const_is_set[i];
-
-  if (spec_constants_changed)
-    {
-      strcpy (concated_spec_const_option, "--spec-const=");
-      for (unsigned i = 0; i < program->num_spec_consts; ++i)
-        {
-          if (program->spec_const_is_set[i])
-            {
-              char opt[MAX_SPEC_CONST_OPT_LEN];
-              snprintf (opt, MAX_SPEC_CONST_OPT_LEN, "%u:i%u:%zu ",
-                        program->spec_const_ids[i],
-                        program->spec_const_sizes[i] * 8,
-                        program->spec_const_values[i]);
-              strcat (concated_spec_const_option, opt);
-            }
-        }
-    }
-  else
-    {
-      /* skip concated_spec_const_option */
-      args[0] = NULL;
-      args[1] = pocl_get_path ("LLVM_SPIRV", LLVM_SPIRV);
-      final_args = args + 1;
-    }
-
-  errcode = pocl_run_command (final_args);
-  POCL_GOTO_ERROR_ON ((errcode != 0), CL_INVALID_VALUE,
-                      "External command (llvm-spirv translator) failed!\n");
-
-  POCL_GOTO_ERROR_ON (
-      (pocl_reload_program_bc (unlinked_program_bc_temp, program, device_i)),
-      CL_INVALID_VALUE, "Can't read llvm-spirv converted bitcode file\n");
-
-  errcode = CL_SUCCESS;
-
-ERROR:
-  if (pocl_get_bool_option ("POCL_LEAVE_KERNEL_COMPILER_TEMP_FILES", 0) == 0)
-    {
-      if (unlinked_program_bc_temp[0])
-        pocl_remove (unlinked_program_bc_temp);
-      if (program_bc_spirv[0])
-        pocl_remove (program_bc_spirv);
-    }
-  return errcode;
-#else
-  return -1;
-#endif
 }
 
 /* Converts SPIR-V / SPIR to LLVM IR, and links it to pocl's kernel library */
@@ -656,7 +597,7 @@ pocl_llvm_convert_and_link_ir (cl_program program, cl_uint device_i,
                                int link_builtin_lib, int spir_build)
 {
   cl_device_id device = program->devices[device_i];
-  int errcode;
+  int errcode = 0;
   char program_bc_path[POCL_MAX_PATHNAME_LENGTH];
 
   if (program->binaries[device_i])
@@ -664,16 +605,23 @@ pocl_llvm_convert_and_link_ir (cl_program program, cl_uint device_i,
       int spir_binary
           = pocl_bitcode_is_triple ((char *)program->binaries[device_i],
                                program->binary_sizes[device_i], "spir");
+      int device_binary = pocl_bitcode_is_triple (
+        (char *)program->binaries[device_i], program->binary_sizes[device_i],
+        device->llvm_target_triplet);
       if (spir_binary)
         {
-          POCL_MSG_PRINT_LLVM ("LLVM-SPIR binary detected\n");
-          if (!spir_build)
-            POCL_MSG_WARN (
-                "SPIR binary provided, but no spir in build options\n");
+          POCL_MSG_PRINT_LLVM ("SPIR binary detected\n");
+        }
+      else if (device_binary)
+        {
+          POCL_MSG_PRINT_LLVM ("LLVM IR binary detected for device %d\n",
+                               device_i);
         }
       else
-        POCL_MSG_PRINT_LLVM ("building from a BC binary for device %d\n",
-                             device_i);
+        {
+          POCL_RETURN_ERROR_ON (errcode, CL_LINK_PROGRAM_FAILURE,
+                                "The binary was not recognized\n");
+        }
     }
 
   // SPIR-V requires special handling because of spec constants
@@ -777,7 +725,6 @@ pocl_llvm_convert_and_link_ir (cl_program program, cl_uint device_i,
   return CL_SUCCESS;
 }
 
-
 #endif
 
 int
@@ -787,8 +734,8 @@ pocl_driver_build_source (cl_program program, cl_uint device_i,
                           const char **header_include_names,
                           int link_builtin_lib)
 {
-  assert (program->devices[device_i]->compiler_available == CL_TRUE);
-  assert (program->devices[device_i]->linker_available == CL_TRUE);
+  assert (program->devices[device_i]->compiler_available);
+  assert (program->devices[device_i]->linker_available);
 
 #ifdef ENABLE_LLVM
 
@@ -799,8 +746,8 @@ pocl_driver_build_source (cl_program program, cl_uint device_i,
                                   link_builtin_lib);
 
 #else
-  POCL_RETURN_ERROR_ON (1, CL_BUILD_PROGRAM_FAILURE,
-                        "This device requires LLVM to build from sources\n");
+  POCL_RETURN_ERROR (CL_BUILD_PROGRAM_FAILURE,
+                     "This device requires LLVM to build from sources\n");
 #endif
 }
 
@@ -882,8 +829,8 @@ pocl_driver_link_program (cl_program program, cl_uint device_i,
                         "Linking of program failed\n");
   return CL_SUCCESS;
 #else
-  POCL_RETURN_ERROR_ON (1, CL_BUILD_PROGRAM_FAILURE,
-                        "This device requires LLVM to link binaries\n");
+  POCL_RETURN_ERROR (CL_BUILD_PROGRAM_FAILURE,
+                     "This device requires LLVM to link binaries\n");
 
 #endif
 }
@@ -929,9 +876,11 @@ pocl_driver_supports_binary (cl_device_id device, size_t length,
 {
 #ifdef ENABLE_LLVM
 
-  /* SPIR-V binaries are supported if we have llvm-spirv */
+  /* SPIR-V binaries are supported if we have SPIRV support in LLVM */
 #ifdef ENABLE_SPIRV
-  if (pocl_bitcode_is_spirv_execmodel_kernel (binary, length))
+  if ((strstr (device->extensions, "cl_khr_il_program") != NULL) &&
+      pocl_bitcode_is_spirv_execmodel_kernel (binary, length,
+                                              device->address_bits))
     return 1;
 #endif
 
@@ -943,8 +892,8 @@ pocl_driver_supports_binary (cl_device_id device, size_t length,
   return 0;
 #else
   POCL_MSG_ERR (
-      "This driver was not build with LLVM support, so "
-      "don't support loading SPIR or LLVM IR binaries, only poclbinaries.\n");
+      "This PoCL driver was not build with LLVM support, so it "
+      "doesn't support loading SPIR or LLVM IR binaries, only poclbinaries.\n");
   return 0;
 #endif
 }
@@ -1012,7 +961,11 @@ pocl_driver_build_poclbinary (cl_program program, cl_uint device_i)
 
       /* Force generate a generic WG function to ensure all local sizes
          can be executed using the binary. */
-      device->ops->compile_kernel (&cmd, kernel, device, 0);
+      if (device->ops->compile_kernel (&cmd, kernel, device, 0) != 0)
+        {
+          POCL_UNLOCK_OBJ (program);
+          return CL_INVALID_OPERATION;
+        }
       /* Then generate specialized ones as requested via the
          POCL_BINARY_SPECIALIZE_WG configuration option. */
       char *temp
@@ -1041,7 +994,7 @@ pocl_driver_build_poclbinary (cl_program program, cl_uint device_i)
 
           char *param1 = NULL, *param2 = NULL;
           int params_found
-              = sscanf (token, "%lu-%lu-%lu-%m[^-]-%m[^-]",
+              = sscanf (token, "%zu-%zu-%zu-%m[^-]-%m[^-]",
                         &cmd.command.run.pc.local_size[0],
                         &cmd.command.run.pc.local_size[1],
                         &cmd.command.run.pc.local_size[2], &param1, &param2);
@@ -1066,15 +1019,23 @@ pocl_driver_build_poclbinary (cl_program program, cl_uint device_i)
           free (param1);
           free (param2);
 
-          device->ops->compile_kernel (&cmd, kernel, device, 1);
+          if (device->ops->compile_kernel (&cmd, kernel, device, 1) != 0)
+            {
+              POCL_UNLOCK_OBJ (program);
+              return CL_INVALID_OPERATION;
+            }
         }
       free (temp);
     }
 
-  pocl_driver_build_gvar_init_kernel (program, device_i, device, NULL);
+  if (pocl_driver_build_gvar_init_kernel (program, device_i, device, NULL)
+      != 0)
+    {
+      POCL_UNLOCK_OBJ (program);
+      return CL_INVALID_OPERATION;
+    }
 
   POCL_UNLOCK_OBJ (program);
-
   return CL_SUCCESS;
 }
 
@@ -1178,13 +1139,15 @@ pocl_driver_build_opencl_builtins (cl_program program, cl_uint device_i)
 * \param [in] dev_i index into program->devices[] corresponding to device
 * \param [in] callback either NULL or a callback
 */
-void
-pocl_driver_build_gvar_init_kernel (cl_program program, cl_uint dev_i,
-                                    cl_device_id device, gvar_init_callback_t callback)
+int
+pocl_driver_build_gvar_init_kernel (cl_program program,
+                                    cl_uint dev_i,
+                                    cl_device_id device,
+                                    gvar_init_callback_t callback)
 {
 #ifdef ENABLE_HOST_CPU_DEVICES
   if (device->run_program_scope_variables_pass == CL_FALSE)
-    return;
+    return CL_SUCCESS;
 
   if (program->global_var_total_size[dev_i] > 0 && program->gvar_storage[dev_i] == NULL)
     {
@@ -1231,13 +1194,16 @@ pocl_driver_build_gvar_init_kernel (cl_program program, cl_uint dev_i,
       fake_cmd.command.run.pc.global_offset[2] = 0;
       fake_cmd.command.run.pc.global_var_buffer = program->gvar_storage[dev_i];
 
-      device->ops->compile_kernel (&fake_cmd, &fake_kernel, device, 0);
+      if (device->ops->compile_kernel (&fake_cmd, &fake_kernel, device, 0)
+          != 0)
+        return CL_INVALID_OPERATION;
 
       if (callback) {
         callback (program, dev_i, &fake_cmd);
       }
     }
 #endif
+  return CL_SUCCESS;
 }
 
 

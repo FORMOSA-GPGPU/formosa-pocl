@@ -45,7 +45,8 @@ int const niters = 10;
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/time.h>
+#include <string.h>
+#include <time.h>
 
 #include "pocl_opencl.h"
 
@@ -464,7 +465,8 @@ void setup(const char* program_source1, const char* program_source2)
   // Choose a platform and a context (basically a device)
   cl_uint num_platforms;
   clGetPlatformIDs(0, NULL, &num_platforms);
-  cl_platform_id platform_ids[num_platforms];
+  cl_platform_id *platform_ids
+      = malloc (sizeof (cl_platform_id) * num_platforms);
   clGetPlatformIDs(num_platforms, &platform_ids[0], &num_platforms);
   if (num_platforms <= 0) {
     fprintf(stderr, "No OpenCL platforms found\n");
@@ -487,18 +489,21 @@ void setup(const char* program_source1, const char* program_source2)
     size_t platform_name_length;
     clGetPlatformInfo(tmp_platform_id, CL_PLATFORM_NAME,
                       0, NULL, &platform_name_length);
-    char platform_name[platform_name_length];
+    char *platform_name = malloc (platform_name_length);
     clGetPlatformInfo(tmp_platform_id, CL_PLATFORM_NAME,
                       platform_name_length, platform_name, NULL);
     printf("   OpenCL platform name: %s\n", platform_name);
+    free (platform_name);
+
     size_t platform_vendor_length;
     clGetPlatformInfo(tmp_platform_id, CL_PLATFORM_VENDOR,
                       0, NULL, &platform_vendor_length);
-    char platform_vendor[platform_vendor_length];
+    char *platform_vendor = malloc (platform_vendor_length);
     clGetPlatformInfo(tmp_platform_id, CL_PLATFORM_VENDOR,
                       platform_vendor_length, platform_vendor, NULL);
     printf("   OpenCL platform vendor: %s\n", platform_vendor);
-    
+    free (platform_vendor);
+
     cl_context_properties const cprops[] =
       {CL_CONTEXT_PLATFORM, (cl_context_properties)tmp_platform_id, 0};
     context =
@@ -507,6 +512,8 @@ void setup(const char* program_source1, const char* program_source2)
       platform_id = tmp_platform_id;
     }
   }
+  free (platform_ids);
+
   if (platform_id == 0) {
     // Could not find a context on any platform, abort
     fprintf(stderr, "Could not create OpenCL context for selected device type\n");
@@ -516,33 +523,51 @@ void setup(const char* program_source1, const char* program_source2)
   size_t ndevice_ids;
   clGetContextInfo(context, CL_CONTEXT_DEVICES, 0, NULL, &ndevice_ids);
   ndevice_ids /= sizeof(cl_device_id);
-  cl_device_id device_ids[ndevice_ids];
+  cl_device_id *device_ids = malloc (sizeof (cl_device_id) * ndevice_ids);
   clGetContextInfo(context, CL_CONTEXT_DEVICES,
                    ndevice_ids*sizeof(cl_device_id), device_ids, NULL);
   assert(ndevice_ids >= 1);
   main_device_id = device_ids[0];
+  free (device_ids);
+
+  size_t device_extensions_legth = 0;
+  clGetDeviceInfo (main_device_id, CL_DEVICE_EXTENSIONS, 0, NULL,
+                   &device_extensions_legth);
+  char *device_extensions = malloc (device_extensions_legth);
+  clGetDeviceInfo (main_device_id, CL_DEVICE_EXTENSIONS,
+                   device_extensions_legth, device_extensions, NULL);
+  if (!strstr (device_extensions, "cl_khr_fp64"))
+    {
+      printf ("SKIP: device lacks double support.\n");
+      exit (77);
+    }
+  free (device_extensions);
 
   if (use_subdev)
     {
       {
-        cl_uint max_cus;
-        int err = clGetDeviceInfo (main_device_id, CL_DEVICE_MAX_COMPUTE_UNITS,
-                                   sizeof (max_cus), &max_cus, NULL);
+        cl_uint max_subdevs = 0;
+        int err = clGetDeviceInfo (main_device_id, CL_DEVICE_PARTITION_MAX_SUB_DEVICES,
+                                   sizeof (max_subdevs), &max_subdevs, NULL);
         assert (err == CL_SUCCESS);
-        if (max_cus < 2)
+        if (max_subdevs < 2)
           {
             fprintf (stderr,
-                     "Insufficient compute units for subdevice creation\n");
+                     "Insufficient # of subdevices for subdevice creation\n");
             exit (77);
           }
       }
       const cl_device_partition_property props[]
-          = { CL_DEVICE_PARTITION_EQUALLY, 2, 0 };
-      cl_device_id subdevs[128];
+          = { CL_DEVICE_PARTITION_BY_COUNTS, 1, 1, 0 };
+      cl_device_id subdevs[2];
       cl_uint retval;
       int err
-          = clCreateSubDevices (main_device_id, props, 128, subdevs, &retval);
-      assert (err == CL_SUCCESS);
+          = clCreateSubDevices (main_device_id, props, 2, subdevs, &retval);
+      if (err != CL_SUCCESS) {
+        fprintf (stderr, "clCreateSubDevices failed\n");
+        exit (1);
+      }
+
       device_id = subdevs[0];
     }
   else
@@ -550,28 +575,31 @@ void setup(const char* program_source1, const char* program_source2)
 
   size_t device_name_length;
   clGetDeviceInfo(device_id, CL_DEVICE_NAME, 0, NULL, &device_name_length);
-  char device_name[device_name_length];
+  char *device_name = malloc (device_name_length);
   clGetDeviceInfo(device_id, CL_DEVICE_NAME,
                   device_name_length, device_name, NULL);
   printf("OpenCL device name: %s\n", device_name);
-  
+  free (device_name);
+
   clGetDeviceInfo(device_id, CL_DEVICE_PLATFORM,
                   sizeof platform_id, &platform_id, NULL);
   size_t platform_name_length;
   clGetPlatformInfo(platform_id, CL_PLATFORM_NAME,
                     0, NULL, &platform_name_length);
-  char platform_name[platform_name_length];
+  char *platform_name = malloc (platform_name_length);
   clGetPlatformInfo(platform_id, CL_PLATFORM_NAME,
                     platform_name_length, platform_name, NULL);
   printf("OpenCL platform name: %s\n", platform_name);
+  free (platform_name);
   size_t platform_vendor_length;
   clGetPlatformInfo(platform_id, CL_PLATFORM_VENDOR,
                     0, NULL, &platform_vendor_length);
-  char platform_vendor[platform_vendor_length];
+  char *platform_vendor = malloc (platform_vendor_length);
   clGetPlatformInfo(platform_id, CL_PLATFORM_VENDOR,
                     platform_vendor_length, platform_vendor, NULL);
   printf("OpenCL platform vendor: %s\n", platform_vendor);
-  
+  free (platform_vendor);
+
   cmd_queue = clCreateCommandQueue(context, device_id, 0, NULL);
   assert(cmd_queue);
 
@@ -604,7 +632,7 @@ void setup(const char* program_source1, const char* program_source2)
     ierr = clGetProgramBuildInfo(program1, device_id,
                                  CL_PROGRAM_BUILD_LOG, 0, NULL, &log_size);
     assert(!ierr);
-    char build_log[log_size];
+    char *build_log = malloc (log_size);
     ierr = clGetProgramBuildInfo(program1, device_id,
                                  CL_PROGRAM_BUILD_LOG,
                                  log_size, build_log, NULL);
@@ -613,6 +641,7 @@ void setup(const char* program_source1, const char* program_source2)
            "********************************************************************************\n"
            "%s\n"
            "********************************************************************************\n", build_log);
+    free (build_log);
     assert(0);
   }
 
@@ -1423,28 +1452,30 @@ int main(int argc, char** argv)
       use_subdev = 1;
 
   printf("Reading sources...\n");
-  FILE *const source1_file = fopen(SRCDIR "/ML_BSSN_CL_RHS1.cl", "r");
+  FILE *const source1_file = fopen (SRCDIR "/ML_BSSN_CL_RHS1.cl", "rb");
   assert(source1_file != NULL && "ML_BSSN_CL_RHS1.cl not found!");
   fseek(source1_file, 0, SEEK_END);
   size_t const source1_size = ftell(source1_file);
   fseek(source1_file, 0, SEEK_SET);
-  char source1[source1_size + 1];
+  char *source1 = malloc (source1_size + 1);
   fread(source1, source1_size, 1, source1_file);
   source1[source1_size] = '\0';
   fclose(source1_file);
 
-  FILE *const source2_file = fopen(SRCDIR "/ML_BSSN_CL_RHS2.cl", "r");
+  FILE *const source2_file = fopen (SRCDIR "/ML_BSSN_CL_RHS2.cl", "rb");
   assert(source2_file != NULL && "ML_BSSN_CL_RHS2.cl not found!");
   fseek(source2_file, 0, SEEK_END);
   size_t const source2_size = ftell(source2_file);
   fseek(source2_file, 0, SEEK_SET);
-  char source2[source2_size + 1];
+  char *source2 = malloc (source2_size + 1);
   fread(source2, source2_size, 1, source2_file);
   source2[source2_size] = '\0';
   fclose(source2_file);
   
   printf("Initialise...\n");
   setup(source1, source2);
+  free (source2);
+  free (source1);
   cGH cctkGH;
   cctk_parameters_t cctk_parameters;
   cctk_arguments_t cctk_arguments;
@@ -1460,17 +1491,13 @@ int main(int argc, char** argv)
   double min_elapsed = HUGE_VAL;
   double avg_elapsed = 0.0;
   for (int n=0; n<niters; ++n) {
-    struct timeval tv0;
-    gettimeofday(&tv0, NULL);
-    exec_ML_BSSN_CL_RHS1(&cctkGH, &cctk_arguments);
-    exec_ML_BSSN_CL_RHS2(&cctkGH, &cctk_arguments);
-    struct timeval tv1;
-    gettimeofday(&tv1, NULL);
-    double const elapsed =
-      (tv1.tv_sec + 1.0e-6 * tv1.tv_usec) -
-      (tv0.tv_sec + 1.0e-6 * tv0.tv_usec);
-    min_elapsed = elapsed < min_elapsed ? elapsed : min_elapsed;
-    avg_elapsed += elapsed;
+      double tv0 = (double)clock ();
+      exec_ML_BSSN_CL_RHS1 (&cctkGH, &cctk_arguments);
+      exec_ML_BSSN_CL_RHS2 (&cctkGH, &cctk_arguments);
+      double tv1 = (double)clock ();
+      double const elapsed = (tv1 - tv0) / CLOCKS_PER_SEC;
+      min_elapsed = elapsed < min_elapsed ? elapsed : min_elapsed;
+      avg_elapsed += elapsed;
   }
   avg_elapsed /= niters;
   printf("End timing\n");

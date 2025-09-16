@@ -234,7 +234,8 @@ struct StringData {
 static Value *
 callBufferedPrintfStart(IRBuilder<> &Builder, SmallVector<llvm::Value *> &Args,
                         Value *Fmt, unsigned PrintfBufferAS, bool SkipFmtStr,
-                        bool DontAlign, SparseBitVector<8> &SpecIsCString,
+                        bool DontAlign, bool PromoteFP64,
+                        SparseBitVector<8> &SpecIsCString,
                         SmallVectorImpl<StringData> &StringContents,
                         Value *&ArgSize, Value *&FmtStrLen) {
   Module *M = Builder.GetInsertBlock()->getModule();
@@ -326,7 +327,14 @@ callBufferedPrintfStart(IRBuilder<> &Builder, SmallVector<llvm::Value *> &Args,
             StringData(StringRef(), LenWithNull, LenWithNullAligned, false));
       }
     } else {
-      TypeSize AllocSize = DL.getTypeAllocSize(Args[i]->getType());
+      Type *T = Args[i]->getType();
+      TypeSize AllocSize = DL.getTypeAllocSize(T);
+      // stores of Ints & Vectors(of int,float) <= 64bits are expanded to 64bits
+      // Float scalars are expanded to 64bits if device supports FP64
+      if ((T->isIntegerTy() || T->isVectorTy() ||
+           (PromoteFP64 && T->isFloatingPointTy())) &&
+          (DL.getTypeSizeInBits(T) < 64))
+        AllocSize = TypeSize::get(8, false);
       llvm::AllocaInst *AI = dyn_cast<AllocaInst>(Args[i]);
       if (AI) {
         // byval arguments are passed as pointers/allocas.
@@ -372,7 +380,7 @@ callBufferedPrintfStart(IRBuilder<> &Builder, SmallVector<llvm::Value *> &Args,
   FunctionType *FTy_alloc = FunctionType::get(PtrTy, Tys_alloc, false);
 
   auto PrintfAllocFn =
-      M->getOrInsertFunction(StringRef("__printf_alloc"), FTy_alloc, Attr);
+      M->getOrInsertFunction(StringRef("pocl_printf_alloc_stub"), FTy_alloc, Attr);
   return Builder.CreateCall(PrintfAllocFn, Alloc_args, "printf_alloc_fn");
 }
 
@@ -423,9 +431,15 @@ static void processConstantStringArg(StringData *SD, IRBuilder<> &Builder,
   }
 }
 
-static Value *processNonStringArg(Value *Arg, IRBuilder<> &Builder) {
+static Value *processNonStringArg(Value *Arg, IRBuilder<> &Builder,
+                                  bool PromoteFP64) {
   const DataLayout &DL = Builder.GetInsertBlock()->getModule()->getDataLayout();
   auto Ty = Arg->getType();
+
+  // store at least 64 bits for every Int & Vector smaller than 64bits.
+  // This is to avoid having to deal with various rules for
+  // int & vector promotions by different backends
+  // (x86, ARM, RISC-V etc...) */
 
   if (auto IntTy = dyn_cast<IntegerType>(Ty)) {
     if (IntTy->getBitWidth() < 64) {
@@ -433,10 +447,19 @@ static Value *processNonStringArg(Value *Arg, IRBuilder<> &Builder) {
     }
   }
 
-  if (Ty->isFloatingPointTy()) {
-    if (DL.getTypeAllocSize(Ty) < 8) {
-      return Builder.CreateFPExt(Arg, Builder.getDoubleTy());
+  if (PromoteFP64 && Ty->isFloatingPointTy()) {
+    auto FP64T = Builder.getDoubleTy();
+    if (DL.getTypeAllocSize(Ty) < DL.getTypeAllocSize(FP64T)) {
+      return Builder.CreateFPExt(Arg, FP64T);
     }
+  }
+
+  auto VecTy = dyn_cast<VectorType>(Ty);
+  if (VecTy && (DL.getTypeSizeInBits(Ty) < 64)) {
+    Type *IntT = IntegerType::get(Ty->getContext(), DL.getTypeSizeInBits(VecTy));
+    Value *VecAsInt = Builder.CreateBitCast(Arg, IntT);
+    Type *ExtT = IntegerType::get(Ty->getContext(), 64);
+    return Builder.CreateZExt(VecAsInt, ExtT);
   }
 
   return Arg;
@@ -460,13 +483,13 @@ callBufferedPrintfArgPush(IRBuilder<> &Builder,
                           SmallVector<llvm::Value *> &Args, Value *PtrToStore,
                           SparseBitVector<8> &SpecIsCString,
                           SmallVectorImpl<StringData> &StringContents,
-                          bool SkipFmtStr, bool DontAlign) {
+                          bool SkipFmtStr, bool DontAlign, bool PromoteFP64) {
   Module *M = Builder.GetInsertBlock()->getModule();
   const DataLayout &DL = M->getDataLayout();
   auto StrIt = StringContents.begin();
   size_t i = SkipFmtStr ? 1 : 0;
   for (; i < Args.size(); i++) {
-    SmallVector<Value *, 32> WhatToStore;
+    SmallVector<Value *, 8> WhatToStore;
     if ((i == 0) || SpecIsCString.test(i)) {
       if (StrIt->IsConst && !DontAlign) {
         processConstantStringArg(StrIt, Builder, DontAlign, WhatToStore);
@@ -494,10 +517,7 @@ callBufferedPrintfArgPush(IRBuilder<> &Builder,
         continue;
       }
     } else {
-      if (DontAlign)
-        WhatToStore.push_back(Args[i]);
-      else
-        WhatToStore.push_back(processNonStringArg(Args[i], Builder));
+      WhatToStore.push_back(processNonStringArg(Args[i], Builder, PromoteFP64));
     }
 
     for (Value *toStore : WhatToStore) {
@@ -558,7 +578,8 @@ Value *pocl::emitPrintfCall(IRBuilder<> &Builder,
     // this truncates ArgSize to int32
     Value *StartPtr = callBufferedPrintfStart(
         Builder, Args, Fmt, Flags.PrintfBufferAS, SkipFmtStr, Flags.DontAlign,
-        SpecIsCString, StringContents, ArgSize, FmtStrLen);
+        Flags.ArgPromotionFP64, SpecIsCString, StringContents, ArgSize,
+        FmtStrLen);
 
     // The buffered version still follows OpenCL printf standards for
     // printf return value, i.e 0 on success, -1 on failure.
@@ -600,14 +621,12 @@ Value *pocl::emitPrintfCall(IRBuilder<> &Builder,
     uint32_t FlagsOrValue = 0;
     if (SkipFmtStr)
       FlagsOrValue |= PRINTF_BUFFER_CTWORD_SKIP_FMT_STR;
-    if (Flags.ArgPromotionCharShort)
-      FlagsOrValue |= PRINTF_BUFFER_CTWORD_CHAR_SHORT_PR;
-    if (Flags.ArgPromotionChar2)
-      FlagsOrValue |= PRINTF_BUFFER_CTWORD_CHAR2_PR;
-    if (Flags.ArgPromotionFloat)
+    if (Flags.ArgPromotionFP64)
       FlagsOrValue |= PRINTF_BUFFER_CTWORD_FLOAT_PR;
     if (Flags.IsBigEndian)
       FlagsOrValue |= PRINTF_BUFFER_CTWORD_BIG_ENDIAN;
+    if (Flags.Pointers32Bit)
+      FlagsOrValue |= PRINTF_BUFFER_CTWORD_32BIT_POINTERS;
 
     if (FlagsOrValue)
       ControlDWord =
@@ -656,10 +675,11 @@ Value *pocl::emitPrintfCall(IRBuilder<> &Builder,
 
     // Push The printf arguments onto buffer
     callBufferedPrintfArgPush(Builder, Args, Ptr, SpecIsCString, StringContents,
-                              SkipFmtStr, Flags.DontAlign);
+                              SkipFmtStr, Flags.DontAlign,
+                              Flags.ArgPromotionFP64);
 
     // flush the buffer if requested by calling
-    // void __printf_flush_buffer(void* buffer, uint32_t bytes);
+    // void pocl_flush_printf_buffer(void* buffer, uint32_t bytes);
     if (Flags.FlushBuffer) {
       SmallVector<Value *, 2> Alloc_args;
       Alloc_args.push_back(StartPtr);
@@ -680,7 +700,7 @@ Value *pocl::emitPrintfCall(IRBuilder<> &Builder,
       FunctionType *FTy_alloc =
           FunctionType::get(Builder.getVoidTy(), Tys_alloc, false);
       auto PrintfAllocFn = M->getOrInsertFunction(
-          StringRef("__printf_flush_buffer"), FTy_alloc, Attr);
+          StringRef("pocl_flush_printf_buffer"), FTy_alloc, Attr);
       Builder.CreateCall(PrintfAllocFn, Alloc_args);
     }
 

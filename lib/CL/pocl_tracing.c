@@ -24,16 +24,11 @@
 
 #define _DEFAULT_SOURCE
 
+#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <netinet/in.h>
-#include <netdb.h>
 #include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
+#include <sys/types.h>
 #include <time.h>
 
 #include "pocl_cq_profiling.h"
@@ -118,7 +113,7 @@ text_tracer_init ()
                                           "pocl_trace_events.log");
   text_tracer_file = fopen (text_tracer_output, "w");
   if (!text_tracer_file)
-    POCL_ABORT ("Failed to open text tracer output\n");
+    POCL_MSG_ERR ("Failed to open text tracer output\n");
 }
 
 static void
@@ -135,10 +130,7 @@ static void
 text_tracer_event_updated (cl_event event, int status)
 {
   if (!text_tracer_file)
-    {
-      POCL_MSG_ERR ("TEXT TRACER: log file doesn't exist\n");
-      return;
-    }
+    return;
 
   // #######################################################
   // don't write until events are finished, since remote driver

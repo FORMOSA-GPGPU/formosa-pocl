@@ -40,6 +40,17 @@
    0 marks an invalid/undefined object. */
 typedef uint64_t pocl_obj_id_t;
 
+#if defined(EXPORT_POCL_LIB) && defined(_MSC_VER)
+/* To successfully export OpenCL API, the dllexport must be placed on
+ * both the declaration and the definition as MSVC requires that both
+ * of them have the same attributes.
+ *
+ * NOTE: Trouble is expected if CL/opencl.h is not included for the
+ *       first time here.
+ */
+#define CL_API_ENTRY __declspec(dllexport)
+#endif
+
 #ifndef CL_TARGET_OPENCL_VERSION
 #define CL_TARGET_OPENCL_VERSION 300
 #endif
@@ -51,8 +62,7 @@ typedef uint64_t pocl_obj_id_t;
 
 #include "pocl_context.h"
 
-/* detects restrict, variadic macros etc */
-#include "pocl_compiler_features.h"
+#include "vccompat.hpp"
 
 /* The maximum file, directory and path name lengths.
    NOTE: GDB seems to fail to load symbols from .so files which have
@@ -60,12 +70,39 @@ typedef uint64_t pocl_obj_id_t;
    limiter. */
 #define POCL_MAX_DIRNAME_LENGTH 64
 #define POCL_MAX_FILENAME_LENGTH (POCL_MAX_DIRNAME_LENGTH)
+/* -5: Leave space for .so and for additional .o if temp file debugging
+   is enabled. */
+#define POCL_HASH_FILENAME_LENGTH (POCL_MAX_DIRNAME_LENGTH - 5)
 #define POCL_MAX_PATHNAME_LENGTH 4096
 
 /* official Khronos ID */
 #ifndef CL_KHRONOS_VENDOR_ID_POCL
 #define CL_KHRONOS_VENDOR_ID_POCL 0x10006
 #endif
+
+#if __cplusplus >= 201103L
+#  define POCL_ALIGNAS(x) alignas(x)
+#elif __STDC_VERSION__ >= 201112L /* C11 */
+#  define POCL_ALIGNAS(x) _Alignas(x)
+#elif defined(_MSC_VER)
+#  define POCL_ALIGNAS(x) __declspec(align(x))
+#elif defined(__clang__) || defined(__GNUC__)
+#  define POCL_ALIGNAS(x) __attribute__ ((aligned (x)))
+#else
+/* Emit an error for potential correctness issues if alignas() is ignored. */
+#  error "Don't know alignas() counterpart for this compiler!"
+#endif
+
+#ifndef _WIN32
+#define POCL_PATH_SEPARATOR "/"
+#else
+#define POCL_PATH_SEPARATOR "\\"
+#endif
+
+/* Always align buffer allocations, context data, and kernel arguments to
+   sizeof(double16) to enforce easier vectorization for targets with naturally
+   aligned loads/stores. */
+#define MAX_EXTENDED_ALIGNMENT 128
 
 /* represents a single buffer to host memory mapping */
 typedef struct mem_mapping
@@ -489,6 +526,17 @@ typedef union
 typedef struct _pocl_buffer_migration_info
   pocl_buffer_migration_info;
 
+/**
+ * Enum that represents different possible states of a command node.
+ */
+typedef enum
+{
+  POCL_COMMAND_FAILED = -1,
+  /* Default unless set to ready. */
+  POCL_COMMAND_NOT_READY = 0,
+  POCL_COMMAND_READY = 1,
+} pocl_command_state;
+
 /* One item in a command queue or a command buffer. */
 typedef struct _cl_command_node _cl_command_node;
 struct _cl_command_node
@@ -497,7 +545,6 @@ struct _cl_command_node
   cl_command_type type;
   _cl_command_node *next; // for linked-list storage
   _cl_command_node *prev;
-  cl_int buffered;
 
   /***
    * Command buffers use sync points as a template for synchronizing commands
@@ -522,15 +569,22 @@ struct _cl_command_node
   cl_device_id device;
   /* The index of the targeted device in the **program** device list. */
   unsigned program_device_i;
-  cl_int ready;
 
-  /* Fields needed by buffered commands only: */
+  /* Used to indicate if a node is ready to be executed or failed. */
+  pocl_command_state state;
+
+  /* true if the node belongs to a cl_command_buffer_khr */
+  cl_int buffered;
 
   /* Which of the command queues in the command buffer's queue list
    * this command was recorded for. */
   cl_uint queue_idx;
   /* List of buffers this command accesses, used for inserting migrations */
   pocl_buffer_migration_info *migr_infos;
+
+  /* back pointer to the command buffer, when this command is recorded
+   * in a cl_khr_command_buffer. NULL for other (non-buffered) commands */
+  cl_command_buffer_khr cmd_buffer;
 };
 
 /**
@@ -544,5 +598,19 @@ typedef enum
    * function arguments in the kernel. */
   POCL_AUTOLOCALS_TO_ARGS_ONLY_IF_DYNAMIC_LOCALS_PRESENT = 2,
 } pocl_autolocals_to_args_strategy;
+
+typedef struct pocl_version_t
+{
+  unsigned major;
+  unsigned minor;
+
+#ifdef __cplusplus
+  pocl_version_t () : major{0}, minor{0} {}
+  pocl_version_t (unsigned the_major, unsigned the_minor)
+    : major{the_major}, minor{the_minor}
+  {
+  }
+#endif
+} pocl_version_t;
 
 #endif /* POCL_H */

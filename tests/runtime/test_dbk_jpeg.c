@@ -27,46 +27,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "image_test_utils.h"
 #include "poclu.h"
 
 /* enable this and provide an output file name to the program
    to save compression results */
 /* #define WRITE_COMPRESS_OUTPUT */
-
-/**
- * Calculate the Peak Signal to Noise Ration (PSNR) of two images.
- *
- * \param height [in] height of both images.
- * \param width [in] width of both images.
- * \param pixel_stride [in] number of bytes to compare, 3 for RGB and 1 for
- * grayscale.
- * \param image [in] source/ground truth image.
- * \param approx [in] image to be compared.
- * \return PSNR as a double.
- */
-double
-calculate_PSNR (int const height,
-                int const width,
-                int const pixel_stride,
-                uint8_t const *restrict image,
-                uint8_t const *restrict approx)
-{
-
-  uint64_t sum = 0;
-  int points = height * width * pixel_stride;
-  int max = 0;
-  for (int i = 0; i < points; i++)
-    {
-      uint8_t image_i = image[i];
-      int error = image_i - approx[i];
-      sum += error * error;
-      if (max < image_i)
-        max = image_i;
-    }
-  double mse = (double)sum / points;
-
-  return 20 * log10 (max) - 10 * log10 (mse);
-}
 
 /**
  * Program arguments order:
@@ -78,6 +44,9 @@ calculate_PSNR (int const height,
  * Arguments to use with test data:
  * 640 480 <abs path to tram.rgb>
  */
+
+#define BUILTIN_KERNELS_STR_LEN 32768
+
 int
 main (int argc, char const *argv[])
 {
@@ -87,7 +56,6 @@ main (int argc, char const *argv[])
   errno = 0;
   char *end_ptr;
   int width = (int)strtol (argv[1], &end_ptr, 10);
-  printf ("errno: %d, %s, %d\n", errno, strerror (errno), *end_ptr);
   TEST_ASSERT (errno == 0 && *end_ptr == '\0');
   int height = (int)strtol (argv[2], &end_ptr, 10);
   TEST_ASSERT (errno == 0 && *end_ptr == '\0');
@@ -109,15 +77,35 @@ main (int argc, char const *argv[])
                                         &devices, &queues, 0);
   CHECK_OPENCL_ERROR_IN ("poclu_get_multiple_devices");
 
-  clCreateProgramWithDefinedBuiltInKernels_fn createProgramWithDBKs;
-  createProgramWithDBKs = (clCreateProgramWithDefinedBuiltInKernels_fn)
+  char builtin_list[BUILTIN_KERNELS_STR_LEN];
+
+  for (cl_uint i = 0; i < num_devices; ++i) {
+    size_t size_ret = 0;
+    int err = clGetDeviceInfo(devices[i], CL_DEVICE_BUILT_IN_KERNELS, 0, 0,
+                             &size_ret);
+    CHECK_OPENCL_ERROR_IN ("clGetDeviceInfo");
+    TEST_ASSERT(size_ret < BUILTIN_KERNELS_STR_LEN);
+    builtin_list[0] = 0;
+    err = clGetDeviceInfo(devices[i], CL_DEVICE_BUILT_IN_KERNELS,
+                          size_ret, builtin_list, 0 );
+    CHECK_OPENCL_ERROR_IN ("clGetDeviceInfo");
+    if ((strstr(builtin_list, "jpeg_encode") == NULL)
+        || (strstr(builtin_list, "jpeg_decode") == NULL))
+        {
+           printf("one of the devices does not support jpeg_encode "
+                  "or jpeg_decode DBK, skipping test\n");
+           return 77;
+        }
+  }
+
+  clCreateProgramWithDefinedBuiltInKernelsEXP_fn createProgramWithDBKs;
+  createProgramWithDBKs = (clCreateProgramWithDefinedBuiltInKernelsEXP_fn)
     clGetExtensionFunctionAddressForPlatform (
-      platform, "clCreateProgramWithDefinedBuiltInKernels");
+      platform, "clCreateProgramWithDefinedBuiltInKernelsEXP");
   TEST_ASSERT (createProgramWithDBKs != NULL);
-  BuiltinKernelId dbk_ids[]
-    = { POCL_CDBI_DBK_EXP_JPEG_ENCODE, POCL_CDBI_DBK_EXP_JPEG_DECODE };
-  const char *kernel_names[] = { "exp_jpeg_encode", "exp_jpeg_decode" };
-  cl_dbk_attributes_exp_jpeg_encode encode_attributes = { width, height, 80 };
+  cl_dbk_id_exp dbk_ids[] = { CL_DBK_JPEG_ENCODE_EXP, CL_DBK_JPEG_DECODE_EXP };
+  const char *kernel_names[] = { "jpeg_encode_exp", "jpeg_decode_exp" };
+  cl_dbk_attributes_jpeg_encode_exp encode_attributes = { width, height, 80 };
   const void *attributes[] = { &encode_attributes, NULL };
   cl_int device_support[] = { 0, 0 };
   cl_program program = createProgramWithDBKs (
@@ -189,7 +177,7 @@ main (int argc, char const *argv[])
   void *output_array = malloc (input_size);
   clEnqueueReadBuffer (queues[0], output_buf, CL_TRUE, 0, input_size,
                        output_array, 1, &size_read_event, NULL);
-  poclu_write_file (argv[4], output_array, input_size);
+  poclu_write_binfile (argv[4], output_array, input_size);
   free (output_array);
 #endif
 
@@ -201,7 +189,7 @@ main (int argc, char const *argv[])
                             write_event, decode_event };
   size_t all_events_size = sizeof (all_events) / sizeof (all_events[0]);
   clWaitForEvents (all_events_size, all_events);
-  for (int i = 0; i < all_events_size; i++)
+  for (size_t i = 0; i < all_events_size; i++)
     clReleaseEvent (all_events[i]);
 
   TEST_ASSERT (jpeg_size_value > 0);
@@ -220,7 +208,7 @@ main (int argc, char const *argv[])
   clReleaseKernel (decode_kernel);
   clReleaseProgram (program);
   clReleaseContext (context);
-  for (int i = 0; i < num_devices; i++)
+  for (cl_uint i = 0; i < num_devices; i++)
     {
       clReleaseDevice (devices[i]);
       clReleaseCommandQueue (queues[i]);

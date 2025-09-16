@@ -66,13 +66,16 @@ size_t tbb_get_numa_nodes() {
   return NumaIndexes.size();
 }
 
-void tbb_init_arena(pocl_tbb_scheduler_data *SchedData, int OnePerNode) {
+void tbb_init_arena(pocl_tbb_scheduler_data *SchedData, int OnePerNode, int MaxThreads) {
   TBBArena *TBBA = new TBBArena;
   SchedData->tbb_arena = TBBA;
   if (OnePerNode) {
     assert(LastInitializedNumaIndex < NumaIndexes.size());
     TBBA->NumaIdx = NumaIndexes[LastInitializedNumaIndex];
-    TBBA->Arena.initialize(tbb::task_arena::constraints(TBBA->NumaIdx));
+    auto Cont = tbb::task_arena::constraints(TBBA->NumaIdx);
+    if (MaxThreads > 0)
+      Cont.max_concurrency = MaxThreads;
+    TBBA->Arena.initialize(Cont);
   } else {
     TBBA->NumaIdx = UINT32_MAX;
     TBBA->Arena.initialize();
@@ -98,49 +101,47 @@ public:
     kernel_run_command *K = RunCmd;
     pocl_kernel_metadata_t *Meta = K->kernel->meta;
     const size_t CurThreadID = tbb::this_task_arena::current_thread_index();
-    void *Arguments[Meta->num_args + Meta->num_locals + 1];
-    void *Arguments2[Meta->num_args + Meta->num_locals + 1];
+    const size_t NumArgs = Meta->num_args + Meta->num_locals + 1;
+    std::vector<void *> Arguments(NumArgs);
+    std::vector<void *> Arguments2(NumArgs);
     char *LocalMem = SchedData->local_mem_global_ptr +
                      (SchedData->local_mem_size * CurThreadID);
     uchar *PrintfBuffer = SchedData->printf_buf_global_ptr +
                           (SchedData->printf_buf_size * CurThreadID);
     struct pocl_context PC;
 
-    pocl_setup_kernel_arg_array_with_locals((void **)&Arguments,
-                                            (void **)&Arguments2, K, LocalMem,
+    pocl_setup_kernel_arg_array_with_locals(Arguments.data(), Arguments2.data(),
+                                            K, LocalMem,
                                             SchedData->local_mem_size);
     memcpy(&PC, &K->pc, sizeof(struct pocl_context));
 
     // capacity and position already set up
     PC.printf_buffer = PrintfBuffer;
     uint32_t Position = 0;
+    uint32_t ExecutionFailed = 0;
     PC.printf_buffer_position = &Position;
     assert(PC.printf_buffer != NULL);
     assert(PC.printf_buffer_capacity > 0);
     assert(PC.printf_buffer_position != NULL);
 
-    /* Flush to zero is only set once at the start of the kernel execution
-     * because FTZ is a compilation option. */
-    unsigned Flush = K->kernel->program->flush_denorms;
-    pocl_set_ftz(Flush);
+    pocl_cpu_setup_rm_and_ftz(RunCmd->device, K->kernel->program);
 
     for (size_t X = r.pages().begin(); X != r.pages().end(); X++) {
       for (size_t Y = r.rows().begin(); Y != r.rows().end(); Y++) {
         for (size_t Z = r.cols().begin(); Z != r.cols().end(); Z++) {
-          /* Rounding mode must be reset after every iteration
-           * since it can be changed during kernel execution. */
-          pocl_set_default_rm();
-          K->workgroup((uint8_t *)Arguments, (uint8_t *)&PC, X, Y, Z);
+          K->workgroup((uint8_t *)Arguments.data(), (uint8_t *)&PC, X, Y, Z);
+          ExecutionFailed |= PC.execution_failed;
         }
       }
     }
+    POCL_ATOMIC_OR(RunCmd->execution_failed, ExecutionFailed);
 
 #ifndef ENABLE_PRINTF_IMMEDIATE_FLUSH
     pocl_write_printf_buffer((char *)PC.printf_buffer, Position);
 #endif
 
-    pocl_free_kernel_arg_array_with_locals((void **)&Arguments,
-                                           (void **)&Arguments2, K);
+    pocl_free_kernel_arg_array_with_locals(Arguments.data(), Arguments2.data(),
+                                           K);
   }
   WorkGroupScheduler(kernel_run_command *K, const pocl_tbb_scheduler_data *D)
       : RunCmd(K), SchedData(D) {}
@@ -151,8 +152,12 @@ static void finalizeKernelCommand(kernel_run_command *RunCmd) {
 
   pocl_release_dlhandle_cache(RunCmd->cmd->command.run.device_data);
 
-  POCL_UPDATE_EVENT_COMPLETE_MSG(RunCmd->cmd->sync.event.event,
+  if (RunCmd->execution_failed)
+    POCL_UPDATE_EVENT_FAILED_MSG(CL_FAILED, RunCmd->cmd->sync.event.event,
                                  "NDRange Kernel        ");
+  else
+    POCL_UPDATE_EVENT_COMPLETE_MSG(RunCmd->cmd->sync.event.event,
+                                   "NDRange Kernel        ");
   free_kernel_run_command(RunCmd);
 }
 
@@ -179,14 +184,25 @@ prepareKernelCommand(pocl_tbb_scheduler_data *SchedData,
   }
 
   /* initialize the program gvars if required */
-  pocl_driver_build_gvar_init_kernel(Program, DevI, Cmd->device,
-                                     pocl_cpu_gvar_init_callback);
+  if (pocl_driver_build_gvar_init_kernel(Program, DevI, Cmd->device,
+                                         pocl_cpu_gvar_init_callback) != 0) {
+    pocl_update_event_running(Cmd->sync.event.event);
+    POCL_UPDATE_EVENT_FAILED_MSG(CL_FAILED, Cmd->sync.event.event,
+                                 "CPU: failed to compile GVar init kernel");
+    return NULL;
+  }
 
   char *SavedName = NULL;
   pocl_sanitize_builtin_kernel_name(Kernel, &SavedName);
   void *ci = pocl_check_kernel_dlhandle_cache(Cmd, CL_TRUE, CL_TRUE);
   Cmd->command.run.device_data = ci;
   pocl_restore_builtin_kernel_name(Kernel, SavedName);
+  if (ci == NULL) {
+    pocl_update_event_running(Cmd->sync.event.event);
+    POCL_UPDATE_EVENT_FAILED_MSG(CL_FAILED, Cmd->sync.event.event,
+                                 "CPU: failed to compile kernel");
+    return NULL;
+  }
 
   RunCmd = new_kernel_run_command();
   RunCmd->data = SchedData;
@@ -202,6 +218,8 @@ prepareKernelCommand(pocl_tbb_scheduler_data *SchedData,
       reinterpret_cast<pocl_workgroup_func>(Cmd->command.run.wg);
   RunCmd->kernel_args = Cmd->command.run.arguments;
   RunCmd->next = NULL;
+  RunCmd->ref_count = 0;
+  RunCmd->execution_failed = 0;
 
   pocl_setup_kernel_arg_array(RunCmd);
 
@@ -301,7 +319,7 @@ static int runSingleCommand(pocl_tbb_scheduler_data *SchedData) {
   kernel_run_command *RunCmd;
   TBBArena *TBBA = SchedData->tbb_arena;
 
-  POCL_FAST_LOCK(SchedData->wq_lock_fast);
+  POCL_LOCK(SchedData->wq_lock_fast);
   int DoExit = 0;
 
 RETRY:
@@ -311,7 +329,7 @@ RETRY:
   Cmd = SchedData->work_queue;
   if (Cmd) {
     DL_DELETE(SchedData->work_queue, Cmd);
-    POCL_FAST_UNLOCK(SchedData->wq_lock_fast);
+    POCL_UNLOCK(SchedData->wq_lock_fast);
 
     assert(pocl_command_is_ready(Cmd->sync.event.event));
 
@@ -327,7 +345,7 @@ RETRY:
       TBBA->Arena.execute([Cmd]() { pocl_exec_command(Cmd); });
     }
 
-    POCL_FAST_LOCK(SchedData->wq_lock_fast);
+    POCL_LOCK(SchedData->wq_lock_fast);
   }
 
   /* if no command was available, sleep */
@@ -336,7 +354,7 @@ RETRY:
     goto RETRY;
   }
 
-  POCL_FAST_UNLOCK(SchedData->wq_lock_fast);
+  POCL_UNLOCK(SchedData->wq_lock_fast);
 
   return DoExit;
 }
@@ -349,7 +367,7 @@ void *TBBDriverThread(void *Dev) {
   while (1) {
     DoExit = runSingleCommand(SchedData);
     if (DoExit) {
-      POCL_EXIT_THREAD(NULL);
+      return NULL;
     }
   }
 }
