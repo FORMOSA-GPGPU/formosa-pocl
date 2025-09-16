@@ -245,7 +245,7 @@ static void create_trampoline_function(
   llvm::Type *voidType = llvm::Type::getVoidTy(context);
   auto i8Type = llvm::Type::getInt8Ty(context);
   auto i32Type = llvm::Type::getInt32Ty(context);
-  auto i8PtrType = i8Type->getPointerTo();
+  auto i8PtrType = llvm::PointerType::get(i8Type->getContext(), 0);
   auto i64Type = llvm::Type::getInt64Ty(context);
   llvm::FunctionType *trampolineType =
       llvm::FunctionType::get(voidType, {i8PtrType}, false);
@@ -273,7 +273,7 @@ static void create_trampoline_function(
       fsa_local_alloc_func, {local_size}, "allocated_local_mem");
 
   // Cast the `i8*` pointer to the structure type representing the arguments
-  llvm::Type *argStructPtrType = argStructType->getPointerTo();
+  llvm::Type *argStructPtrType = llvm::PointerType::get(argStructType->getContext(), 0);
   auto arg_struct_bytes =
       builder.CreateGEP(i8Type, argPtr, builder.getInt32(8));
   auto castedArg = builder.CreateBitCast(arg_struct_bytes, argStructPtrType);
@@ -442,7 +442,7 @@ int fsa_compile_program(char **kernel_names, int *num_kernels,
     file.close();
   }
 
-  std::string clang_path(CLANG);
+  std::string clang_path(CLANGCC);
   if (!llvm_path.empty()) {
     clang_path = llvm_path + "/bin/clang";
   }
