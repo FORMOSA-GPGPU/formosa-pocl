@@ -26,17 +26,19 @@
 
 #include "printf_buffer.h"
 #include "common.h"
+#include "pocl_compiler_macros.h"
 #include "pocl_debug.h"
 #include "printf_base.h"
 
 #include <assert.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
+#include <stdarg.h>
 
 #if 0
-
 int debugprintf(const char *fmt, ...)
 {
   int ret;
@@ -47,11 +49,8 @@ int debugprintf(const char *fmt, ...)
   return ret;
 }
 #define DEBUG_PRINTF(args) (debugprintf args)
-
 #else
-
 #define DEBUG_PRINTF(args) ((void)0)
-
 #endif
 
 /**************************************************************************/
@@ -117,26 +116,32 @@ DEFINE_PRINT_INTS (ulong, int64_t, uint64_t)
         if (d != 0)                                                           \
           __pocl_printf_putcf (p, ',');                                       \
         memcpy (&val, vals, sizeof (FLOAT_TYPE));                             \
-        vals += sizeof (FLOAT_TYPE);                                          \
+        vals = (char *)vals + sizeof (FLOAT_TYPE);                            \
         const char *other = NULL;                                             \
-        if (val != val)                                                       \
-          other = NANs[p->flags.uc ? 1 : 0];                                  \
-        if (val == (-INFINITY))                                               \
+        if (isnan (val))                                                      \
+          other = NANs[p->flags.uc];                                          \
+        if (isinf (val))                                                      \
           {                                                                   \
-            val = INFINITY;                                                   \
-            p->flags.sign = 1;                                                \
+            p->flags.sign = signbit (val) ? 1 : 0;                            \
+            other = INFs[p->flags.uc];                                        \
           }                                                                   \
-        if (val == (INFINITY))                                                \
-          other = INFs[p->flags.uc ? 1 : 0];                                  \
         if (other)                                                            \
-          __pocl_printf_nonfinite (p, other);                                 \
+          {                                                                   \
+            __pocl_printf_nonfinite (p, other);                               \
+            DEBUG_PRINTF (                                                    \
+              ("[printf:floats:sign=%u,other=%s]\n", p->flags.sign, other));  \
+          }                                                                   \
         else                                                                  \
-          __pocl_printf_float (p, (FLOAT_T)val);                              \
+          {                                                                   \
+            __pocl_printf_float (p, (FLOAT_T)val);                            \
+          }                                                                   \
       }                                                                       \
     DEBUG_PRINTF (("[printf:floats:done]\n"));                                \
   }
 
-DEFINE_PRINT_FLOATS (cl_half)
+#ifdef HOST_COMPILER_SUPPORTS_FLOAT16
+DEFINE_PRINT_FLOATS (_Float16)
+#endif
 DEFINE_PRINT_FLOATS (float)
 DEFINE_PRINT_FLOATS (double)
 
@@ -145,44 +150,39 @@ DEFINE_PRINT_FLOATS (double)
 /**************************************************************************/
 
 #define FORWARD_BUFFER(SIZE)                                                  \
-  buffer += SIZE;                                                             \
-  if (buffer_size < SIZE)                                                     \
+  buffer += (SIZE);                                                           \
+  if (buffer_size < (SIZE))                                                   \
     {                                                                         \
       POCL_MSG_ERR (                                                          \
         "printf error: exhausted arguments before format string end\n");      \
       return -1;                                                              \
     }                                                                         \
-  buffer_size -= SIZE;
+  buffer_size -= (SIZE);
 
 uint32_t
 __pocl_printf_format_full (param_t *p, char *buffer, uint32_t buffer_size)
 {
-
-  char bf[BUFSIZE];
-  for (unsigned i = 0; i < BUFSIZE; ++i)
-    bf[i] = 0;
-  p->bf = bf;
   char ch = 0;
 
   /* fetch & decode the control dword */
-  uint32_t control_dword;
-  memcpy (&control_dword, buffer, sizeof (uint32_t));
+  uint32_t ctr_dword;
+  memcpy (&ctr_dword, buffer, sizeof (uint32_t));
   FORWARD_BUFFER (sizeof (uint32_t));
   /* if this flag is set, the fmt str is a constant stored as pointer
    * otherwise it's a dynamic string stored directly in the buffer */
-  uint32_t skip_fmt_str = control_dword & PRINTF_BUFFER_CTWORD_SKIP_FMT_STR;
-  uint32_t char_short_promotion
-    = control_dword & PRINTF_BUFFER_CTWORD_CHAR_SHORT_PR;
-  uint32_t char2_promotion = control_dword & PRINTF_BUFFER_CTWORD_CHAR2_PR;
-  uint32_t float_promotion = control_dword & PRINTF_BUFFER_CTWORD_FLOAT_PR;
-  uint32_t big_endian = control_dword & PRINTF_BUFFER_CTWORD_BIG_ENDIAN;
+  uint32_t skip_fmt_str = ctr_dword & PRINTF_BUFFER_CTWORD_SKIP_FMT_STR;
+  uint32_t float_promotion = ctr_dword & PRINTF_BUFFER_CTWORD_FLOAT_PR;
+  uint32_t big_endian = ctr_dword & PRINTF_BUFFER_CTWORD_BIG_ENDIAN;
+  uint32_t pointer_size_bytes
+    = ctr_dword & PRINTF_BUFFER_CTWORD_32BIT_POINTERS ? 4 : 8;
+
   if (big_endian)
     {
       POCL_MSG_ERR ("printf error: printf for big endian devices not yet"
                     "implemented\n");
       return -1;
     }
-  assert ((control_dword >> PRINTF_BUFFER_CTWORD_FLAG_BITS)
+  assert ((ctr_dword >> PRINTF_BUFFER_CTWORD_FLAG_BITS)
           == (buffer_size + sizeof (uint32_t)));
 
   const char *format;
@@ -365,7 +365,7 @@ __pocl_printf_format_full (param_t *p, char *buffer, uint32_t buffer_size)
               DEBUG_PRINTF (("[printf:precision=%d]\n", precision));
 
               /* Vector specifier */
-              uint32_t vector_length = 0;
+              int32_t vector_length = 0;
               if (ch == 'v')
                 {
                   ch = *format++;
@@ -377,7 +377,7 @@ __pocl_printf_format_full (param_t *p, char *buffer, uint32_t buffer_size)
                             "printf error: vector-length is zero\n");
                           return -1;
                         }
-                      if (vector_length > (UINT32_MAX - 9) / 10)
+                      if (vector_length > 16)
                         {
                           POCL_MSG_ERR (
                             "printf error: vector-length overflow\n");
@@ -391,45 +391,45 @@ __pocl_printf_format_full (param_t *p, char *buffer, uint32_t buffer_size)
                         || vector_length == 16))
                     {
                       POCL_MSG_ERR (
-                        "printf error: unrecognize vector length (%u)\n",
+                        "printf error: unrecognized vector length (%d)\n",
                         vector_length);
                       return -1;
                     }
                 }
 
               /* Length modifier */
-              uint32_t length = 0;
+              uint32_t element_size = 0;
               if (ch == 'h')
                 {
                   ch = *format++;
                   if (ch == 'h')
                     {
                       ch = *format++;
-                      length = 1; /* "hh" -> char */
+                      element_size = 1; /* "hh" -> char */
                     }
                   else if (ch == 'l')
                     {
                       ch = *format++;
-                      length = 4; /* "hl" -> int */
+                      element_size = 4; /* "hl" -> int */
                     }
                   else
                     {
-                      length = 2; /* "h" -> short */
+                      element_size = 2; /* "h" -> short */
                     }
                 }
               else if (ch == 'l')
                 {
                   ch = *format++;
-                  length = 8; /* "l" -> long */
+                  element_size = 8; /* "l" -> long */
                 }
-              if (vector_length > 0 && length == 0)
+              if (vector_length > 0 && element_size == 0)
                 {
                   POCL_MSG_ERR (
                     "printf error: vector-length used without element size\n");
                   return -1;
                 }
 
-              if (vector_length == 0 && length == 4)
+              if (vector_length == 0 && element_size == 4)
                 {
                   POCL_MSG_ERR (
                     "printf error: hl modifier used without vector length\n");
@@ -444,7 +444,7 @@ __pocl_printf_format_full (param_t *p, char *buffer, uint32_t buffer_size)
 
               DEBUG_PRINTF (("[printf:vector_length=%d]\n", vector_length));
 
-              DEBUG_PRINTF (("[printf:length=%d]\n", length));
+              DEBUG_PRINTF (("[printf:elem_length=%d]\n", element_size));
 
               p->flags = flags;
               p->conv = ch;
@@ -477,36 +477,41 @@ __pocl_printf_format_full (param_t *p, char *buffer, uint32_t buffer_size)
                       precision = p->precision = 1;
                     p->base = base;
                     DEBUG_PRINTF (("[printf:int:conversion=%c]\n", ch));
-                    if (length == 0)
-                      length = 4;
-                    alloca_length *= length;
-                    switch (length)
+                    if (element_size == 0)
+                      element_size = 4;
+                    alloca_length *= element_size;
+                    switch (element_size)
                       {
                       default:
                         return -1;
                       case 1:
                         __pocl_print_ints_uchar (p, buffer, vector_length,
                                                  is_unsigned);
-                        if (char_short_promotion && vector_length == 1)
+                        /* stores of integers & vectors of size <= 64bits
+                         * are expanded to 64bits in the EmitPrintf. This
+                         * is to avoid having to deal with various rules for
+                         * int & vector promotions by different backends
+                         * (x86, ARM, RISC-V etc...) */
+                        if (vector_length <= 8)
                           {
-                            alloca_length = 4;
-                          }
-                        if (char2_promotion && vector_length == 2)
-                          {
-                            alloca_length = 4;
+                            alloca_length = 8;
                           }
                         break;
                       case 2:
                         __pocl_print_ints_ushort (p, buffer, vector_length,
                                                   is_unsigned);
-                        if (char_short_promotion && vector_length == 1)
+                        if (vector_length <= 4)
                           {
-                            alloca_length = 4;
+                            alloca_length = 8;
                           }
                         break;
                       case 4:
                         __pocl_print_ints_uint (p, buffer, vector_length,
                                                 is_unsigned);
+                        if (vector_length <= 2)
+                          {
+                            alloca_length = 8;
+                          }
                         break;
                       case 8:
                         __pocl_print_ints_ulong (p, buffer, vector_length,
@@ -539,31 +544,56 @@ __pocl_printf_format_full (param_t *p, char *buffer, uint32_t buffer_size)
                     DEBUG_PRINTF (
                       ("[printf:float:conversion=%c|promotion=%u]\n", ch,
                        (unsigned)float_promotion));
-                    if (length == 0)
-                      length = 4;
-                    alloca_length *= length;
-                    switch (length)
+                    if (element_size == 0)
+                      element_size = 4;
+                    alloca_length *= element_size;
+                    switch (element_size)
                       {
                       default:
                       case 2:
-                        {
-                          POCL_MSG_ERR ("printf error: printing halfs is not "
-                                        "yet implemented\n");
-                          return -1; /* half type not yet implemented */
-                        }
-                      case 4:
-                        /* single float can be promoted to double */
-                        if (!float_promotion || vector_length > 1)
+                          /* we assume if the device supports float promotion,
+                         * EmitPrintf ensures half & single floats are always
+                         * promoted to double */
+                          if (float_promotion && vector_length == 1)
                           {
+                              alloca_length = 8;
+                              __pocl_print_floats_double (p, buffer, vector_length);
+                              break;
+                          }
+                          else
+                          {
+#ifdef HOST_COMPILER_SUPPORTS_FLOAT16
+                            __pocl_print_floats__Float16 (p, buffer,
+                                                          vector_length);
+#else
+                            POCL_MSG_ERR ("printf error: host-side "
+                                          "support for FP16 missing\n");
+                            __pocl_print_ints_ushort (p, buffer,
+                                                      vector_length,
+                                                      0);
+#endif
+                            // half2 vectors <64 bits are stored in 64bits
+                            if (alloca_length < 8)
+                                alloca_length = 8;
+                            break;
+                          }
+                      case 4:
+                        /* we assume if the device supports float promotion,
+                         * EmitPrintf ensures half & single floats are always
+                         * promoted to double */
+                        if (float_promotion && vector_length == 1)
+                        {
+                            /* .. else fallthrough to double */
+                            alloca_length = 8;
+                            __pocl_print_floats_double (p, buffer, vector_length);
+                            break;
+                        }
+                        else
+                        {
                             __pocl_print_floats_float (p, buffer,
                                                        vector_length);
                             break;
-                          }
-                        else
-                          {
-                            /* .. else fallthrough to double */
-                            alloca_length = 8;
-                          }
+                        }
                       case 8:
                         __pocl_print_floats_double (p, buffer, vector_length);
                         break;
@@ -601,17 +631,17 @@ __pocl_printf_format_full (param_t *p, char *buffer, uint32_t buffer_size)
                         return -1;
                       }
                     DEBUG_PRINTF (("[printf:char3]\n"));
-                    if (length != 0)
+                    if (element_size != 0)
                       {
                         POCL_MSG_ERR ("printf error: length-modifier used "
                                       "with '%%c' conversion\n");
                         return -1;
                       }
                     DEBUG_PRINTF (("[printf:char4]\n"));
-                    bf[0] = (char)*buffer;
-                    bf[1] = 0;
-                    /* char is always promoted to int32 */
-                    FORWARD_BUFFER (sizeof (int32_t));
+                    p->bf[0] = (char)*buffer;
+                    p->bf[1] = 0;
+                    /* char is always promoted to int64 */
+                    FORWARD_BUFFER (sizeof (int64_t));
                     __pocl_printf_putchw (p);
                     DEBUG_PRINTF (
                       ("[printf:after char:buffer=%p buffer_size=%u]\n",
@@ -637,7 +667,7 @@ __pocl_printf_format_full (param_t *p, char *buffer, uint32_t buffer_size)
                                       "'%%s' conversion\n");
                         return -1;
                       }
-                    if (length != 0)
+                    if (element_size != 0)
                       {
                         POCL_MSG_ERR ("printf error: length-modifier used "
                                       "with '%%s' conversion\n");
@@ -701,7 +731,7 @@ __pocl_printf_format_full (param_t *p, char *buffer, uint32_t buffer_size)
                                       "'%%p' conversion\n");
                         return -1;
                       }
-                    if (length != 0)
+                    if (element_size != 0)
                       {
                         POCL_MSG_ERR ("printf error: length-modifier used "
                                       "with '%%p' conversion\n");
@@ -709,8 +739,8 @@ __pocl_printf_format_full (param_t *p, char *buffer, uint32_t buffer_size)
                       }
 
                     const void *val;
-                    memcpy (&val, buffer, sizeof (val));
-                    FORWARD_BUFFER (sizeof (val));
+                    memcpy (&val, buffer, pointer_size_bytes);
+                    FORWARD_BUFFER (pointer_size_bytes);
                     DEBUG_PRINTF (("[printf:ptr:%p]\n", val));
                     __pocl_printf_ptr (p, val);
                     DEBUG_PRINTF (
@@ -746,9 +776,12 @@ __pocl_printf_format_full (param_t *p, char *buffer, uint32_t buffer_size)
 #define IMM_FLUSH_BUFFER_SIZE 65536
 
 void
-__printf_flush_buffer (char *buffer, uint32_t buffer_size)
+pocl_flush_printf_buffer (char *buffer, uint32_t buffer_size)
 {
   param_t p = { 0 };
+  char bf[BUFSIZE];
+  memset (bf, 0, BUFSIZE);
+  p.bf = bf;
 
   char result[IMM_FLUSH_BUFFER_SIZE];
   p.printf_buffer = result;
@@ -759,7 +792,11 @@ __printf_flush_buffer (char *buffer, uint32_t buffer_size)
 
   if (p.printf_buffer_index > 0)
     {
+#ifdef _MSC_VER
+      write (_fileno (stdout), p.printf_buffer, p.printf_buffer_index);
+#else
       write (STDOUT_FILENO, p.printf_buffer, p.printf_buffer_index);
+#endif
     }
 }
 
@@ -797,7 +834,7 @@ pocl_write_printf_buffer (char *printf_buffer, uint32_t bytes)
           return;
         }
 
-      __printf_flush_buffer (printf_buffer, single_entry_bytes);
+      pocl_flush_printf_buffer (printf_buffer, single_entry_bytes);
       printf_buffer += single_entry_bytes;
       bytes -= single_entry_bytes;
     }

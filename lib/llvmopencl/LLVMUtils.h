@@ -58,9 +58,14 @@ typedef std::map<llvm::Function*, llvm::Function*> FunctionMapping;
 constexpr unsigned NumWorkgroupVariables = 21;
 extern const char *WorkgroupVariablesArray[];
 extern const std::vector<std::string> WorkgroupVariablesVector;
-constexpr unsigned NumWIFuncNames = 11;
-extern const char *WIFuncNameArray[];
+// work-item function names
 extern const std::vector<std::string> WIFuncNameVec;
+// functions that should not be inlined because they're required by other
+// passes: WI funcs are required by FlattenGlobals pass Printf funcs
+// (pocl_printf_alloc etc) must exist until Workgroup pass
+constexpr unsigned NumDIFuncNames = 13;
+extern const char *DIFuncNameArray[];
+extern const std::vector<std::string> DIFuncNameVec;
 
 void regenerate_kernel_metadata(llvm::Module &M, FunctionMapping &kernels);
 
@@ -71,6 +76,19 @@ POCL_EXPORT
 void eraseFunctionAndCallers(llvm::Function *Function);
 
 bool isAutomaticLocal(llvm::Function *F, llvm::GlobalVariable &Var);
+
+/// Returns true if the function is a compiler-expandable work-item function
+/// all call of which in the Module are compiler-expandable.
+///
+/// We want to leave the calls intact to avoid cluttering the control flow with
+/// the 'dim switch cases'. The calls will be expanded by
+/// WorkitemHandler::handleWorkitemFunctions(). However, if there's even one caller
+/// that sets the dimidx dynamically, we have to retain and inline the call.
+bool isWorkitemFunctionWithOnlyCompilerExpandableCalls(const llvm::Function &F);
+
+/// Returns true if \param Call is a work-item function call that can be
+/// directly analyzed and expanded by the kernel compiler.
+bool isCompilerExpandableWIFunctionCall(const llvm::CallInst &Call);
 
 POCL_EXPORT
 bool isGVarUsedByFunction(llvm::GlobalVariable *GVar, llvm::Function *F);
@@ -107,17 +125,6 @@ POCL_EXPORT
 bool isKernelToProcess(const llvm::Function &F);
 
 llvm::Metadata *createConstantIntMD(llvm::LLVMContext &C, int32_t Val);
-
-// Fixes switch statements that have a default case that is a simple
-// unreachable instruction. LLVM does this as "optimization", however it breaks
-// the (post) dominator-tree analysis, because the unreachable instruction
-// creates an additional function exit path. PoCL's ImplicitConditionalBarriers
-// pass then erroneously adds barriers because it thinks some basic blocks are
-// inside conditional blocks, when they're not.
-// TODO this is fragile, LLVM can introduce more optimizations that create
-// unreachable blocks. However I couldn't find any working way to make PDT
-// ignore blocks with an unreachable inst.
-void removeUnreachableSwitchCases(llvm::Function &F);
 
 void markFunctionAlwaysInline(llvm::Function *F);
 
@@ -159,11 +166,6 @@ void CloneFunctionIntoAbs(llvm::Function *NewFunc,
                                 : llvm::CloneFunctionChangeType::DifferentModule),
                     Returns, NameSuffix, CodeInfo, TypeMapper, Materializer);
 }
-
-#if LLVM_MAJOR < 15
-// Globals
-#define getValueType getType()->getElementType
-#endif /* LLVM_OPAQUE_POINTERS */
 
 // macros for registering LLVM passes & analyses with old & new PM
 
@@ -235,9 +237,23 @@ void CloneFunctionIntoAbs(llvm::Function *NewFunc,
 #define REGISTER_OLD_FANALYSIS(PNAME, PCLASS, PDESC)                          \
   static llvm::RegisterPass<PCLASS> X (PNAME, PDESC)
 
+#if LLVM_MAJOR < 15
+// Globals
+#define getValueType getType()->getElementType
+#endif /* LLVM_OPAQUE_POINTERS */
+
 #if LLVM_MAJOR < 16
 // Avoid the deprecation warning with later LLVMs.
 #define starts_with startswith
+#endif
+
+#if LLVM_MAJOR < 20
+#define CreateBuilder(BUILDER, BB) IRBuilder<> BUILDER(BB.getFirstNonPHI())
+#define Inst2InsertPt(X) X
+#else
+#define CreateBuilder(BUILDER, BB)                                             \
+  IRBuilder<> BUILDER(&BB, BB.getFirstNonPHIIt());
+#define Inst2InsertPt(X) X->getIterator()
 #endif
 
 #endif

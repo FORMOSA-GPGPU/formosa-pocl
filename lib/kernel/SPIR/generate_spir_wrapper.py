@@ -729,8 +729,8 @@ def generate_function(name, ret_type, ret_type_ext, multiAS, *args):
 		# instr index, LLVM IR expects instructions to be numbered from 1
 		llvm_i = 1
 
-		# arg without qualifiers, saved for mangling name compression
-		last_pure_arg = None
+		# args without qualifiers, saved for mangling name compression
+		saved_pure_args = []
 
 		# ARM does not coerce return types, x86-64 does
 		if ARM_CALLING_ABI:
@@ -757,6 +757,10 @@ def generate_function(name, ret_type, ret_type_ext, multiAS, *args):
 			llvm_i += 1
 
 		####### process args
+		if not args:
+			spir_mangled_func_suffix.append("v")
+			ocl_mangled_func_suffix.append("v")
+			args = []
 		for cast in args:
 
 			if arg_addr_spaces:
@@ -768,11 +772,25 @@ def generate_function(name, ret_type, ret_type_ext, multiAS, *args):
 			#   Dv2_cPULocalDv2_c -> Dv2_cPULocalS_
 			pure_arg = pure_arg_type(cast)
 			actual_arg = cast
-			if pure_arg == last_pure_arg and last_pure_arg.startswith("D") and (not last_pure_arg.startswith("Dh")):
-				actual_arg = replace_arg_type(actual_arg, "S_")
-			if pure_arg == last_pure_arg and last_pure_arg == '12memory_order':
-				actual_arg = replace_arg_type(actual_arg, "S4_")
-			last_pure_arg = pure_arg
+
+			replaced = False
+			if len(pure_arg) > 1 and pure_arg != "Dh":
+				for idx, prev_arg in enumerate(saved_pure_args):
+					if pure_arg != prev_arg:
+						continue
+					compressed_arg = "S_"
+					if idx > 0:
+						# _Z16_cl_write_imagei14ocl_image3d_woDv4_i -> S0_
+						# _Z41_cl_atomic_compare_exchange_weak_explicitPU8CLglobalVU7_AtomicjPU9CLprivatejj12memory_order -> S4
+						if actual_arg == "12memory_order":
+							compressed_arg = "S" + str(idx+1) + "_"
+						else:
+							compressed_arg = "S" + str(idx-1) + "_"
+					actual_arg = replace_arg_type(actual_arg, compressed_arg)
+					replaced = True
+					break
+			if not replaced:
+				saved_pure_args.append(pure_arg)
 
 			# convert arg type to SPIR mangled type with AS
 			# e.g. "Pi" -> "PU3AS3i"
@@ -842,7 +860,6 @@ def generate_function(name, ret_type, ret_type_ext, multiAS, *args):
 				decl_args.append(ocl_arg_type)
 			arg_i += 1
 
-
 		######## generate final mangled function names
 		spir_mangled_func_suffix = "".join(spir_mangled_func_suffix)
 		ocl_mangled_func_suffix = "".join(ocl_mangled_func_suffix)
@@ -859,7 +876,7 @@ def generate_function(name, ret_type, ret_type_ext, multiAS, *args):
 			decl_ret_type = 'void'
 		else:
 			decl_ret_type = coerced_ret_type
-		
+
 		#if GENERIC_AS and GEN_AS_CALLEE_IDENTICAL and (AS == "generic") and ("private" in addr_spaces):
 		declaration = "declare %s %s(%s) local_unnamed_addr #0" % (decl_ret_type, ocl_mangled_name, decl_args)
 		if declaration in ALREADY_DECLARED.keys():
@@ -1286,10 +1303,9 @@ for arg_type in ['c', 'h', 's', 't', 'i', 'j', 'l', 'm', 'f', 'd']:
 			generate_function("shuffle2", SIG_TO_LLVM_TYPE_MAP[ret_type], '', False, in_type, in_type, mask_type)
 
 # convert
+CONVERT_TYPES = ['c', 'h', 's', 't', 'i', 'j', 'l', 'm', 'f', 'd']
 if FP16:
-	CONVERT_TYPES = ['c', 'h', 's', 't', 'i', 'j', 'l', 'm', 'f', 'd', 'Dh']
-else:
-	CONVERT_TYPES = ['c', 'h', 's', 't', 'i', 'j', 'l', 'm', 'f', 'd']
+	CONVERT_TYPES.append('Dh')
 
 for dst_type in CONVERT_TYPES:
 	for src_type in CONVERT_TYPES:
@@ -1308,10 +1324,16 @@ for dst_type in CONVERT_TYPES:
 						signext = ''
 					generate_function('convert_'+SIG_TO_TYPE_NAME_MAP[dst_t]+sat+rounding, SIG_TO_LLVM_TYPE_MAP[dst_t], signext, False, src_t)
 
+if FP16:
+	COLOR_TYPES = ['i', 'ui', 'f', 'h']
+else:
+	COLOR_TYPES = ['i', 'ui', 'f']
+
 IMG_COLOR_TYPE_MAP = {
 	'i' : 'Dv4_i',
 	'ui' : 'Dv4_j',
 	'f' : 'Dv4_f',
+	'h' : 'Dv4_Dh'
 }
 
 IMG_COORD_SIZE = {
@@ -1336,7 +1358,7 @@ for img_type in ['image1d', 'image2d', 'image3d', 'image1d_array', 'image2d_arra
 		img_type_llvm = 'ocl_' + img_type + "_" + access
 		img_type_llvm = str(len(img_type_llvm)) + img_type_llvm
 
-		for color_type in ['i', 'ui', 'f']:
+		for color_type in COLOR_TYPES:
 			# return value for read_image or input value for write_image
 			mang_color_type = IMG_COLOR_TYPE_MAP[color_type]
 
@@ -1480,6 +1502,77 @@ generate_function("atomic_work_item_fence", SIG_TO_LLVM_TYPE_MAP['v'], '', None,
 generate_function("work_group_barrier", SIG_TO_LLVM_TYPE_MAP['v'], '', None, 'j', '12memory_scope')
 generate_function("work_group_barrier", SIG_TO_LLVM_TYPE_MAP['v'], '', None, 'j')
 
+# generate wrapper function
+#def generate_function(name, ret_type, ret_type_ext, multiAS, *args):
+# subgroups
+generate_function("get_sub_group_size", SIG_TO_LLVM_TYPE_MAP['i'], '', None)
+generate_function("get_max_sub_group_size", SIG_TO_LLVM_TYPE_MAP['i'], '', None)
+generate_function("get_num_sub_groups", SIG_TO_LLVM_TYPE_MAP['i'], '', None)
+generate_function("get_enqueued_num_sub_groups", SIG_TO_LLVM_TYPE_MAP['i'], '', None)
+generate_function("get_sub_group_id", SIG_TO_LLVM_TYPE_MAP['i'], '', None)
+generate_function("get_sub_group_local_id", SIG_TO_LLVM_TYPE_MAP['i'], '', None)
+generate_function("sub_group_ballot", SIG_TO_LLVM_TYPE_MAP['Dv4_i'], '', None, 'i')
+generate_function("sub_group_any", SIG_TO_LLVM_TYPE_MAP['i'], '', None, 'i')
+generate_function("sub_group_all", SIG_TO_LLVM_TYPE_MAP['i'], '', None, 'i')
+generate_function("sub_group_barrier", SIG_TO_LLVM_TYPE_MAP['v'], '', None, 'j')
+generate_function("sub_group_barrier", SIG_TO_LLVM_TYPE_MAP['v'], '', None, 'j', '12memory_scope')
+
+SUBGROUP_TYPES = ['c', 'h', 's', 't', 'i', 'j', 'l', 'm', 'f', 'd']
+if FP16:
+	SUBGROUP_TYPES.append('Dh')
+
+for arg_type in SUBGROUP_TYPES:
+	ret_type = arg_type
+	signext = LLVM_TYPE_EXT_MAP[ret_type]
+	mask_type = 'j'
+	for suffix in ['', '_xor']:
+		generate_function("sub_group_shuffle"+suffix, SIG_TO_LLVM_TYPE_MAP[ret_type], signext, False, arg_type, mask_type)
+		generate_function("intel_sub_group_shuffle"+suffix, SIG_TO_LLVM_TYPE_MAP[ret_type], signext, False, arg_type, mask_type)
+	generate_function("sub_group_broadcast", SIG_TO_LLVM_TYPE_MAP[ret_type], signext, False, arg_type, mask_type)
+	for suffix in ['_add', '_min', '_max']:
+		generate_function("sub_group_reduce"+suffix, SIG_TO_LLVM_TYPE_MAP[ret_type], signext, False, arg_type)
+		generate_function("sub_group_scan_inclusive"+suffix, SIG_TO_LLVM_TYPE_MAP[ret_type], signext, False, arg_type)
+		generate_function("sub_group_scan_exclusive"+suffix, SIG_TO_LLVM_TYPE_MAP[ret_type], signext, False, arg_type)
+	for suffix in ['_up', '_down']:
+		generate_function("intel_sub_group_shuffle"+suffix, SIG_TO_LLVM_TYPE_MAP[ret_type], signext, False, arg_type, arg_type, mask_type)
+
+# Intel extension adds support for some types which are not supported by the Khronos extension:
+# For the sub_group_shuffle, sub_group_shuffle_down, sub_group_shuffle_up, and sub_group_shuffle_xor functions, gentype is float, float2, float3,
+# float4, float8, float16, int, int2, int3, int4, int8, int16, uint, uint2, uint3, uint4, uint8, uint16, long, or ulong.
+SUBGROUP_VEC_TYPES = ['f','i','j']
+for int_type in SUBGROUP_VEC_TYPES:
+	for vecsize in ['2','3','4','8','16']:
+		ret_type = arg_type = 'Dv'+vecsize+'_'+int_type
+		mask_type = 'j'
+		for suffix in ['', '_xor']:
+			generate_function("intel_sub_group_shuffle"+suffix, SIG_TO_LLVM_TYPE_MAP[ret_type], '', False, arg_type, mask_type)
+		for suffix in ['_up', '_down']:
+			generate_function("intel_sub_group_shuffle"+suffix, SIG_TO_LLVM_TYPE_MAP[ret_type], '', False, arg_type, arg_type, mask_type)
+
+for vecsize in ['','2','4','8']:
+	# uints
+	if vecsize:
+		arg_type = 'Dv' + vecsize + '_j'
+	else:
+		arg_type = 'j'
+	ret_type = arg_type
+	PConstArg = 'PKj'
+	PArg = 'Pj'
+	generate_function("intel_sub_group_block_read"+vecsize, SIG_TO_LLVM_TYPE_MAP[ret_type], '', ("global"), PConstArg)
+	generate_function("intel_sub_group_block_write"+vecsize, SIG_TO_LLVM_TYPE_MAP['v'], '', ("global", 'none'), PArg, arg_type)
+	generate_function("intel_sub_group_block_read_ui"+vecsize, SIG_TO_LLVM_TYPE_MAP[ret_type], '', ("global"), PConstArg)
+	generate_function("intel_sub_group_block_write_ui"+vecsize, SIG_TO_LLVM_TYPE_MAP['v'], '', ("global", 'none'), PArg, arg_type)
+	# ushorts
+	if vecsize:
+		arg_type = 'Dv' + vecsize + '_t'
+	else:
+		arg_type = 't'
+	ret_type = arg_type
+	PConstArg = 'PKt'
+	PArg = 'Pt'
+	generate_function("intel_sub_group_block_read_us"+vecsize, SIG_TO_LLVM_TYPE_MAP[ret_type], '', ("global"), PConstArg)
+	generate_function("intel_sub_group_block_write_us"+vecsize, SIG_TO_LLVM_TYPE_MAP['v'], '', ("global", 'none'), PArg, arg_type)
+
 print("""
 
 attributes #0 = { alwaysinline nounwind "correctly-rounded-divide-sqrt-fp-math"="false" "denorms-are-zero"="false" "disable-tail-calls"="false" "less-precise-fpmad"="false" "no-frame-pointer-elim"="true" "no-frame-pointer-elim-non-leaf" "no-infs-fp-math"="false" "no-nans-fp-math"="false" "no-signed-zeros-fp-math"="false" "no-trapping-math"="false" "stack-protector-buffer-size"="8" "unsafe-fp-math"="false" "use-soft-float"="false" }
@@ -1487,11 +1580,10 @@ attributes #0 = { alwaysinline nounwind "correctly-rounded-divide-sqrt-fp-math"=
 !opencl.ocl.version = !{!0}
 !opencl.spir.version = !{!0}
 !llvm.ident = !{!1}
-!llvm.module.flags = !{!2, !3}
+!llvm.module.flags = !{!2}
 
 !0 = !{i32 1, i32 2}
 !1 = !{!"clang version 12.0.0"}
-!2 = !{i32 1, !"wchar_size", i32 4}
-!3 = !{i32 7, !"PIC Level", i32 2}
+!2 = !{i32 7, !"PIC Level", i32 2}
 
 """)

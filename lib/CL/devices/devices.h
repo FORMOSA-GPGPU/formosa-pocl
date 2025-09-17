@@ -33,7 +33,7 @@ extern "C" {
 #endif
 
 /* The number of available devices. */
-extern unsigned int pocl_num_devices;
+extern uint64_t pocl_num_devices;
 extern struct _cl_device_id *pocl_devices;
 
 const char *pocl_get_device_name (unsigned index);
@@ -77,6 +77,9 @@ int pocl_device_get_env_count(const char *dev_type);
 
 /* the environment variable that lists the enabled devices */
 #define POCL_DEVICES_ENV "POCL_DEVICES"
+
+/* environment variable to enable/disable device discovery. */
+#define POCL_DISCOVERY_ENV "POCL_DISCOVERY"
 
 #ifdef __cplusplus
 } /* extern "C" */

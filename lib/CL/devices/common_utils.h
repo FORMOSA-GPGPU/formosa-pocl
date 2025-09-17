@@ -30,27 +30,36 @@
 #include "pocl_util.h"
 #include "pocl_context.h"
 #include "pocl_workgroup_func.h"
-
 #ifdef HAVE_LIBJPEG_TURBO
 #include "cpu_dbk/pocl_dbk_khr_jpeg_cpu.h"
 #endif
+#ifdef HAVE_ONNXRT
+#include "cpu_dbk/pocl_dbk_khr_onnxrt_cpu.h"
+#endif
+#include "cpu_dbk/pocl_dbk_khr_dnn_utils.hh"
+#include "cpu_dbk/pocl_dbk_khr_img_cpu.h"
 
 /* Generic struct for CPU device drivers.
  * Not all fields of this struct are used by all drivers. */
 typedef struct kernel_run_command kernel_run_command;
 struct kernel_run_command
 {
-  POCL_FAST_LOCK_T lock __attribute__ ((aligned (HOST_CPU_CACHELINE_SIZE)));
+  POCL_ALIGNAS(HOST_CPU_CACHELINE_SIZE) pocl_lock_t lock;
   void *data;
   cl_kernel kernel;
   cl_device_id device;
-  struct pocl_context pc __attribute__ ((aligned (HOST_CPU_CACHELINE_SIZE)));
+  POCL_ALIGNAS(HOST_CPU_CACHELINE_SIZE) struct pocl_context pc;
   _cl_command_node *cmd;
   pocl_workgroup_func workgroup;
   struct pocl_argument *kernel_args;
   kernel_run_command *prev;
   kernel_run_command *next;
-  unsigned long ref_count;
+  /* each thread working on this kernel_run_command holds a reference */
+  unsigned ref_count;
+  /* if execution of the kernel fails (e.g. unreachable inst / "exception"),
+   * this flag should be set to non-zero and subsequently
+   * the Event status should be set to CL_FAILED */
+  unsigned execution_failed;
 
   /* actual kernel arguments. these are setup once at the kernel setup
    * phase, then each thread sets up the local arguments for itself. */
@@ -60,7 +69,7 @@ struct kernel_run_command
 
   size_t remaining_wgs;
   size_t wgs_dealt;
-} __attribute__ ((aligned (HOST_CPU_CACHELINE_SIZE)));
+};
 
 #ifdef __cplusplus
 extern "C"
@@ -78,7 +87,7 @@ void free_kernel_run_command (kernel_run_command *k);
 #define new_kernel_run_command()                                              \
   (kernel_run_command *)pocl_aligned_malloc (HOST_CPU_CACHELINE_SIZE,         \
                                              sizeof (kernel_run_command))
-#define free_kernel_run_command(k) free (k)
+#define free_kernel_run_command(k) pocl_aligned_free (k)
 #endif
 
 POCL_EXPORT
@@ -86,7 +95,7 @@ cl_int pocl_cpu_init_common (cl_device_id device);
 
 POCL_EXPORT
 int pocl_cpu_supports_dbk (cl_device_id device,
-                           BuiltinKernelId kernel_id,
+                           cl_dbk_id_exp kernel_id,
                            const void *kernel_attributes);
 POCL_EXPORT
 int pocl_cpu_build_defined_builtin (cl_program program, cl_uint device_i);
@@ -105,16 +114,17 @@ POCL_EXPORT
 void pocl_setup_kernel_arg_array (kernel_run_command *k);
 
 POCL_EXPORT
-void pocl_setup_kernel_arg_array_with_locals (void **arguments, void **arguments2,
-                                         kernel_run_command *k,
-                                         char *local_mem,
-                                         size_t local_mem_size);
+int pocl_setup_kernel_arg_array_with_locals (void **arguments,
+                                             void **arguments2,
+                                             kernel_run_command *k,
+                                             char *local_mem,
+                                             size_t local_mem_size);
 
 POCL_EXPORT
-int pocl_tensor_type_size (cl_tensor_datatype T);
+int pocl_tensor_type_size (cl_tensor_datatype_exp dtype);
 
 POCL_EXPORT
-int pocl_tensor_type_is_int (cl_tensor_datatype T);
+int pocl_tensor_type_is_int (cl_tensor_datatype_exp dtype);
 
 POCL_EXPORT
 void pocl_free_kernel_arg_array (kernel_run_command *k);
@@ -123,7 +133,14 @@ POCL_EXPORT
 void pocl_free_kernel_arg_array_with_locals (void **arguments, void **arguments2,
                                         kernel_run_command *k);
 
-void *pocl_cpu_get_ptr (struct pocl_argument *arg, unsigned global_mem_id);
+POCL_EXPORT
+void pocl_cpu_save_rm_and_ftz (unsigned *rm, unsigned *ftz);
+
+POCL_EXPORT
+void pocl_cpu_restore_rm_and_ftz (unsigned rm, unsigned ftz);
+
+POCL_EXPORT
+void pocl_cpu_setup_rm_and_ftz (cl_device_id dev, cl_program prog);
 
 #ifdef __cplusplus
 }

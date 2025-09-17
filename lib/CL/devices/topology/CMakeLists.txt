@@ -23,10 +23,6 @@
 #
 #=============================================================================
 
-
-if(MSVC)
-  set_source_files_properties( pocl_topology.c pocl_topology.h PROPERTIES LANGUAGE CXX )
-endif(MSVC)
 add_library("pocl-devices-topology" OBJECT pocl_topology.c pocl_topology.h)
 harden("pocl-devices-topology")
 
@@ -35,5 +31,9 @@ if(OCL_ICD_INCLUDE_DIRS)
 endif()
 
 if(ENABLE_HWLOC)
-  target_link_libraries("pocl-devices-topology" PRIVATE PkgConfig::HWLOC)
+  if(TARGET PkgConfig::HWLOC)
+    target_link_libraries("pocl-devices-topology" PRIVATE PkgConfig::HWLOC)
+  else()
+    target_include_directories("pocl-devices-topology" PRIVATE ${HWLOC_INCLUDE_DIRS})
+  endif()
 endif()

@@ -1,7 +1,8 @@
 # Portable Computing Language (PoCL)
 
-PoCL is being developed towards an efficient implementation of the OpenCL
-standard which can be easily adapted for new targets.
+PoCL is a conformant implementation (for [CPU](https://www.khronos.org/conformance/adopters/conformant-products/opencl#submission_450)
+and [Level Zero GPU](https://www.khronos.org/conformance/adopters/conformant-products/opencl#submission_453) targets)
+of the OpenCL 3.0 standard which can be easily adapted for new targets.
 
 [Official web page](http://portablecl.org)
 
@@ -15,7 +16,7 @@ standard which can be easily adapted for new targets.
 This section contains instructions for building PoCL in its default
 configuration and a subset of driver backends. You can find the full build
 instructions including a list of available options
-in the [user guide](http://portablecl.org/docs/html/install.html).
+in the [install guide](http://portablecl.org/docs/html/install.html).
 
 ### Requirements
 
@@ -26,90 +27,84 @@ tools:
   * development files for LLVM & Clang + their transitive dependencies
     (e.g. `libclang-dev`, `libclang-cpp-dev`, `libllvm-dev`, `zlib1g-dev`,
     `libtinfo-dev`...)
-  * CMake 3.9 or newer
+  * CMake 3.15 or newer
   * GNU make or ninja
-  * pkg-config
-  * pthread (should be installed by default)
-  * hwloc v1.0 or newer (e.g. `libhwloc-dev`) - optional
-  * python3 (for support of LLVM bitcode with SPIR target; optional
-    but enabled by default)
-  * llvm-spirv (version-compatible with LLVM) and spirv-tools
-    (optional; required for SPIR-V support in CPU / CUDA; Vulkan driver
-    supports SPIR-V through clspv)
+  * Optional: pkg-config
+  * Optional: hwloc v1.0 or newer (e.g. `libhwloc-dev`)
+  * Optional (but enabled by default): python3 (for support of LLVM bitcode with SPIR target)
+  * Optional: llvm-spirv (version-compatible with LLVM) and spirv-tools
+    (required for SPIR-V support in CPU / CUDA; Vulkan driver supports SPIR-V through clspv)
 
-On Ubuntu or Debian based distros you can install the relevant packages with
-```bash
-export LLVM_VERSION=<major LLVM version>
-apt install -y python3-dev libpython3-dev build-essential ocl-icd-libopencl1 \
-    cmake git pkg-config libclang-${LLVM_VERSION}-dev clang-${LLVM_VERSION} \
-    llvm-${LLVM_VERSION} make ninja-build ocl-icd-libopencl1 ocl-icd-dev \
-    ocl-icd-opencl-dev libhwloc-dev zlib1g zlib1g-dev clinfo dialog apt-utils \
-    libxml2-dev libclang-cpp${LLVM_VERSION}-dev libclang-cpp${LLVM_VERSION} \
-    llvm-${LLVM_VERSION}-dev
-```
+For more details, consult the [install guide](http://portablecl.org/docs/html/install.html).
 
-If your distro does not package the version of LLVM you wish to build against
-you might want to set up the
-[upstream LLVM package repository](https://apt.llvm.org/).
+Building PoCL follows the usual CMake build steps. Note however, that PoCL
+can be used from the build directory (without installing it system-wide).
 
-If LLVM is linked to PoCL statically (-DSTATIC_LLVM=ON cmake option), then
-the `libpolly-${LLVM_VERSION}-dev libzstd-dev` packages might be also needed
-(at least on Ubuntu 22.04 with packages from apt.llvm.org).
+## Supported environments
 
-### Configure & Build
+### CI status:
 
-Building PoCL follows the usual CMake workflow, i.e.:
-```bash
-cd <directory-with-pocl-sources>
-mkdir build
-cd build
-cmake ..
-make
-# and optionally
-make install
-```
+![x86-64](https://github.com/pocl/pocl/actions/workflows/build_linux_gh.yml/badge.svg?event=push&branch=main)
+![x86-64](https://github.com/pocl/pocl/actions/workflows/build_linux.yml/badge.svg?event=push&branch=main)
+![ARM64](https://github.com/pocl/pocl/actions/workflows/build_arm64.yml/badge.svg?event=push&branch=main)
+![CUDA](https://github.com/pocl/pocl/actions/workflows/build_cuda.yml/badge.svg?event=push&branch=main)
+![Level Zero](https://github.com/pocl/pocl/actions/workflows/build_level0.yml/badge.svg?event=push&branch=main)
+![OpenASIP+Vulkan](https://github.com/pocl/pocl/actions/workflows/build_openasip_vulkan.yml/badge.svg?event=push&branch=main)
+![Remote](https://github.com/pocl/pocl/actions/workflows/build_remote.yml/badge.svg?event=push&branch=main)
+![Apple Silicon](https://github.com/pocl/pocl/actions/workflows/build_macos.yml/badge.svg?event=push&branch=main)
+![Windows](https://github.com/pocl/pocl/actions/workflows/build_msvc.yml/badge.svg?event=push&branch=main)
 
-### Supported LLVM Versions
+### Support Matrix legend:
 
-PoCL aims to support **the latest LLVM version** at the time of PoCL release, **plus the previous** LLVM version. All older LLVM versions are supported on a
-"best effort" basis; there might not be build bots continuously testing the code
-base nor anyone fixing their possible breakage.
+:large_blue_diamond: Achieved status of OpenCL conformant implementation
 
-### OpenCL 3.0 support
+:large_orange_diamond: Tested in CI extensively, including OpenCL-CTS tests
 
-If you want PoCL built with ICD and OpenCL 3.0 support at platform level,
-you will need sufficiently new ocl-icd (2.3.x). For Ubuntu, it can be installed'
-from this PPA: https://launchpad.net/~ocl-icd/+archive/ubuntu/ppa
-Additionally, if you want the CPU device to report as 3.0 OpenCL
-you will need LLVM 14 or newer.
+:green_circle: : Tested in CI
 
-### GPU support on different architectures
+:yellow_circle: : Should work, but is untested
 
-PoCL can be used to provide OpenCL driver on several architectures where the hardware manufacturer does not ship them 
-like Nvidia Tegra (ARM) or IBM Power servers. On PPC64le servers, there are specific instructions to handle the build 
-of PoCL in [README.PPC64le](./README.PPC64le).
-See also [PoCL with CUDA driver](#pocl-with-cuda-driver) section for prebuilt
-binaries.
+:x: : Unsupported
+
+### Linux
+
+| CPU device  |     LLVM 14    |     LLVM 15    |     LLVM 16     |     LLVM 17    |     LLVM 18     |      LLVM 19     |     LLVM 20     |
+|:------------|:--------------:|:--------------:|:---------------:|:--------------:|:---------------:|:----------------:|:---------------:|
+| [x86-64](https://github.com/pocl/pocl/actions/workflows/build_linux_gh.yml) | :green_circle: | :green_circle: | :green_circle: | :green_circle: | :green_circle: :large_blue_diamond: | :large_orange_diamond: | :large_orange_diamond: |
+| [ARM64](https://github.com/pocl/pocl/actions/workflows/build_arm64.yml) | :yellow_circle: | :yellow_circle: |:yellow_circle: | :yellow_circle: | :yellow_circle: | :green_circle: | :yellow_circle: |
+| i686    | :yellow_circle: | :yellow_circle: | :yellow_circle: | :yellow_circle: | :yellow_circle: |
+| ARM32   | :yellow_circle: | :yellow_circle: | :yellow_circle: | :yellow_circle: | :yellow_circle: |
+| RISC-V  | :yellow_circle: | :yellow_circle: | :yellow_circle: | :yellow_circle: | :yellow_circle: |
+| PowerPC | :yellow_circle: | :yellow_circle: | :yellow_circle: | :yellow_circle: | :yellow_circle: |
+
+| GPU device  |     LLVM 17    |     LLVM 18     |      LLVM 19     |     LLVM 20     |
+|:------------|:--------------:|:---------------:|:----------------:|:---------------:|
+| [CUDA SM5.0](https://github.com/pocl/pocl/actions/workflows/build_cuda.yml) | :yellow_circle: | :green_circle: | :green_circle: | :yellow_circle: |
+| CUDA SM other than 5.0  | :yellow_circle: | :yellow_circle: | :yellow_circle: | :yellow_circle: |
+| [Level Zero](https://github.com/pocl/pocl/actions/workflows/build_level0.yml) | :yellow_circle: | :green_circle: | :green_circle: | :large_orange_diamond: |
+| [Vulkan](https://github.com/pocl/pocl/actions/workflows/build_openasip_vulkan.yml) | :green_circle: | :x: | :x: | :x: |
+
+| Special device |    LLVM 17    |     LLVM 18     |      LLVM 19     |     LLVM 20     |
+|:---------------|:-------------:|:---------------:|:----------------:|:---------------:|
+| [OpenASIP](https://github.com/pocl/pocl/actions/workflows/build_openasip_vulkan.yml) | :green_circle: | :x: | :x: | :x: |
+| [Remote](https://github.com/pocl/pocl/actions/workflows/build_remote.yml) | :yellow_circle: | :green_circle:  | :yellow_circle: | :yellow_circle: |
+| Remote + RDMA  | :yellow_circle: | :green_circle:  |  :yellow_circle: | :yellow_circle: |
+
+
+### Mac OS X
+
+| CPU device  |     LLVM 17    |     LLVM 18     |      LLVM 19     |     LLVM 20     |
+|:------------|:--------------:|:---------------:|:----------------:|:---------------:|
+| [Apple Silicon](https://github.com/pocl/pocl/actions/workflows/build_macos.yml) | :green_circle: | :green_circle:  | :x: | :x: |
+| [Intel CPU](https://github.com/pocl/pocl/actions/workflows/build_macos.yml) | :yellow_circle: | :yellow_circle:  | :x: | :x: |
 
 ### Windows
 
-Windows support has been unmaintained for a long time and building on Windows
-may or may not work. There are old instructions for building with Visual Studio
-in [README.Windows](./README.Windows) but with the builtin CMake support of more
-recent Visual Studio versions (2019+) it might be enough to install the
-dependencies (e.g. with `winget`) and simply open the main `CMakeLists.txt` file
-in Visual Studio and let it work its magic.
+| CPU device  |     LLVM 18    |  LLVM 19        |     LLVM 20     |
+|:------------|:--------------:|:---------------:|:---------------:|
+| [MinGW](https://github.com/pocl/pocl/actions/workflows/build_mingw.yml) / x86-64   | :green_circle: | :green_circle:  | :yellow_circle: |
+| [MSVC](https://github.com/pocl/pocl/actions/workflows/build_msvc.yml) / x86-64   | :green_circle: | :green_circle:  | :yellow_circle: |
 
-Contributions for improving compatibility with Windows and more detailed and up
-to date build steps are welcome!
-
-### Notes
-
-Building on ARM platforms is possible but lacks a maintainer and there are
-[some gotchas](./README.ARM).
-
-If you are a distro maintainer, check [README.packaging](./README.packaging) for
-recommendations on build settings for packaged builds.
 
 ## Binary packages
 
@@ -159,7 +154,7 @@ To install the CPU driver
 
     mamba install pocl
 
-Note that this installs an ICD loader from KhronoGroup and the builtin
+Note that this installs an ICD loader from KhronosGroup and the builtin
 OpenCL implementation will be invisible when your application is linked
 to this loader. To make both pocl and the builtin OpenCL implementaiton
 visible, do
@@ -170,4 +165,3 @@ visible, do
 
 PoCL is distributed under the terms of the MIT license. Contributions are expected
 to be made with the same terms.
-

@@ -3,7 +3,7 @@
 
    Copyright (c) 2013 Kalle Raiskila
                  2013-2019 Pekka Jääskeläinen
-                 2023 Pekka Jääskeläinen / Intel Finland Oy
+                 2023-2024 Pekka Jääskeläinen / Intel Finland Oy
 
    Permission is hereby granted, free of charge, to any person obtaining a copy
    of this software and associated documentation files (the "Software"), to deal
@@ -30,7 +30,7 @@
 IGNORE_COMPILER_WARNING("-Wmaybe-uninitialized")
 #include <llvm/ADT/StringRef.h>
 #include <llvm/ADT/Twine.h>
-#if LLVM_VERSION_MAJOR < 16
+#if LLVM_MAJOR < 16
 #include <llvm/ADT/Triple.h>
 #else
 #include <llvm/TargetParser/Triple.h>
@@ -38,11 +38,7 @@ IGNORE_COMPILER_WARNING("-Wmaybe-uninitialized")
 POP_COMPILER_DIAGS
 IGNORE_COMPILER_WARNING("-Wunused-parameter")
 #include <llvm/Support/Casting.h>
-#if LLVM_VERSION_MAJOR < 14
-#include <llvm/Support/TargetRegistry.h>
-#else
 #include <llvm/MC/TargetRegistry.h>
-#endif
 #include <llvm/Analysis/TargetLibraryInfo.h>
 #include <llvm/Analysis/TargetTransformInfo.h>
 #include <llvm/IR/Function.h>
@@ -53,6 +49,7 @@ IGNORE_COMPILER_WARNING("-Wunused-parameter")
 #include <llvm/PassRegistry.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/SourceMgr.h>
+#include <llvm/Linker/Linker.h>
 #if LLVM_MAJOR >= 18
 #include <llvm/Support/CodeGen.h>
 #endif
@@ -66,6 +63,9 @@ IGNORE_COMPILER_WARNING("-Wunused-parameter")
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Passes/StandardInstrumentations.h>
 #include <llvm/Transforms/Scalar/LoopPassManager.h>
+#if LLVM_MAJOR >= 18
+#include <llvm/Frontend/Driver/CodeGenOptions.h>
+#endif
 
 #include "LLVMUtils.h"
 POP_COMPILER_DIAGS
@@ -74,6 +74,7 @@ POP_COMPILER_DIAGS
 #include "pocl.h"
 #include "pocl_cache.h"
 #include "pocl_file_util.h"
+#include "pocl_llvm.h"
 #include "pocl_llvm_api.h"
 #include "pocl_spir.h"
 #include "pocl_util.h"
@@ -86,10 +87,6 @@ POP_COMPILER_DIAGS
 #include <string>
 #include <thread>
 #include <vector>
-
-#ifdef HAVE_LLVM_SPIRV_LIB
-#include <LLVMSPIRVLib/LLVMSPIRVLib.h>
-#endif
 
 #include "linker.h"
 #include "spirv_parser.hh"
@@ -114,14 +111,14 @@ POP_COMPILER_DIAGS
 using namespace llvm;
 
 // Returns the TargetMachine instance or zero if no triple is provided.
-static TargetMachine *GetTargetMachine(cl_device_id device) {
+static TargetMachine *GetTargetMachine(const char* TTriple,
+                                       const char* MCPU = "",
+                                       const char* Features = "") {
 
   std::string Error;
-  Triple DevTriple(device->llvm_target_triplet);
 
-  std::string MCPU = device->llvm_cpu ? device->llvm_cpu : "";
-
-  const Target *TheTarget = TargetRegistry::lookupTarget("", DevTriple, Error);
+  const Target *TheTarget = TargetRegistry::lookupTarget(TTriple,
+                                                         Error);
 
   // OpenASIP targets are not in the registry
   if (!TheTarget) {
@@ -129,7 +126,7 @@ static TargetMachine *GetTargetMachine(cl_device_id device) {
   }
 
   TargetMachine *TM = TheTarget->createTargetMachine(
-      DevTriple.getTriple(), MCPU, StringRef(""), TargetOptions(),
+      TTriple, MCPU, Features, TargetOptions(),
       Reloc::PIC_, CodeModel::Small,
 #if LLVM_MAJOR >= 18
       CodeGenOptLevel::Aggressive);
@@ -138,8 +135,6 @@ static TargetMachine *GetTargetMachine(cl_device_id device) {
 #endif
 
   assert(TM != NULL && "llvm target has no targetMachine constructor");
-  if (device->ops->init_target_machine)
-    device->ops->init_target_machine(device->data, TM);
 
   return TM;
 }
@@ -187,7 +182,7 @@ llvm::Error PoCLModulePassManager::build(std::string PoclPipeline,
                                          cl_device_id Dev) {
 
 #ifdef PER_STAGE_TARGET_MACHINE
-  Machine.reset(GetTargetMachine(Dev));
+  Machine.reset(GetTargetMachine(Dev->llvm_target_triplet, Dev->llvm_cpu));
   TargetMachine *TM = Machine.get();
 #endif
 
@@ -224,18 +219,9 @@ llvm::Error PoCLModulePassManager::build(std::string PoclPipeline,
   PassBuilder &PB = *PassB.get();
 
 #if 0
-  // TODO figure out why this doesn't work. Used to work with old PM,
-  // but with the new PM, it still tries to use printf libcall
-  // Register our TargetLibraryInfoImpl.
-  TLII.reset(new TargetLibraryInfoImpl(DevTriple));
-  // Disables automated generation of libcalls from code patterns.
-  // TCE doesn't have a runtime linker which could link the libs later on.
-  // Also the libcalls might be harmful for WG autovectorization where we
-  // want to try to vectorize the code it converts to e.g. a memset or
-  // a memcpy
-  TLII->disableAllFunctions();
-  // Analysis pass providing the \c TargetLibraryInfo:
-  // TargetLibraryAnalysis
+  // Add LibraryInfo.
+  TLII.reset(llvm::driver::createTLII(TargetTriple, CodeGenOpts.getVecLib()));
+  CodeGenPasses.add(new TargetLibraryInfoWrapperPass(*TLII));
 
   bool res;
   if (Machine) {
@@ -354,7 +340,7 @@ llvm::Error TwoStagePoCLModulePassManager::build(
   bool Vectorize = false;
 
 #ifndef PER_STAGE_TARGET_MACHINE
-  Machine.reset(GetTargetMachine(Dev));
+  Machine.reset(GetTargetMachine(Dev->llvm_target_triplet, Dev->llvm_cpu));
   TargetMachine *TMach = Machine.get();
 #endif
   llvm::Error E1 =
@@ -413,7 +399,7 @@ static void addPass(std::vector<std::string> &Passes, std::string PassName,
     Passes.push_back(Temp);
     break;
   default:
-    POCL_ABORT("unknown pass type");
+    POCL_MSG_ERR("pocl_llvm_wg: addPass(): unknown pass type\n");
   }
 }
 
@@ -440,7 +426,7 @@ static void addAnalysis(std::vector<std::string> &Passes, std::string PassName,
     Passes.push_back(Temp);
     break;
   default:
-    POCL_ABORT("unknown pass type");
+    POCL_MSG_ERR("pocl_llvm_wg: addPass(): unknown analysis type\n");
   }
 }
 
@@ -486,23 +472,33 @@ static void addStage1PassesToPipeline(cl_device_id Dev,
   // don't forget to register it in registerPassBuilderPasses
   addPass(Passes, "fix-min-legal-vec-size", PassType::Module);
   addPass(Passes, "inline-kernels");
-  addPass(Passes, "optimize-wi-func-calls");
+  if (Dev->run_sanitize_divrem_pass)
+    addPass(Passes, "sanitize-ub-of-div-rem");
 
   addPass(Passes, "handle-samplers");
   addPass(Passes, "infer-address-spaces");
   addPass(Passes, "mem2reg");
   addAnalysis(Passes, "domtree");
   addAnalysis(Passes, "workitem-handler-chooser");
-  if (Dev->spmd != CL_FALSE) {
+
+  if (Dev->spmd) {
     addPass(Passes, "flatten-inline-all", PassType::Module);
-    addPass(Passes, "always-inline", PassType::Module);
   } else {
     addPass(Passes, "flatten-globals", PassType::Module);
     addPass(Passes, "flatten-barrier-subs", PassType::Module);
-    addPass(Passes, "always-inline", PassType::Module);
   }
-  // this must be done AFTER inlining, see note above
+
+  addPass(Passes, "always-inline", PassType::Module);
+
+  // both of these must be done AFTER inlining, see note above
   addPass(Passes, "automatic-locals", PassType::Module);
+
+  // Handle UnreachableInsts by converting them to returns or just deleting
+  // them. Julia expects graceful handling of UIs with printouts before them. We
+  // should convert the UIs in the input here otherwise optimizers will remove
+  // them.
+  if (!Dev->spmd)
+    addPass(Passes, "unreachables-to-returns");
 
   // must come AFTER flatten-globals & always-inline
   addPass(Passes, "optimize-wi-gvars");
@@ -526,6 +522,11 @@ static void addStage2PassesToPipeline(cl_device_id Dev,
   if (!Dev->spmd) {
     addPass(Passes, "simplifycfg");
     addPass(Passes, "loop-simplify");
+
+    // ...we have to call UTR again here because some optimizations in LLVM
+    // might generate UIs.
+    if (!Dev->spmd)
+      addPass(Passes, "unreachables-to-returns");
 
     // required for OLD PM
     addAnalysis(Passes, "workitem-handler-chooser");
@@ -641,7 +642,8 @@ static std::string convertPassesToPipelineString(const std::vector<std::string> 
   return Pipeline;
 }
 
-static bool runKernelCompilerPasses(cl_device_id Device, llvm::Module &Mod) {
+static bool runKernelCompilerPasses(cl_device_id Device, llvm::Module &Mod,
+                                    bool Optimize) {
 
   TwoStagePoCLModulePassManager PM;
   std::vector<std::string> Passes1;
@@ -651,7 +653,7 @@ static bool runKernelCompilerPasses(cl_device_id Device, llvm::Module &Mod) {
   addStage2PassesToPipeline(Device, Passes2);
   std::string P2 = convertPassesToPipelineString(Passes2);
 
-  Error E = PM.build(Device, P1, 2, 0, P2, 3, 0);
+  Error E = PM.build(Device, P1, Optimize ? 1 : 0, 0, P2, Optimize ? 3 : 0, 0);
   if (E) {
     std::cerr << "LLVM: failed to create compilation pipeline";
     return false;
@@ -673,6 +675,7 @@ void pocl_destroy_llvm_module(void *modp, cl_context ctx) {
   }
 }
 
+#ifdef ENABLE_SPIRV
 namespace pocl {
 class ProgramWithContext {
 
@@ -755,372 +758,11 @@ public:
 };
 } // namespace pocl
 
-// max captured bytes in output of 'llvm-spirv'
-#define MAX_OUTPUT_BYTES 65536
-
-// Specify list of allowed/disallowed extensions
-#define LLVM17_INTEL_EXTS                                                      \
-  "--spirv-ext=+SPV_INTEL_subgroups,+SPV_INTEL_usm_storage_classes,+SPV_"      \
-  "INTEL_arbitrary_precision_integers,+SPV_INTEL_arbitrary_precision_fixed_"   \
-  "point,+SPV_INTEL_arbitrary_precision_floating_point,+SPV_INTEL_kernel_"     \
-  "attributes,+SPV_KHR_no_integer_wrap_decoration,+SPV_EXT_shader_atomic_"     \
-  "float_add,+SPV_EXT_shader_atomic_float_min_max,+SPV_INTEL_function_pointers" \
-  ",+SPV_KHR_integer_dot_product"
-
-#if LLVM_MAJOR >= 18
-#define ALLOW_INTEL_EXTS LLVM17_INTEL_EXTS ",+SPV_EXT_shader_atomic_float16_add"
-#else
-#define ALLOW_INTEL_EXTS LLVM17_INTEL_EXTS
-#endif
-
-  /*
-  possibly useful:
-    "+SPV_INTEL_unstructured_loop_controls,"
-    "+SPV_INTEL_blocking_pipes,"
-    "+SPV_INTEL_function_pointers,"
-    "+SPV_INTEL_io_pipes,"
-    "+SPV_INTEL_inline_assembly,"
-    "+SPV_INTEL_optimization_hints,"
-    "+SPV_INTEL_float_controls2,"
-    "+SPV_INTEL_vector_compute,"
-    "+SPV_INTEL_fast_composite,"
-    "+SPV_INTEL_variable_length_array,"
-    "+SPV_INTEL_fp_fast_math_mode,"
-    "+SPV_INTEL_long_constant_composite,"
-    "+SPV_INTEL_memory_access_aliasing,"
-    "+SPV_INTEL_runtime_aligned,"
-    "+SPV_INTEL_arithmetic_fence,"
-    "+SPV_INTEL_bfloat16_conversion,"
-    "+SPV_INTEL_global_variable_decorations,"
-    "+SPV_INTEL_non_constant_addrspace_printf,"
-    "+SPV_INTEL_hw_thread_queries,"
-    "+SPV_INTEL_complex_float_mul_div,"
-    "+SPV_INTEL_split_barrier,"
-    "+SPV_INTEL_masked_gather_scatter"
-
-  probably not useful:
-    "+SPV_INTEL_media_block_io,+SPV_INTEL_device_side_avc_motion_estimation,"
-    "+SPV_INTEL_fpga_loop_controls,+SPV_INTEL_fpga_memory_attributes,"
-    "+SPV_INTEL_fpga_memory_accesses,"
-    "+SPV_INTEL_fpga_reg,+SPV_INTEL_fpga_buffer_location,"
-    "+SPV_INTEL_fpga_cluster_attributes,"
-    "+SPV_INTEL_loop_fuse,"
-    "+SPV_INTEL_optnone," // this one causes crash
-    "+SPV_INTEL_fpga_dsp_control,"
-    "+SPV_INTEL_fpga_invocation_pipelining_attributes,"
-    "+SPV_INTEL_token_type,"
-    "+SPV_INTEL_debug_module,"
-    "+SPV_INTEL_joint_matrix,"
-  */
-
-#define ALLOW_EXTS "--spirv-ext=+SPV_KHR_no_integer_wrap_decoration"
-
-// shared code for calling llvm-spirv
-static int convertBCorSPV(char *InputPath,
-                          const char *InputContent, // LLVM bitcode as string
-                          uint64_t InputSize,
-                          std::string *BuildLog,
-                          int useIntelExts,
-                          int reverse, // add "-r"
-                          char *OutputPath,
-                          char **OutContent,
-                          uint64_t *OutSize) {
-  char HiddenOutputPath[POCL_MAX_PATHNAME_LENGTH];
-  char HiddenInputPath[POCL_MAX_PATHNAME_LENGTH];
-  char CapturedOutput[MAX_OUTPUT_BYTES];
-  size_t CapturedBytes = MAX_OUTPUT_BYTES;
-  std::vector<std::string> CompilationArgs;
-  std::vector<const char *> CompilationArgs2;
-  std::vector<uint8_t> FinalSpirv;
-  llvm::Module *Mod = nullptr;
-  char *Content = nullptr;
-  uint64_t ContentSize = 0;
-  llvm::LLVMContext LLVMCtx;
-
-#ifdef HAVE_LLVM_SPIRV_LIB
-  std::string Errors;
-  SPIRV::TranslatorOpts::ExtensionsStatusMap EnabledExts;
-  if (useIntelExts) {
-    EnabledExts[SPIRV::ExtensionID::SPV_INTEL_subgroups] =
-    EnabledExts[SPIRV::ExtensionID::SPV_INTEL_usm_storage_classes] =
-    EnabledExts[SPIRV::ExtensionID::SPV_INTEL_arbitrary_precision_integers] =
-    EnabledExts[SPIRV::ExtensionID::SPV_INTEL_arbitrary_precision_fixed_point] =
-    EnabledExts[SPIRV::ExtensionID::SPV_INTEL_arbitrary_precision_floating_point] =
-    EnabledExts[SPIRV::ExtensionID::SPV_INTEL_kernel_attributes] = true;
-  }
-  EnabledExts[SPIRV::ExtensionID::SPV_KHR_integer_dot_product] = true;
-  EnabledExts[SPIRV::ExtensionID::SPV_KHR_no_integer_wrap_decoration] = true;
-  EnabledExts[SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_add] = true;
-  EnabledExts[SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_min_max] = true;
-#if LLVM_MAJOR >= 18
-  EnabledExts[SPIRV::ExtensionID::SPV_EXT_shader_atomic_float16_add] = true;
-#endif
-  SPIRV::TranslatorOpts Opts(SPIRV::VersionNumber::SPIRV_1_3, EnabledExts);
-  Opts.setDesiredBIsRepresentation(SPIRV::BIsRepresentation::OpenCL20);
-#endif
-  int r = -1;
-
-  bool keepOutputPath = false;
-  if (OutputPath) {
-    keepOutputPath = true;
-    if (OutputPath[0]) {
-      strncpy(HiddenOutputPath, OutputPath, POCL_MAX_PATHNAME_LENGTH);
-    } else {
-      pocl_cache_tempname(HiddenOutputPath, (reverse ? ".bc" : ".spv"), NULL);
-      strncpy(OutputPath, HiddenOutputPath, POCL_MAX_PATHNAME_LENGTH);
-    }
-  } else {
-    assert(OutContent);
-    pocl_cache_tempname(HiddenOutputPath, (reverse ? ".bc" : ".spv"), NULL);
-  }
-
-  bool keepInputPath = false;
-  if (InputPath) {
-    keepInputPath = true;
-    if (InputPath[0]) {
-      strncpy(HiddenInputPath, InputPath, POCL_MAX_PATHNAME_LENGTH);
-    } else {
-      pocl_cache_tempname(HiddenInputPath, (reverse ? ".spv" : ".bc"), NULL);
-      strncpy(InputPath, HiddenInputPath, POCL_MAX_PATHNAME_LENGTH);
-    }
-  } else {
-    assert(InputContent);
-    pocl_cache_tempname(HiddenInputPath, (reverse ? ".spv" : ".bc"), NULL);
-  }
-
-  if (InputContent && InputSize) {
-    r = pocl_write_file(HiddenInputPath, InputContent, InputSize, 0);
-    if (r != 0) {
-      BuildLog->append("failed to write input file for llvm-spirv\n");
-      goto FINISHED;
-    }
-  }
-
-#ifdef HAVE_LLVM_SPIRV_LIB
-  if (reverse) {
-    // SPIRV to BC
-    std::string InputS;
-    if (InputContent && InputSize) {
-      InputS.append(InputContent, InputSize);
-    } else {
-      r = pocl_read_file(InputPath, &Content, &ContentSize);
-      if (r != 0) {
-        BuildLog->append("ConvertBC2SPIRV: failed to read input file:\n");
-        BuildLog->append(InputPath);
-        goto FINISHED;
-      }
-      InputS.append(Content, ContentSize);
-      free(Content);
-      Content = nullptr;
-      ContentSize = 0;
-    }
-
-    std::stringstream InputSS(InputS);
-    Mod = nullptr;
-
-    // TODO maybe use context from program ?
-    if (!readSpirv(LLVMCtx, Opts, InputSS, Mod, Errors)) {
-      BuildLog->append("LLVMSPIRVLib: Write failed with errors:\n");
-      BuildLog->append(Errors.c_str());
-      goto FINISHED;
-    }
-    std::string OutputBC;
-    writeModuleIRtoString(Mod, OutputBC);
-    assert(OutputBC.size() > 20);
-    Content = (char *)malloc(OutputBC.size());
-    assert(Content);
-    memcpy(Content, OutputBC.data(), OutputBC.size());
-    ContentSize = OutputBC.size();
-
-  } else {
-    // BC to SPIRV
-    std::stringstream SS;
-    if (InputContent && InputSize) {
-      Mod = parseModuleIRMem(InputContent, InputSize, &LLVMCtx);
-    } else {
-      assert(InputPath);
-      Mod = parseModuleIR(InputPath, &LLVMCtx);
-    }
-    if (Mod == nullptr) {
-      BuildLog->append("ConvertBC2SPIRV: failed to parse input module\n");
-      goto FINISHED;
-    }
-
-    // TODO maybe use context from program ?
-    if (!writeSpirv(Mod, Opts, SS, Errors)) {
-      BuildLog->append("LLVMSPIRVLib: writeSPIRV failed with errors:\n");
-      BuildLog->append(Errors.c_str());
-      goto FINISHED;
-    }
-    SS.flush();
-    std::string IntermediateSpirv = SS.str();
-    assert(IntermediateSpirv.size() > 20);
-
-    SPIRVParser::applyAtomicCmpXchgWorkaround(
-        (const int32_t *)IntermediateSpirv.data(), IntermediateSpirv.size() / 4,
-        FinalSpirv);
-
-    Content = (char *)malloc(FinalSpirv.size());
-    assert(Content);
-    memcpy(Content, FinalSpirv.data(), FinalSpirv.size());
-    ContentSize = IntermediateSpirv.size();
-  }
-
-  if (OutContent && OutSize) {
-    *OutContent = Content;
-    *OutSize = ContentSize;
-  }
-  // write to output file
-  r = pocl_write_file(HiddenOutputPath, Content, ContentSize, 0);
-  if (!(OutContent && OutSize)) {
-    free(Content);
-  }
-  if (r != 0) {
-    BuildLog->append("failed to write output file from LLVMSPIRVLib\n");
-    goto FINISHED;
-  }
-#else
-
-  // generate program.spv
-  CompilationArgs.push_back(pocl_get_path("LLVM_SPIRV", LLVM_SPIRV));
-#if (LLVM_MAJOR == 15) || (LLVM_MAJOR == 16)
-#ifdef LLVM_OPAQUE_POINTERS
-  CompilationArgs.push_back("--opaque-pointers");
-#endif
-#endif
-  if (useIntelExts)
-    CompilationArgs.push_back(ALLOW_INTEL_EXTS);
-  else
-    CompilationArgs.push_back(ALLOW_EXTS);
-  // TODO ze_device_module_properties_t.spirvVersionSupported
-  CompilationArgs.push_back("--spirv-max-version=1.4");
-  CompilationArgs.push_back("--spirv-target-env=CL2.0");
-  if (reverse)
-    CompilationArgs.push_back("-r");
-  CompilationArgs.push_back("-o");
-  CompilationArgs.push_back(HiddenOutputPath);
-  CompilationArgs.push_back(HiddenInputPath);
-  CompilationArgs2.resize(CompilationArgs.size() + 1);
-  for (unsigned i = 0; i < CompilationArgs.size(); ++i)
-    CompilationArgs2[i] = (char *)CompilationArgs[i].data();
-  CompilationArgs2[CompilationArgs.size()] = nullptr;
-
-  r = pocl_run_command_capture_output(CapturedOutput, &CapturedBytes,
-                                      CompilationArgs2.data());
-  if (r != 0) {
-    BuildLog->append("llvm-spirv failed with output:\n");
-    BuildLog->append(CapturedOutput, CapturedBytes);
-    goto FINISHED;
-  }
-
-  Content = nullptr;
-  ContentSize = 0;
-  r = pocl_read_file(HiddenOutputPath, &Content, &ContentSize);
-  if (r != 0) {
-    BuildLog->append("failed to read output file from llvm-spirv\n");
-    goto FINISHED;
-  }
-  if (!reverse) {
-    SPIRVParser::applyAtomicCmpXchgWorkaround((const int32_t *)Content,
-                                              ContentSize / 4, FinalSpirv);
-    assert(FinalSpirv.size() <= ContentSize);
-    std::memcpy(Content, FinalSpirv.data(), FinalSpirv.size());
-    ContentSize = FinalSpirv.size();
-
-    if (keepOutputPath) {
-      r = pocl_write_file(HiddenOutputPath, Content, ContentSize, 0);
-      if (r != 0) {
-        BuildLog->append("failed to write SPIR-V output file\n");
-        goto FINISHED;
-      }
-    }
-  }
-
-  if (OutContent && OutSize) {
-    *OutContent = Content;
-    *OutSize = ContentSize;
-  } else {
-    free(Content);
-  }
-
-  r = 0;
-#endif
-
-FINISHED:
-  if (pocl_get_bool_option("POCL_LEAVE_KERNEL_COMPILER_TEMP_FILES", 0) != 0) {
-    POCL_MSG_PRINT_LLVM("LLVM SPIR-V conversion tempfiles: %s -> %s",
-                        HiddenInputPath, HiddenOutputPath);
-  } else {
-    if (!keepInputPath)
-      pocl_remove(HiddenInputPath);
-    if (!keepOutputPath)
-      pocl_remove(HiddenOutputPath);
-  }
-
-  return r;
-}
-
-int pocl_convert_bitcode_to_spirv(char *TempBitcodePath, const char *Bitcode,
-                                  uint64_t BitcodeSize, cl_program Program,
-                                  cl_uint DeviceI, int UseIntelExts,
-                                  char *TempSpirvPathOut, char **SpirvContent,
-                                  uint64_t *SpirvSize) {
-
-  std::string BuildLog;
-  int R = convertBCorSPV(TempBitcodePath, Bitcode, BitcodeSize, &BuildLog,
-                         UseIntelExts,
-                         0, // reverse
-                         TempSpirvPathOut, SpirvContent, SpirvSize);
-
-  if (!BuildLog.empty())
-    pocl_append_to_buildlog(Program, DeviceI, strdup(BuildLog.c_str()),
-                            BuildLog.size());
-  return R;
-}
-
-int pocl_convert_bitcode_to_spirv2(char *TempBitcodePath,
-                                   const char *Bitcode,
-                                   uint64_t BitcodeSize,
-                                   void *BuildLog,
-                                   int UseIntelExts,
-                                   char *TempSpirvPathOut,
-                                   char **SpirvContent,
-                                   uint64_t *SpirvSize) {
-
-  return convertBCorSPV(TempBitcodePath,
-                        Bitcode, BitcodeSize,
-                        (std::string *)BuildLog,
-                        UseIntelExts, 0, // reverse
-                        TempSpirvPathOut,
-                        SpirvContent, SpirvSize);
-}
-
-int pocl_convert_spirv_to_bitcode(char *TempSpirvPath,
-                                  const char *SpirvContent,
-                                  uint64_t SpirvSize,
-                                  cl_program Program, cl_uint DeviceI,
-                                  int UseIntelExts,
-                                  char *TempBitcodePathOut,
-                                  char **BitcodeContent,
-                                  uint64_t *BitcodeSize) {
-
-  std::string BuildLog;
-  int R = convertBCorSPV(TempSpirvPath,
-                         SpirvContent, SpirvSize,
-                         &BuildLog,
-                         UseIntelExts, 1, // reverse
-                         TempBitcodePathOut,
-                         BitcodeContent, BitcodeSize);
-  if (!BuildLog.empty())
-    pocl_append_to_buildlog(Program, DeviceI, strdup(BuildLog.c_str()),
-                            BuildLog.size());
-  return R;
-}
-
 void *pocl_llvm_create_context_for_program(char *ProgramBcContent,
                                            size_t ProgramBcSize,
                                            char **LinkinSpirvContent,
-                                           uint64_t *LinkinSpirvSize) {
+                                           uint64_t *LinkinSpirvSize,
+                                           pocl_version_t TargetVersion) {
   assert(ProgramBcContent);
   assert(ProgramBcSize > 0);
 
@@ -1130,6 +772,8 @@ void *pocl_llvm_create_context_for_program(char *ProgramBcContent,
   // parse the program's bytes into a llvm::Module
   if (P == nullptr ||
       !P->init(ProgramBcContent, ProgramBcSize, TempBitcodePath)) {
+    if (P)
+      delete P;
     POCL_MSG_ERR("failed to create program for context");
     return nullptr;
   }
@@ -1137,8 +781,9 @@ void *pocl_llvm_create_context_for_program(char *ProgramBcContent,
   std::string BuildLog;
   if (pocl_convert_bitcode_to_spirv2(
           nullptr, ProgramBcContent, ProgramBcSize, &BuildLog,
-          1, // useIntelExt
-          nullptr, LinkinSpirvContent, LinkinSpirvSize) != 0) {
+          "all", // TODO SPIRV exts
+          nullptr, LinkinSpirvContent, LinkinSpirvSize, TargetVersion) != 0) {
+    delete P;
     POCL_MSG_ERR("failed to create program for context, log:%s\n",
                  BuildLog.c_str());
     return nullptr;
@@ -1155,11 +800,9 @@ void pocl_llvm_release_context_for_program(void *ProgCtx) {
 }
 
 // extract SPIRV of a single Kernel from a program
-int pocl_llvm_extract_kernel_spirv(void* ProgCtx,
-                                   const char* KernelName,
-                                   void* BuildLogStr,
-                                   char **SpirvContent,
-                                   uint64_t *SpirvSize) {
+int pocl_llvm_extract_kernel_spirv(
+    void *ProgCtx, const char *KernelName, void *BuildLogStr,
+    char **SpirvContent, uint64_t *SpirvSize, pocl_version_t TargetVersion) {
 
   POCL_MEASURE_START(extractKernel);
 
@@ -1172,20 +815,23 @@ int pocl_llvm_extract_kernel_spirv(void* ProgCtx,
     return -1;
   }
 
-  int r = pocl_convert_bitcode_to_spirv2(nullptr, OutputBitcode.data(),
-                                         OutputBitcode.size(), &BuildLog,
-                                         1,       // useIntelExts
-                                         nullptr, // SpirvOutputPath
-                                         SpirvContent, SpirvSize);
+  int R = pocl_convert_bitcode_to_spirv2(
+      nullptr, OutputBitcode.data(), OutputBitcode.size(), &BuildLog,
+      "all",   // TODO SPIRV Exts
+      nullptr, // SpirvOutputPath
+      SpirvContent, SpirvSize, TargetVersion);
 
   POCL_MEASURE_FINISH(extractKernel);
-  return r;
+  return R;
 }
+
+#endif // ENABLE_SPIRV
 
 static int pocl_llvm_run_pocl_passes(llvm::Module *Bitcode,
                                      _cl_command_run *RunCommand, // optional
                                      llvm::LLVMContext *LLVMContext,
                                      PoclLLVMContextData *PoclCtx,
+                                     cl_program Program,
                                      cl_kernel Kernel, // optional
                                      cl_device_id Device, int Specialize) {
   // Set to true to generate a global offset 0 specialized WG function.
@@ -1283,11 +929,15 @@ static int pocl_llvm_run_pocl_passes(llvm::Module *Bitcode,
   setModuleIntMetadata(Bitcode, "device_max_witem_sizes_2",
                        Device->max_work_item_sizes[2]);
 
+  std::string Opts;
+  if (Program->compiler_options)
+    Opts.assign(Program->compiler_options);
+  bool Optimize = (Opts.find("-cl-opt-disable") == std::string::npos);
 #ifdef DUMP_LLVM_PASS_TIMINGS
   llvm::TimePassesIsEnabled = true;
 #endif
   POCL_MEASURE_START(llvm_workgroup_ir_func_gen);
-  runKernelCompilerPasses(Device, *Bitcode);
+  runKernelCompilerPasses(Device, *Bitcode, Optimize);
   POCL_MEASURE_FINISH(llvm_workgroup_ir_func_gen);
 #ifdef DUMP_LLVM_PASS_TIMINGS
   llvm::reportAndResetTimings();
@@ -1332,9 +982,9 @@ int pocl_llvm_generate_workgroup_function_nowrite(
   copyKernelFromBitcode(Kernel->name, ParallelBC, ProgramBC,
                         Device->device_aux_functions);
 
-  int res =
-      pocl_llvm_run_pocl_passes(ParallelBC, RunCommand, LLVMContext,
-                                PoCLLLVMContext, Kernel, Device, Specialize);
+  int res = pocl_llvm_run_pocl_passes(ParallelBC, RunCommand, LLVMContext,
+                                      PoCLLLVMContext, Program, Kernel, Device,
+                                      Specialize);
 
   std::string FinalizerCommand =
       pocl_get_string_option("POCL_BITCODE_FINALIZER", "");
@@ -1394,6 +1044,7 @@ int pocl_llvm_run_passes_on_program(cl_program Program, unsigned DeviceI) {
   return pocl_llvm_run_pocl_passes(ProgramBC,
                                    nullptr, // RunCommand,
                                    LLVMContext, PoCLLLVMContext,
+                                   Program,
                                    nullptr, // Kernel,
                                    Device,
                                    0); // Specialize
@@ -1467,6 +1118,31 @@ int pocl_llvm_read_program_llvm_irs(cl_program program, unsigned device_i,
   return CL_SUCCESS;
 }
 
+int pocl_llvm_link_multiple_modules(cl_program program, unsigned device_i,
+                                    const char *OutputBCPath,
+                                    void **LLVMIRBinaries, size_t NumBinaries) {
+  POCL_RETURN_ERROR_COND((LLVMIRBinaries == nullptr), CL_LINK_PROGRAM_FAILURE);
+
+  pocl_llvm_free_llvm_irs(program, device_i);
+
+  cl_context ctx = program->context;
+  PoclLLVMContextData *llvm_ctx = (PoclLLVMContextData *)ctx->llvm_context_data;
+  PoclCompilerMutexGuard lockHolder(&llvm_ctx->Lock);
+  llvm::Module *Dest = new llvm::Module("linked_mod", *llvm_ctx->Context);
+
+  for (cl_uint i = 0; i < NumBinaries; ++i) {
+    llvm::Module *Mod = (llvm::Module *)LLVMIRBinaries[i];
+    assert(Mod);
+    assert(&Mod->getContext() == llvm_ctx->Context);
+    if (llvm::Linker::linkModules(*Dest, llvm::CloneModule(*Mod))) {
+      delete Dest;
+      return CL_LINK_PROGRAM_FAILURE;
+    }
+  }
+  program->llvm_irs[device_i] = Dest;
+  return pocl_write_module(Dest, OutputBCPath);
+}
+
 int pocl_llvm_recalculate_gvar_sizes(cl_program Program, unsigned DeviceI) {
   std::string ErrLog;
   std::set<llvm::GlobalVariable *> GVarSet;
@@ -1501,34 +1177,54 @@ void pocl_llvm_free_llvm_irs(cl_program program, unsigned device_i) {
   }
 }
 
-static void initPassManagerForCodeGen(legacy::PassManager &PM,
-                                      cl_device_id Device) {
+static TargetLibraryInfoImpl *initPassManagerForCodeGen(legacy::PassManager &PM,
+                                                        const char* TTriple,
+                                                        cl_device_type DevType) {
+  assert(TTriple);
+  llvm::Triple DevTriple(TTriple);
+  llvm::TargetLibraryInfoWrapperPass *TLIPass = nullptr;
+  TargetLibraryInfoImpl *TLII = nullptr;
 
-  llvm::Triple Triple(Device->llvm_target_triplet);
+#ifdef ENABLE_HOST_CPU_VECTORIZE_BUILTINS
+  if (DevType == CL_DEVICE_TYPE_CPU) {
+    TLII =
+        llvm::driver::createTLII(DevTriple,
+#ifdef ENABLE_HOST_CPU_VECTORIZE_LIBMVEC
+                                 driver::VectorLibrary::LIBMVEC);
+#endif
+#ifdef ENABLE_HOST_CPU_VECTORIZE_SLEEF
+                                 driver::VectorLibrary::SLEEF);
+#endif
+#ifdef ENABLE_HOST_CPU_VECTORIZE_SVML
+                                 driver::VectorLibrary::SVML);
+#endif
+    TLIPass = new TargetLibraryInfoWrapperPass(*TLII);
+  } else
+#endif
+  {
+    TLIPass = new TargetLibraryInfoWrapperPass(DevTriple);
+  }
 
-  llvm::TargetLibraryInfoWrapperPass *TLIPass =
-      new TargetLibraryInfoWrapperPass(Triple);
   PM.add(TLIPass);
+  return TLII;
 }
 
 /* Run LLVM codegen on input file (parallel-optimized).
  * modp = llvm::Module* of parallel.bc
  * Output native object file (<kernel>.so.o). */
-int pocl_llvm_codegen(cl_device_id Device, cl_program program, void *Modp,
-                      char **Output, uint64_t *OutputSize) {
+int pocl_llvm_codegen2(const char* TTriple, const char* MCPU,
+                       const char *Features, cl_device_type DevType,
+                       pocl_lock_t *Lock, void *Modp, int EmitAsm,
+                       int EmitObj, char **Output, uint64_t *OutputSize) {
 
-  cl_context ctx = program->context;
-  PoclLLVMContextData *llvm_ctx = (PoclLLVMContextData *)ctx->llvm_context_data;
-  PoclCompilerMutexGuard lockHolder(&llvm_ctx->Lock);
+  PoclCompilerMutexGuard LockHolder(Lock);
 
   llvm::Module *Input = (llvm::Module *)Modp;
   assert(Input);
   *Output = nullptr;
+  std::unique_ptr<llvm::TargetLibraryInfoImpl> TLIIPtr;
 
-  legacy::PassManager PMObj;
-  initPassManagerForCodeGen(PMObj, Device);
-
-  std::unique_ptr<llvm::TargetMachine> TM(GetTargetMachine(Device));
+  std::unique_ptr<llvm::TargetMachine> TM(GetTargetMachine(TTriple, MCPU, Features));
   llvm::TargetMachine *Target = TM.get();
 
   // First try direct object code generation from LLVM, if supported by the
@@ -1539,24 +1235,79 @@ int pocl_llvm_codegen(cl_device_id Device, cl_program program, void *Modp,
   llvm::raw_svector_ostream SOS(Data);
   bool cannotEmitFile;
 
-  cannotEmitFile = Target->addPassesToEmitFile(PMObj, SOS, nullptr,
-#if LLVM_MAJOR < 18
-                                               llvm::CGFT_ObjectFile);
-#else
-                                               llvm::CodeGenFileType::
-                                                   ObjectFile);
-#endif
-  LLVMGeneratesObjectFiles = !cannotEmitFile;
+  assert(EmitObj || EmitAsm);
 
-  if (LLVMGeneratesObjectFiles) {
-    POCL_MSG_PRINT_LLVM("Generating an object file directly.\n");
-#ifdef DUMP_LLVM_PASS_TIMINGS
+  if (EmitObj) {
+    legacy::PassManager PMObj;
+    TLIIPtr.reset(initPassManagerForCodeGen(PMObj, TTriple, DevType));
+
+    cannotEmitFile = Target->addPassesToEmitFile(PMObj, SOS, nullptr,
+  #if LLVM_MAJOR < 18
+                                                 llvm::CGFT_ObjectFile);
+  #else
+                                                 llvm::CodeGenFileType::
+                                                     ObjectFile);
+  #endif
+    LLVMGeneratesObjectFiles = !cannotEmitFile;
+
+    if (LLVMGeneratesObjectFiles) {
+      POCL_MSG_PRINT_LLVM("Generating an object file directly.\n");
+  #ifdef DUMP_LLVM_PASS_TIMINGS
+      llvm::TimePassesIsEnabled = true;
+  #endif
+      PMObj.run(*Input);
+  #ifdef DUMP_LLVM_PASS_TIMINGS
+      llvm::reportAndResetTimings();
+  #endif
+      auto O = SOS.str(); // flush
+      const char *Cstr = O.data();
+      size_t S = O.size();
+      *Output = (char *)malloc(S);
+      *OutputSize = S;
+      memcpy(*Output, Cstr, S);
+      return 0;
+    } else {
+      if (!EmitAsm) {
+        POCL_MSG_ERR("llvm_codegen: The target doesn't support "
+                     "obj emission & asm emission not permitted\n");
+        return -1;
+      }
+    }
+  }
+
+  if (EmitAsm) {
+    legacy::PassManager PMAsm;
+    TLIIPtr.reset(initPassManagerForCodeGen(PMAsm, TTriple, DevType));
+
+    POCL_MSG_PRINT_LLVM("Generating assembly text.\n");
+
+    // The LLVM target does not implement support for emitting object file directly.
+    // Have to emit the text first and then call the assembler from the command line
+    // to produce the binary.
+
+    if (Target->addPassesToEmitFile(PMAsm, SOS, nullptr,
+  #if LLVM_MAJOR < 18
+                                    llvm::CGFT_AssemblyFile)
+  #else
+                                    llvm::CodeGenFileType::AssemblyFile)
+  #endif
+    ) {
+      POCL_MSG_ERR(
+          "llvm_codegen: The target supports neither obj nor asm emission!");
+      return -1;
+    }
+  #ifdef DUMP_LLVM_PASS_TIMINGS
     llvm::TimePassesIsEnabled = true;
-#endif
-    PMObj.run(*Input);
-#ifdef DUMP_LLVM_PASS_TIMINGS
+  #endif
+    // This produces the assembly text:
+    PMAsm.run(*Input);
+  #ifdef DUMP_LLVM_PASS_TIMINGS
     llvm::reportAndResetTimings();
-#endif
+  #endif
+  }
+
+  if (!EmitObj) {
+    // return generated Asm to the caller
     auto O = SOS.str(); // flush
     const char *Cstr = O.data();
     size_t S = O.size();
@@ -1564,64 +1315,55 @@ int pocl_llvm_codegen(cl_device_id Device, cl_program program, void *Modp,
     *OutputSize = S;
     memcpy(*Output, Cstr, S);
     return 0;
+  } else {
+    // Next call the target's assembler via the Toolchain API indirectly through
+    // the Driver API.
+    char AsmFileName[POCL_MAX_PATHNAME_LENGTH];
+    char ObjFileName[POCL_MAX_PATHNAME_LENGTH];
+
+    std::string AsmStr = SOS.str().str();
+    pocl_cache_write_kernel_asmfile(AsmFileName, AsmStr.c_str(), AsmStr.size());
+    pocl_cache_tempname(ObjFileName, OBJ_EXT, nullptr);
+
+    std::string CpuFlag = (MCPU != nullptr)
+                           ? (std::string(CLANG_MARCH_FLAG) + MCPU)
+                           : "";
+
+    const char *Args[] = {pocl_get_path("CLANG", CLANGCC),
+                          AsmFileName,
+                          "-c",
+                          "-o",
+                          ObjFileName,
+                          MCPU ? CpuFlag.c_str() : nullptr,
+                          nullptr};
+    int Res = pocl_invoke_clang(TTriple, Args);
+    if (Res == 0) {
+      if (pocl_read_file(ObjFileName, Output, OutputSize)) {
+        POCL_MSG_ERR("Could not read the object file.");
+        return -1;
+      }
+    }
+    if (pocl_remove(AsmFileName))
+      POCL_MSG_ERR("failed to remove %s\n", AsmFileName);
+    if (pocl_remove(ObjFileName))
+      POCL_MSG_ERR("failed to remove %s\n", ObjFileName);
+    return 0;
   }
 
-  legacy::PassManager PMAsm;
-  initPassManagerForCodeGen(PMAsm, Device);
+  return -1;
+}
 
-  POCL_MSG_PRINT_LLVM("Generating assembly text.\n");
 
-  // The LLVM target does not implement support for emitting object file directly.
-  // Have to emit the text first and then call the assembler from the command line
-  // to produce the binary.
+int pocl_llvm_codegen(cl_device_id Device, cl_program Program,
+                      const char *Features, void *Modp, int EmitAsm,
+                      int EmitObj, char **Output, uint64_t *OutputSize) {
 
-  if (Target->addPassesToEmitFile(PMAsm, SOS, nullptr,
-#if LLVM_MAJOR < 18
-                                  llvm::CGFT_AssemblyFile)
-#else
-                                  llvm::CodeGenFileType::AssemblyFile)
-#endif
-  ) {
-    POCL_ABORT("The target supports neither obj nor asm emission!");
-  }
+  cl_context Ctx = Program->context;
+  PoclLLVMContextData *LLVMCtx = (PoclLLVMContextData *)Ctx->llvm_context_data;
 
-#ifdef DUMP_LLVM_PASS_TIMINGS
-  llvm::TimePassesIsEnabled = true;
-#endif
-  // This produces the assembly text:
-  PMAsm.run(*Input);
-#ifdef DUMP_LLVM_PASS_TIMINGS
-  llvm::reportAndResetTimings();
-#endif
-
-  // Next call the target's assembler via the Toolchain API indirectly through
-  // the Driver API.
-
-  char AsmFileName[POCL_MAX_PATHNAME_LENGTH];
-  char ObjFileName[POCL_MAX_PATHNAME_LENGTH];
-
-  std::string AsmStr = SOS.str().str();
-  pocl_write_tempfile(AsmFileName, "/tmp/pocl-asm", ".s", AsmStr.c_str(),
-                      AsmStr.size(), nullptr);
-  pocl_mk_tempname(ObjFileName, "/tmp/pocl-obj", ".o", nullptr);
-
-  const char *Args[] = {pocl_get_path("CLANG", CLANG),
-                        AsmFileName,
-                        "-c",
-                        "-o",
-                        ObjFileName,
-                        nullptr};
-  int Res = pocl_invoke_clang(Device, Args);
-
-  if (Res == 0) {
-    if (pocl_read_file(ObjFileName, Output, OutputSize))
-      POCL_ABORT("Could not read the object file.");
-  }
-
-  pocl_remove(AsmFileName);
-  pocl_remove(ObjFileName);
-  return Res;
-
+  return pocl_llvm_codegen2 (Device->llvm_target_triplet, Device->llvm_cpu,
+                            Features, Device->type, &LLVMCtx->Lock,
+                            Modp, EmitAsm, EmitObj, Output, OutputSize);
 }
 
 void populateModulePM(void *Passes, void *Module, unsigned OptL, unsigned SizeL,
@@ -1637,6 +1379,12 @@ void populateModulePM(void *Passes, void *Module, unsigned OptL, unsigned SizeL,
   PTO.LoopInterleaving = Vectorize;
   PTO.SLPVectorization = Vectorize;
   PTO.LoopVectorization = Vectorize;
+
+  // Create the analysis managers.
+  LoopAnalysisManager LAM;
+  FunctionAnalysisManager FAM;
+  CGSCCAnalysisManager CGAM;
+  ModuleAnalysisManager MAM;
 
 #ifdef DEBUG_NEW_PASS_MANAGER
   PrintPassOptions PrintPassOpts;
@@ -1656,12 +1404,6 @@ void populateModulePM(void *Passes, void *Module, unsigned OptL, unsigned SizeL,
 #else
   PassBuilder PB(TM, PTO);
 #endif
-
-  // Create the analysis managers.
-  LoopAnalysisManager LAM;
-  FunctionAnalysisManager FAM;
-  CGSCCAnalysisManager CGAM;
-  ModuleAnalysisManager MAM;
 
   // Register all the basic analyses with the managers.
   PB.registerModuleAnalyses(MAM);
@@ -1691,7 +1433,11 @@ void populateModulePM(void *Passes, void *Module, unsigned OptL, unsigned SizeL,
       break;
     }
   }
-  ModulePassManager MPM = PB.buildPerModuleDefaultPipeline(Opt);
+  ModulePassManager MPM;
+  if (Opt == OptimizationLevel::O0)
+    MPM = PB.buildO0DefaultPipeline(Opt);
+  else
+    MPM = PB.buildPerModuleDefaultPipeline(Opt);
   if (Module) {
     llvm::Module *Mod = (llvm::Module *)Module;
     MPM.run(*Mod, MAM);

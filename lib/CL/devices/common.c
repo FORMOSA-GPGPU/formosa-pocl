@@ -35,10 +35,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <utlist.h>
 
 #ifdef _WIN32
+#include "pocl_ipc_mutex.h"
 #include "vccompat.hpp"
 #endif
 
@@ -47,7 +47,6 @@
 
 #include "common_driver.h"
 #include "config.h"
-#include "config2.h"
 #include "devices.h"
 #include "pocl_cache.h"
 #include "pocl_debug.h"
@@ -71,23 +70,21 @@
 
 #include "_kernel_constants.h"
 
-#define WORKGROUP_STRING_LENGTH 1024
-
 /* Object ids are generated from this global. Note: 1 will be the first
    valid object id, thus 0 can be used to mark a non-object/null. */
 pocl_obj_id_t last_object_id = 0;
 
-unsigned long buffer_c;
-unsigned long svm_buffer_c;
-unsigned long usm_buffer_c;
-unsigned long queue_c;
-unsigned long context_c;
-unsigned long image_c;
-unsigned long kernel_c;
-unsigned long program_c;
-unsigned long sampler_c;
-unsigned long uevent_c;
-unsigned long event_c;
+size_t buffer_c;
+size_t svm_buffer_c;
+size_t usm_buffer_c;
+size_t queue_c;
+size_t context_c;
+size_t image_c;
+size_t kernel_c;
+size_t program_c;
+size_t sampler_c;
+size_t uevent_c;
+size_t event_c;
 
 /**
  * Generate code from the final bitcode using the LLVM
@@ -124,6 +121,19 @@ llvm_codegen (char *output, unsigned device_i, cl_kernel kernel,
   char final_binary_path[POCL_MAX_PATHNAME_LENGTH];
   pocl_cache_final_binary_path (final_binary_path, program, device_i, kernel,
                                 command, specialize);
+
+#ifdef _WIN32
+  /* Avoid race condition of multiple processes accessing same files. */
+  char MtxName[MAX_PATH];  /* MAX_PATH is defined by Windows API.  */
+  strncpy (MtxName, program->build_hash[device_i], MAX_PATH);
+  MtxName[MAX_PATH - 1] = '\0';
+  pocl_ipc_mutex_t ipc_mtx;
+  error = pocl_ipc_mutex_create_and_lock (MtxName, &ipc_mtx);
+  assert (!error && "IPC mutex lock failure!");
+  // For release builds, continue despite not having the mutex - maybe we are
+  // in luck not having a race condition.
+  int have_locked_mutex = !error;
+#endif
 
   if (pocl_exists (final_binary_path))
     goto FINISH;
@@ -167,8 +177,8 @@ llvm_codegen (char *output, unsigned device_i, cl_kernel kernel,
   if (pocl_exists (final_binary_path))
     goto FINISH;
 
-  error = pocl_llvm_codegen (device, program, llvm_module, &objfile,
-                             &objfile_size);
+  error = pocl_llvm_codegen (device, program, "", llvm_module,
+                             CL_TRUE, CL_TRUE, &objfile, &objfile_size);
   if (error)
     {
       POCL_MSG_PRINT_LLVM ("pocl_llvm_codegen() failed for kernel %s\n",
@@ -189,12 +199,23 @@ llvm_codegen (char *output, unsigned device_i, cl_kernel kernel,
     }
   else
     {
-      POCL_MSG_PRINT_LLVM ("written %s size %zu\n",
+      POCL_MSG_PRINT_LLVM ("Written kernel object: %s size: %zu\n",
                           tmp_objfile, (size_t)objfile_size);
     }
 
-  /* temporary filename for kernel.so */
-  if (pocl_cache_tempname (tmp_module, ".so", NULL))
+  /* Temporary filename for kernel.so. Create it in the parallel.bc's
+     directory to enable a potential customized finalization step to
+     create multiple files next to it. */
+  char parallel_bc_dir[POCL_MAX_PATHNAME_LENGTH + 2];
+
+  pocl_cache_kernel_cachedir_path (parallel_bc_dir, program, device_i, kernel,
+                                   "", command, specialize);
+
+  size_t dir_len = strlen (parallel_bc_dir);
+  parallel_bc_dir[dir_len] = '/';
+  parallel_bc_dir[dir_len + 1] = 0;
+
+  if (pocl_mk_tempname (tmp_module, parallel_bc_dir, SHARED_LIB_EXT, NULL))
     {
       POCL_MSG_PRINT_LLVM ("Creating temporary kernel.so file"
                            " for kernel %s FAILED\n",
@@ -202,37 +223,61 @@ llvm_codegen (char *output, unsigned device_i, cl_kernel kernel,
       goto FINISH;
     }
   else
-    POCL_MSG_PRINT_LLVM ("Temporary kernel.so file"
-                         " for kernel %s : %s\n",
+    POCL_MSG_PRINT_LLVM ("Temporary shared-lib file"
+                         " for kernel %s is: %s\n",
                          kernel_name, tmp_module);
 
   POCL_MSG_PRINT_INFO ("Linking final module\n");
 
-  /* Link through Clang driver interface who knows the correct toolchains
-     for all of its targets.  */
-  const char *cmd_line[64]
-    = { pocl_get_path ("CLANG", CLANG), "-o", tmp_module, tmp_objfile };
-  unsigned last_arg_idx = 4;
-  /* immediate flush enabled results in "__printf_flush_buffer" symbol
-   * referenced it the built kernel.so, however that function exists only
-   * on the host side; therefore link to libpocl.so which provides it */
+  /* If the device has a custom linkage/binary generation step, call it
+     instead of the default Clang-driven linkage step. It's likely a
+     non-host target in that case. */
+  if (device->ops->finalize_binary != NULL)
+    {
+      error = device->ops->finalize_binary (tmp_module, tmp_objfile);
+    }
+  else
+    {
+      /* Link through Clang driver interface which knows the correct toolchains
+         for all of its targets.  */
+      const char *cmd_line[64]
+        = { pocl_get_path ("CLANG", CLANGCC), "-o", tmp_module, tmp_objfile };
+      unsigned last_arg_idx = 4;
+
+#ifdef _MSC_VER
+      /* NOTE: This intended for targets having 'msvc' triple component.
+       * These options, passed to MSVC's linker:
+       * - prevent *.exp and *.lib files to be generated and wasting disk
+       *   space.
+       * - suppress "Creating library *.lib and object *.exp" to be written
+       *   stdout which messes up regex checking on some internal tests.  */
+      cmd_line[last_arg_idx++] = "-Xlinker";
+      cmd_line[last_arg_idx++] = "-noexp";
+      cmd_line[last_arg_idx++] = "-Xlinker";
+      cmd_line[last_arg_idx++] = "-noimplib";
+#endif
+
+      /* ENABLE_PRINTF_IMMEDIATE_FLUSH results in "pocl_flush_printf_buffer"
+       * symbol referenced in the built kernel.so; however that function exists
+       * only on the host side, therefore link to libpocl.so which provides it
+       */
 #ifdef ENABLE_PRINTF_IMMEDIATE_FLUSH
 #ifdef HAVE_DLFCN_H
-  const char *fname = pocl_dynlib_pathname ((void *)pocl_cache_tempname);
-  assert (fname != NULL);
-  cmd_line[last_arg_idx++] = fname;
+      const char *fname = pocl_dynlib_pathname ((void *)pocl_cache_tempname);
+      assert (fname != NULL);
+      cmd_line[last_arg_idx++] = fname;
 #else
 #error ENABLE_PRINTF_IMMEDIATE_FLUSH requires HAVE_DLFCN_H
 #endif
 #endif
-  const char **last_arg = &cmd_line[last_arg_idx];
-  const char **device_ld_arg = device->final_linkage_flags;
-  while ((*last_arg++ = *device_ld_arg++))
-    {
+      const char **last_arg = &cmd_line[last_arg_idx];
+      const char **device_ld_arg = device->final_linkage_flags;
+      while ((*last_arg++ = *device_ld_arg++))
+        {
+        }
+
+      error = pocl_invoke_clang (device->llvm_target_triplet, cmd_line);
     }
-
-  error = pocl_invoke_clang (device, cmd_line);
-
   if (error)
     {
       POCL_MSG_PRINT_LLVM ("Linking kernel.so.o -> kernel.so has failed\n");
@@ -241,6 +286,7 @@ llvm_codegen (char *output, unsigned device_i, cl_kernel kernel,
 
   /* rename temporary kernel.so */
   error = pocl_rename (tmp_module, final_binary_path);
+
   if (error)
     {
       POCL_MSG_PRINT_LLVM (
@@ -269,6 +315,10 @@ llvm_codegen (char *output, unsigned device_i, cl_kernel kernel,
     }
 
 FINISH:
+#ifdef _WIN32
+  if (have_locked_mutex)
+    pocl_ipc_mutex_unlock_and_release (&ipc_mtx);
+#endif
   pocl_destroy_llvm_module (llvm_module, kernel->context);
   POCL_MEM_FREE (objfile);
   POCL_MEASURE_FINISH (llvm_codegen);
@@ -309,8 +359,9 @@ pocl_fill_dev_image_t (dev_image_t *di, struct pocl_argument *parg,
   di->_data = (mem->device_ptrs[device->global_mem_id].mem_ptr);
 }
 
-/**
- * executes given command. Call with node->sync.event.event UNLOCKED.
+/** Executes a given command using the default PoCL driver hooks.
+ *
+ * Call with node->sync.event.event UNLOCKED.
  */
 void
 pocl_exec_command (_cl_command_node *node)
@@ -650,6 +701,7 @@ pocl_exec_command (_cl_command_node *node)
             void *ptr = cmd->svm_free.svm_pointers[i];
             POCL_LOCK_OBJ (event->context);
             pocl_raw_ptr *tmp = NULL, *item = NULL;
+            cl_mem shadow_mem = NULL;
             DL_FOREACH_SAFE (event->context->raw_ptrs, item, tmp)
             {
               if (item->vm_ptr == ptr)
@@ -658,10 +710,13 @@ pocl_exec_command (_cl_command_node *node)
                   break;
                 }
             }
+            shadow_mem = item->shadow_cl_mem;
             POCL_UNLOCK_OBJ (event->context);
             assert (item);
             POCL_MEM_FREE (item);
             POname (clReleaseContext) (event->context);
+            if (shadow_mem)
+              POname (clReleaseMemObject) (shadow_mem);
             dev->ops->svm_free (dev, ptr);
           }
       POCL_UPDATE_EVENT_COMPLETE_MSG (event, "Event SVM Free              ");
@@ -767,7 +822,9 @@ pocl_exec_command (_cl_command_node *node)
       break;
 
     default:
-      POCL_ABORT_UNIMPLEMENTED("");
+      pocl_update_event_running (event);
+      POCL_UPDATE_EVENT_FAILED_MSG (
+        CL_FAILED, event, "pocl_exec_command: Unknown command type\n");
       break;
     }
 }
@@ -791,17 +848,7 @@ pocl_broadcast (cl_event brc_event)
   POCL_LOCK_OBJ (brc_event);
   while ((target = brc_event->notify_list))
     {
-      cl_event target_event = target->event;
-      POCL_UNLOCK_OBJ (brc_event);
-      POname (clRetainEvent) (target_event);
-
-      pocl_lock_events_inorder (brc_event, target_event);
-      if (target != brc_event->notify_list)
-        {
-          pocl_unlock_events_inorder (brc_event, target_event);
-          POCL_LOCK_OBJ (brc_event);
-          continue;
-        }
+      POCL_LOCK_OBJ (target->event);
 
       /* remove event from wait list */
       LL_FOREACH (target->event->wait_list, tmp)
@@ -814,28 +861,35 @@ pocl_broadcast (cl_event brc_event)
             }
         }
 
-        if ((target->event->status == CL_SUBMITTED)
-            || (target->event->status == CL_QUEUED))
-          {
-            target->event->command->device->ops->notify (
-                target->event->command->device, target->event, brc_event);
-          }
+      if ((target->event->status == CL_SUBMITTED)
+          || (target->event->status == CL_QUEUED))
+        {
+          target->event->command->device->ops->notify (
+            target->event->command->device, target->event, brc_event);
+        }
 
-        if (pocl_is_tracing_enabled() && target->event->meta_data)
-          {
-            pocl_event_md *md = target->event->meta_data;
-            for (size_t i = 0; i < md->num_deps; ++i)
-              if (md->dep_ids[i] == brc_event->id)
-                {
-                  md->dep_ts[i] = brc_event->time_end;
-                  break;
-                }
-          }
-        LL_DELETE (brc_event->notify_list, target);
-        pocl_unlock_events_inorder (brc_event, target_event);
-        POname (clReleaseEvent) (target->event);
-        pocl_mem_manager_free_event_node (target);
-        POCL_LOCK_OBJ (brc_event);
+      if (pocl_is_tracing_enabled () && target->event->meta_data)
+        {
+          pocl_event_md *md = target->event->meta_data;
+          for (size_t i = 0; i < md->num_deps; ++i)
+            if (md->dep_ids[i] == brc_event->id)
+              {
+                md->dep_ts[i] = brc_event->time_end;
+                break;
+              }
+        }
+      LL_DELETE (brc_event->notify_list, target);
+      POCL_UNLOCK_OBJ (target->event);
+      /* Unlock and lock brc_event to prevent lock order violations with the
+       * command queue when calling clReleaseEvent as it can call
+       * clReleaseCommandQueue.
+       */
+      POCL_UNLOCK_OBJ (brc_event);
+      /* Now that the event is deleted from the notify_list,
+       * undo the retain done during pocl_create_event_sync. */
+      POname (clReleaseEvent) (target->event);
+      POCL_LOCK_OBJ (brc_event);
+      pocl_mem_manager_free_event_node (target);
     }
   POCL_UNLOCK_OBJ (brc_event);
 }
@@ -887,8 +941,6 @@ pocl_cmd_max_grid_dim_width (_cl_command_run *cmd)
 
 
 /* CPU driver stuff */
-
-#ifdef HAVE_DLFCN_H
 
 typedef struct pocl_dlhandle_cache_item pocl_dlhandle_cache_item;
 struct pocl_dlhandle_cache_item
@@ -988,15 +1040,17 @@ pocl_release_dlhandle_cache (void *dlhandle_cache_item)
  * if not, builds the kernel, caches it, and returns the file name of the
  * end result.
  *
- * @param command The kernel run command.
- * @param specialized 1 if should check the per-command specialized one instead
+ * \param module_fn [out] The file name of the final binary.
+ * \param command The kernel run command.
+ * \param specialized 1 if should check the per-command specialized one instead
  * of the generic one.
- * @returns The filename of the built binary in the disk.
+ * \returns The filename of the built binary in the disk.
  */
-char *
-pocl_check_kernel_disk_cache (_cl_command_node *command, int specialized)
+int
+pocl_check_kernel_disk_cache (char *module_fn,
+                              _cl_command_node *command,
+                              int specialized)
 {
-  char *module_fn = NULL;
   _cl_command_run *run_cmd = &command->command.run;
   cl_kernel k = run_cmd->kernel;
   cl_program p = k->program;
@@ -1005,13 +1059,12 @@ pocl_check_kernel_disk_cache (_cl_command_node *command, int specialized)
   /* First try to find a static WG binary for the local size as they
      are always more efficient than the dynamic ones.  Also, in case
      of reqd_wg_size, there might not be a dynamic sized one at all.  */
-  module_fn = malloc (POCL_MAX_PATHNAME_LENGTH);
   pocl_cache_final_binary_path (module_fn, p, dev_i, k, command, specialized);
 
   if (pocl_exists (module_fn))
     {
       POCL_MSG_PRINT_INFO ("Using a cached WG function: %s\n", module_fn);
-      return module_fn;
+      return CL_SUCCESS;
     }
 
   /* static WG binary for the local size does not exist. If we have the LLVM IR
@@ -1024,21 +1077,26 @@ pocl_check_kernel_disk_cache (_cl_command_node *command, int specialized)
                                 specialized);
       POCL_UNLOCK (pocl_llvm_codegen_lock);
       if (error)
-        POCL_ABORT ("Final linking of kernel %s failed.\n", k->name);
+        {
+          POCL_MSG_ERR ("Final linking of kernel %s failed.\n", k->name);
+          return -1;
+        }
       POCL_MSG_PRINT_INFO ("Built a %sWG function: %s\n",
                            specialized ? "specialized " : "generic ",
                            module_fn);
-      return module_fn;
+      return CL_SUCCESS;
 #else
       /* TODO: This should be caught earlier. */
       if (!p->pocl_binaries[dev_i])
-        POCL_ABORT ("pocl device without online compilation support"
-                    " cannot compile LLVM IRs to machine code!\n");
+        {
+          POCL_MSG_ERR ("pocl device without online compilation support"
+                        " cannot compile LLVM IRs to machine code!\n");
+          return -1;
+        }
 #endif
     }
   else
     {
-      module_fn = malloc (POCL_MAX_PATHNAME_LENGTH);
       /* First try to find a specialized WG binary, if allowed by the
          command. */
       if (!run_cmd->force_generic_wg_func)
@@ -1049,7 +1107,10 @@ pocl_check_kernel_disk_cache (_cl_command_node *command, int specialized)
           /* Then check for a dynamic (non-specialized) kernel. */
           pocl_cache_final_binary_path (module_fn, p, dev_i, k, command, 0);
           if (!pocl_exists (module_fn))
-            POCL_ABORT ("Generic WG function binary does not exist.\n");
+            {
+              POCL_MSG_ERR ("Generic WG function binary does not exist.\n");
+              return -1;
+            }
           POCL_MSG_PRINT_INFO ("Using a cached generic WG function: %s\n",
                                module_fn);
         }
@@ -1057,7 +1118,7 @@ pocl_check_kernel_disk_cache (_cl_command_node *command, int specialized)
         POCL_MSG_PRINT_INFO ("Using a cached specialized WG function: %s\n",
                              module_fn);
     }
-  return module_fn;
+  return CL_SUCCESS;
 }
 
 
@@ -1112,9 +1173,8 @@ pocl_check_kernel_dlhandle_cache (_cl_command_node *command,
                                   int retain,
                                   int specialize)
 {
-  char workgroup_string[WORKGROUP_STRING_LENGTH];
+  char *workgroup_string = NULL;
   pocl_dlhandle_cache_item *ci = NULL;
-  const char *dl_error = NULL;
   _cl_command_run *run_cmd = &command->command.run;
 
   /* Brute force mechanism to test relying on generic work-group functions
@@ -1146,46 +1206,57 @@ pocl_check_kernel_dlhandle_cache (_cl_command_node *command,
   size_t max_grid_width = pocl_cmd_max_grid_dim_width (run_cmd);
   ci->max_grid_dim_width = max_grid_width;
 
-  char *module_fn = pocl_check_kernel_disk_cache (command, specialize);
+  char module_fn[POCL_MAX_PATHNAME_LENGTH];
+  int err = pocl_check_kernel_disk_cache (module_fn, command, specialize);
+  if (err)
+    {
+      free (ci);
+      POCL_UNLOCK (pocl_dlhandle_lock);
+      return NULL;
+    }
 
   ci->dlhandle = pocl_dynlib_open (module_fn, 0, 1);
 
-  snprintf (workgroup_string, WORKGROUP_STRING_LENGTH,
-            "_pocl_kernel_%s_workgroup", run_cmd->kernel->name);
+  size_t workgroup_len = strlen (run_cmd->kernel->name) + 30;
+  workgroup_string = (char *)malloc (workgroup_len);
+  snprintf (workgroup_string, workgroup_len, "_pocl_kernel_%s_workgroup",
+            run_cmd->kernel->name);
 
   ci->wg = pocl_dynlib_symbol_address (ci->dlhandle, workgroup_string);
 
   if (ci->wg == NULL)
     {
       // Older OSX dyld APIs need the name without the underscore.
-      snprintf (workgroup_string, WORKGROUP_STRING_LENGTH,
-                "pocl_kernel_%s_workgroup", run_cmd->kernel->name);
+      snprintf (workgroup_string, workgroup_len, "pocl_kernel_%s_workgroup",
+                run_cmd->kernel->name);
       ci->wg = pocl_dynlib_symbol_address (ci->dlhandle, workgroup_string);
 
       if (ci->wg == NULL)
-      POCL_ABORT (
-        "pocl_dynlib_symbol_address(\"%s\", \"%s\") failed with '%s'.\n"
-        "note: missing symbols in the kernel binary might be"
-        " reported as 'file not found' errors.\n",
-        module_fn, workgroup_string, dl_error);
+        {
+          POCL_MSG_ERR ("pocl_dynlib_symbol_address(\"%s\", \"%s\") failed.\n"
+                        "note: missing symbols in the kernel binary might be"
+                        " reported as 'file not found' errors.\n",
+                        module_fn, workgroup_string);
+          POCL_UNLOCK (pocl_dlhandle_lock);
+          free (ci);
+          free (workgroup_string);
+          return NULL;
+        }
     }
 
   run_cmd->wg = ci->wg;
   DL_PREPEND (pocl_dlhandle_cache, ci);
 
   POCL_UNLOCK (pocl_dlhandle_lock);
-  POCL_MEM_FREE (module_fn);
-
+  free (workgroup_string);
   return ci;
 }
-
-#endif
 
 
 #define MIN_MAX_MEM_ALLOC_SIZE (128*1024*1024)
 
 /* accounting object for the main memory */
-static pocl_global_mem_t system_memory = {POCL_LOCK_INITIALIZER, 0, 0, 0};
+static pocl_global_mem_t system_memory = { 0, 0, 0 };
 
 void
 pocl_setup_device_for_system_memory (cl_device_id device)
@@ -1196,11 +1267,11 @@ pocl_setup_device_for_system_memory (cl_device_id device)
       /* global_mem_size contains the entire memory size,
        * and we need to leave some available for OS & other programs
        * this sets it to 3/4 for systems with <=7gig mem,
-       * for >7 it sets to (total-2gigs)
+       * for >7 it sets to (total-4gigs)
        */
       cl_ulong alloc_limit = device->global_mem_size;
       if (alloc_limit > ((cl_ulong)7 << 30))
-        system_memory.total_alloc_limit = alloc_limit - ((cl_ulong)2 << 30);
+        system_memory.total_alloc_limit = alloc_limit - ((cl_ulong)4 << 30);
       else
         {
           cl_ulong temp = (alloc_limit >> 2);
@@ -1241,15 +1312,11 @@ pocl_setup_device_for_system_memory (cl_device_id device)
     }
 
   if (device->global_mem_size < MIN_MAX_MEM_ALLOC_SIZE)
-    POCL_ABORT("Not enough memory to run on this device.\n");
+    {
+      POCL_MSG_ERR ("Not enough memory to run on this device.\n");
+    }
 
-  /* Maximum allocation size: we don't have hardware limits, so we
-   * can potentially allocate the whole memory for a single buffer, unless
-   * of course there are limits set at the operating system level. Of course
-   * we still have to respect the OpenCL-commanded minimum */
-
-  cl_ulong alloc_limit = pocl_size_ceil2_64 (device->global_mem_size / 4);
-
+  cl_ulong alloc_limit = device->global_mem_size;
   if (alloc_limit < MIN_MAX_MEM_ALLOC_SIZE)
     alloc_limit = MIN_MAX_MEM_ALLOC_SIZE;
 
@@ -1349,45 +1416,6 @@ pocl_set_buffer_image_limits(cl_device_id device)
 
 }
 
-void*
-pocl_aligned_malloc_global_mem(cl_device_id device, size_t align, size_t size)
-{
-  pocl_global_mem_t *mem = device->global_memory;
-  void *retval = NULL;
-
-  POCL_LOCK (mem->pocl_lock);
-  if ((mem->total_alloc_limit - mem->currently_allocated) < size)
-    goto ERROR;
-
-  retval = pocl_aligned_malloc (align, size);
-  if (!retval)
-    goto ERROR;
-
-  mem->currently_allocated += size;
-  if (mem->max_ever_allocated < mem->currently_allocated)
-    mem->max_ever_allocated = mem->currently_allocated;
-  assert(mem->currently_allocated <= mem->total_alloc_limit);
-
-ERROR:
-  POCL_UNLOCK (mem->pocl_lock);
-
-  return retval;
-}
-
-void
-pocl_free_global_mem(cl_device_id device, void* ptr, size_t size)
-{
-  pocl_global_mem_t *mem = device->global_memory;
-
-  POCL_LOCK (mem->pocl_lock);
-  assert(mem->currently_allocated >= size);
-  mem->currently_allocated -= size;
-  POCL_UNLOCK (mem->pocl_lock);
-
-  POCL_MEM_FREE(ptr);
-}
-
-
 void
 pocl_print_system_memory_stats()
 {
@@ -1402,11 +1430,10 @@ pocl_print_system_memory_stats()
 }
 
 /* default WG size in each dimension & total WG size.
- * this should be reasonable for CPU */
-#define DEFAULT_WG_SIZE 8192
-
-static const char *final_ld_flags[] =
-  {"-lm", "-nostartfiles", HOST_LD_FLAGS_ARRAY, NULL};
+ * this should be reasonable for CPU.
+ * setting this to 8192 causes some tests to fail,
+ * because of stack overflow. */
+#define DEFAULT_WG_SIZE 4096
 
 static cl_device_partition_property basic_partition_properties[1] = { 0 };
 
@@ -1490,6 +1517,15 @@ static const cl_image_format supported_image_formats[] = {
 };
 #endif
 
+/** Initializes device info defaults.
+ *
+ * It setups the most generic defaults applicable to most devices,
+ * which the device drivers can overwrite with more specific values.
+ * pocl_cpu_init_common() should be called instead for CPU-devices.
+ *
+ * \param dev The device to initialize.
+ * \param device_extensions A list of extensions the device supports.
+ */
 void
 pocl_init_default_device_infos (cl_device_id dev,
                                 const char *device_extensions)
@@ -1498,7 +1534,6 @@ pocl_init_default_device_infos (cl_device_id dev,
 
   dev->type = CL_DEVICE_TYPE_CPU;
   dev->max_work_item_dimensions = 3;
-  dev->final_linkage_flags = final_ld_flags;
   dev->extensions = device_extensions;
 
   /*
@@ -1590,7 +1625,7 @@ pocl_init_default_device_infos (cl_device_id dev,
   dev->min_data_type_align_size = MAX_EXTENDED_ALIGNMENT;
   dev->mem_base_addr_align = MAX_EXTENDED_ALIGNMENT;
   dev->single_fp_config = CL_FP_ROUND_TO_NEAREST | CL_FP_INF_NAN;
-#ifdef __x86_64__
+#if defined(__x86_64__) || defined(_M_X64)
   dev->single_fp_config |= (CL_FP_DENORM | CL_FP_ROUND_TO_INF
                             | CL_FP_ROUND_TO_ZERO
                             | CL_FP_CORRECTLY_ROUNDED_DIVIDE_SQRT);
@@ -1635,9 +1670,9 @@ pocl_init_default_device_infos (cl_device_id dev,
   dev->error_correction_support = CL_FALSE;
   dev->host_unified_memory = CL_TRUE;
 
-  dev->profiling_timer_resolution = pocl_timer_resolution;
+  dev->profiling_timer_resolution = pocl_gettimer_resolution ();
 
-  dev->endian_little = !(WORDS_BIGENDIAN);
+  dev->endian_little = CL_TRUE;
   dev->compiler_available = CL_TRUE;
   dev->linker_available = CL_TRUE;
   dev->spmd = CL_FALSE;
@@ -1702,58 +1737,8 @@ pocl_init_default_device_infos (cl_device_id dev,
   dev->non_uniform_work_group_support = CL_FALSE;
   dev->max_num_sub_groups = 0;
 
-#ifdef ENABLE_LLVM
-
-  dev->llvm_target_triplet = OCL_KERNEL_TARGET;
-  dev->kernellib_fallback_name = NULL;
-
-  char kernellib[POCL_MAX_PATHNAME_LENGTH] = "kernel-";
-  char kernellib_fallback[POCL_MAX_PATHNAME_LENGTH];
-
-  strcat(kernellib, dev->llvm_target_triplet);
-
-  strcat(kernellib, "-");
-#ifdef KERNELLIB_HOST_DISTRO_VARIANTS
-  strcpy(kernellib_fallback, kernellib);
-  strcat(kernellib_fallback, "generic");
-  dev->kernellib_fallback_name = strdup(kernellib_fallback);
-
-  const char* kernellib_variant = pocl_get_distro_kernellib_variant ();
-  dev->llvm_cpu = pocl_get_distro_cpu_name (kernellib_variant);
-  strcat(kernellib, kernellib_variant);
-  if (!kernellib_variant)
-    dev->available = CL_FALSE;
-#elif defined(HOST_CPU_FORCED)
-  dev->llvm_cpu = OCL_KERNEL_TARGET_CPU;
-  strcat(kernellib, OCL_KERNEL_TARGET_CPU);
-#else
-  dev->llvm_cpu = pocl_get_llvm_cpu_name ();
-  strncpy (kernellib_fallback, kernellib, POCL_MAX_PATHNAME_LENGTH);
-  strncat (kernellib_fallback, OCL_KERNEL_TARGET_CPU,
-           POCL_MAX_PATHNAME_LENGTH - strlen (kernellib));
-  strncat (kernellib, dev->llvm_cpu,
-           POCL_MAX_PATHNAME_LENGTH - strlen (kernellib)
-             - strlen (OCL_KERNEL_TARGET_CPU));
-  dev->kernellib_fallback_name = strdup(kernellib_fallback);
-#endif
-  dev->kernellib_name = strdup(kernellib);
-  dev->kernellib_subdir = "host";
-  dev->llvm_abi = pocl_get_llvm_cpu_abi ();
-
-#else /* No compiler, no CPU info */
-  dev->kernellib_name = NULL;
-  dev->kernellib_fallback_name = NULL;
-  dev->kernellib_subdir = "host";
-  dev->llvm_cpu = NULL;
-  dev->llvm_abi = NULL;
-  dev->llvm_target_triplet = "";
-#endif
-
-#ifdef ENABLE_SPIRV
-  dev->supported_spir_v_versions = "SPIR-V_1.2 SPIR-V_1.1 SPIR-V_1.0";
-#else
   dev->supported_spir_v_versions = "";
-#endif
+  dev->supported_spirv_extensions = "";
 
   /* OpenCL 3.0 properties */
   /* Minimum mandated capability */
@@ -1772,6 +1757,15 @@ pocl_init_default_device_infos (cl_device_id dev,
                   "org.khronos.openvx.tensor_convert_depth.wrap.u8.f32;");
       dev->num_builtin_kernels = 4;
     }
+  else
+    {
+      dev->num_builtin_kernels = 0;
+      dev->builtin_kernel_list = "";
+      dev->builtin_kernels_with_version = NULL;
+    }
+
+  SETUP_DEVICE_CL_VERSION (dev, HOST_DEVICE_CL_VERSION_MAJOR,
+                           HOST_DEVICE_CL_VERSION_MINOR)
 }
 
 /*
@@ -1902,10 +1896,11 @@ static const cl_name_version OPENCL_EXTENSIONS[]
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_pci_bus_info" },
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_device_uuid" },
 
-      { CL_MAKE_VERSION (0, 9, 4), "cl_khr_command_buffer" },
+      { CL_MAKE_VERSION (0, 9, 6), "cl_khr_command_buffer" },
       { CL_MAKE_VERSION (0, 9, 1), "cl_khr_command_buffer_multi_device" },
+      { CL_MAKE_VERSION (0, 9, 3), "cl_khr_command_buffer_mutable_dispatch" },
       { CL_MAKE_VERSION (1, 0, 0), "cl_ext_float_atomics" },
-      { CL_MAKE_VERSION (0, 1, 0), "cl_ext_buffer_device_address" },
+      { CL_MAKE_VERSION (1, 0, 2), "cl_ext_buffer_device_address" },
       { CL_MAKE_VERSION (0, 9, 0), "cl_pocl_svm_rect" },
       { CL_MAKE_VERSION (0, 9, 0), "cl_pocl_command_buffer_svm" },
       { CL_MAKE_VERSION (0, 9, 0), "cl_pocl_command_buffer_host_buffer" },
@@ -1933,7 +1928,8 @@ static const cl_name_version OPENCL_SPIRV_VERSIONS[]
         { CL_MAKE_VERSION (1, 2, 0), "SPIR-V" },
         { CL_MAKE_VERSION (1, 3, 0), "SPIR-V" },
         { CL_MAKE_VERSION (1, 4, 0), "SPIR-V" },
-        { CL_MAKE_VERSION (1, 5, 0), "SPIR-V" } };
+        { CL_MAKE_VERSION (1, 5, 0), "SPIR-V" },
+        { CL_MAKE_VERSION (1, 6, 0), "SPIR-V" } };
 
 const size_t OPENCL_SPIRV_VERSIONS_NUM
     = sizeof (OPENCL_SPIRV_VERSIONS) / sizeof (OPENCL_SPIRV_VERSIONS[0]);
@@ -2084,6 +2080,9 @@ pocl_setup_builtin_kernels_with_version (cl_device_id dev)
         }
       strncpy (dev->builtin_kernels_with_version[i].name, token,
                CL_NAME_VERSION_MAX_NAME_SIZE);
+      dev->builtin_kernels_with_version[i]
+        .name[CL_NAME_VERSION_MAX_NAME_SIZE - 1]
+        = 0;
 
       /* proper versioning could use pocl_BIDescriptors.
        * For now, hardcode the version to 1.2 */
@@ -2094,8 +2093,8 @@ pocl_setup_builtin_kernels_with_version (cl_device_id dev)
 
   if (i != dev->num_builtin_kernels)
     {
-      POCL_ABORT ("Builtin kernels with version list construction failed. "
-                  "There are %u built-in kernels, but only %u were found\n",
-                  dev->num_builtin_kernels, i);
+      POCL_MSG_ERR ("Builtin kernels with version list construction failed. "
+                    "There are %u built-in kernels, but only %u were found\n",
+                    dev->num_builtin_kernels, i);
     }
 }

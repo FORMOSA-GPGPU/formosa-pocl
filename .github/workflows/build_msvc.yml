@@ -1,0 +1,132 @@
+---
+name: Windows / MS Visual Studio / CPU tests
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - 'main'
+      - 'release*'
+      - 'ms-visual-studio'
+  workflow_dispatch:
+  pull_request:
+    paths-ignore:
+      - 'doc/**'
+      - 'CHANGES'
+      - 'COPYING'
+      - 'CREDITS'
+      - 'LICENSE'
+      - 'README.*'
+      - 'tools/docker/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref || github.run_id }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: cmd /C call {0}
+
+jobs:
+  msvc_test_matrix:
+    name: LLVM ${{ matrix.llvm_version }} - ${{ matrix.config }} - shared libs:${{ matrix.shared_libs }} - ICD ${{ matrix.enable_icd }}
+    runs-on: [windows-2022]
+    strategy:
+      fail-fast: false
+      matrix:
+        llvm_version: [18, 19]
+        shared_libs: [ON, OFF]
+        config: [cpu]
+        enable_icd: [ON, OFF]
+        exclude:
+          - enable_icd: ON
+            shared_libs: OFF
+
+    steps:
+      - name: Checkout PoCL
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      # Source MSVC tools. This is a known way to have the PoCL configuration
+      # step to pick up MSVC compiler (cl.exe) instead of MinGW's gcc.
+      - name: Setup MSVC Developer Command Prompt
+        uses: TheMrMilchmann/setup-msvc-dev@fb19abb8a41b3cf0340f5d1be17d420309232be6
+        with:
+          arch: x64
+
+      - uses: mamba-org/setup-micromamba@0dea6379afdaffa5d528b3d1dabc45da37f443fc
+        with:
+          environment-name: pocl-deps
+          init-shell: >-
+            cmd.exe
+            powershell
+          create-args: >-
+            llvmdev=${{ matrix.llvm_version }}
+            clangdev=${{ matrix.llvm_version }}
+            khronos-opencl-icd-loader
+            libhwloc
+            ninja
+            pkg-config
+            zlib
+
+      - name: Load Env vars
+        id: load-env
+        run: |
+          cat ${{ github.workspace }}/.github/variables.txt >> $GITHUB_ENV
+
+      - name: Check llvm
+        run: |
+          where llvm-config.exe
+          where clang-cl.exe
+
+      # Keep this aligned with the Windows/MSVC build instructions
+      # (docs/sphinx/source/windows.rst). This configuration step is
+      # intended to pick up MSVC as the compiler, but if the
+      # environment is not set properly, it might pick up MinGW-gcc instead.
+      - name: Configure PoCL
+        run: |
+          set "CC=cl.exe"
+          set "CXX=cl.exe"
+          set "DEPS_DIR=%MAMBA_ROOT_PREFIX%\envs\pocl-deps\Library"
+          :: Fix an issue with llvm-config on windows
+          copy %DEPS_DIR%\lib\zstd.lib %DEPS_DIR%\lib\zstd.dll.lib
+          cmake -S . -B build-pocl ^
+              -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}\install-pocl ^
+              -DCMAKE_PREFIX_PATH=%DEPS_DIR% ^
+              -DENABLE_ICD=${{ matrix.enable_icd }} ^
+              -DENABLE_LLVM=1 ^
+              -DENABLE_LOADABLE_DRIVERS=${{ matrix.shared_libs }} ^
+              -DSTATIC_LLVM=ON ^
+              -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL ^
+              -DBUILD_SHARED_LIBS=${{ matrix.shared_libs }} ^
+              -DCMAKE_BUILD_TYPE=Release ^
+              -G "Ninja"
+
+      - name: Build PoCL
+        run: cmake --build build-pocl --target install
+
+      - name: Run Tests
+        env:
+          POCL_CACHE_DIR: "${{ runner.temp }}/GH_POCL_CACHE"
+        timeout-minutes: 120
+        shell: pwsh
+        run: |
+          if ("${{ matrix.enable_icd }}" -eq "ON") {
+            # We download opencl.dll from KhronosGroup
+            # Delete the one in C:\Windows\System32 which takes precedence
+            rm C:\Windows\System32\opencl.dll
+          }
+
+          # For loadable drivers
+          $env:Path += ";${{ github.workspace }}\install-pocl\bin"
+
+          if (Test-Path -path ${{ env.POCL_CACHE_DIR }}) {
+            rm -r ${{ env.POCL_CACHE_DIR }}
+          }
+          mkdir ${{ env.POCL_CACHE_DIR }}
+          cd ${{ github.workspace }}\build-pocl
+          & ${{ github.workspace }}\tools\scripts\run_cpu_tests.ps1 --output-on-failure -j$Env:NUMBER_OF_PROCESSORS
+
+      - name: Test packaging
+        run: cpack --config ${{ github.workspace }}\build-pocl\CPackConfig.cmake -G NSIS

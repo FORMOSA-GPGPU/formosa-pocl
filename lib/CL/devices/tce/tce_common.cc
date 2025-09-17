@@ -2,6 +2,7 @@
    drivers.
 
    Copyright (c) 2012-2019 Pekka Jääskeläinen / Tampere University of Technology
+                 2024 Pekka Jääskeläinen / Intel Finland Oy
 
    Permission is hereby granted, free of charge, to any person obtaining a copy
    of this software and associated documentation files (the "Software"), to deal
@@ -72,8 +73,8 @@ typedef struct tce_queue_data_s {
 
 TCEDevice::TCEDevice(cl_device_id dev, const char *adfName)
     : local_as(NULL), global_as(NULL), private_as(NULL), machine_file(adfName),
-      parent(dev), currentProgram(NULL), curKernelAddr(0), curKernel(NULL),
-      shutdownRequested(false), globalCycleCount(0), available(CL_TRUE),
+      parent(dev), currentProgram(NULL), curKernelAddr(0), globalCycleCount(0),
+      available(CL_TRUE), curKernel(NULL), shutdownRequested(false),
       work_queue(NULL) {
 
   POCL_INIT_LOCK(wq_lock);
@@ -126,7 +127,7 @@ TCEDevice::writeWordToDevice(uint32_t dest_addr, uint32_t word) {
 
 uint32_t
 TCEDevice::readWordFromDevice(uint32_t addr) {
-  uint32_t result;
+  uint32_t result = 0;
   copyDeviceToHost(addr, &result, sizeof(result));
   return pocl_byteswap_uint32_t(result, needsByteSwap);
 }
@@ -335,7 +336,6 @@ ERROR:
 void
 pocl_tce_free (cl_device_id device, cl_mem mem) {
 
-  TCEDevice *d = (TCEDevice*)device->data;
   pocl_mem_identifier *p = &mem->device_ptrs[device->global_mem_id];
   assert (p->mem_ptr != NULL);
 
@@ -440,11 +440,6 @@ static void pocl_tce_write_kernel_descriptor(_cl_command_node *Command,
           << "void _pocl_kernel_" << meta->name
           << "_workgroup(uint8_t* args, uint8_t* ctx, "
           << "uint32_t, uint32_t, uint32_t);" << std::endl
-
-          << "void _pocl_kernel_" << meta->name
-          << "_workgroup_fast(uint8_t* args, uint8_t* ctx, "
-          << "uint32_t, uint32_t, uint32_t);" << std::endl
-
           << "void " << meta->name << "_workgroup_argbuffer("
           << "uint8_t "
           << "__attribute__((address_space(" << device->global_as_id << ")))"
@@ -469,10 +464,10 @@ static void pocl_tce_write_kernel_descriptor(_cl_command_node *Command,
                               content.str().c_str(), content.str().size());
 }
 
-void pocl_tce_compile_kernel(_cl_command_node *Command, cl_kernel Kernel,
-                             cl_device_id Device, int Specialize) {
+int pocl_tce_compile_kernel(_cl_command_node *Command, cl_kernel Kernel,
+                            cl_device_id Device, int Specialize) {
   if (Command->type != CL_COMMAND_NDRANGE_KERNEL)
-    return;
+    return CL_INVALID_OPERATION;
   _cl_command_run *RunCommand = &Command->command.run;
 
   void *Data = Command->device->data;
@@ -495,7 +490,7 @@ void pocl_tce_compile_kernel(_cl_command_node *Command, cl_kernel Kernel,
     POCL_MSG_PRINT_GENERAL("TCE: pocl_llvm_generate_workgroup_function()"
                            " failed for kernel %s\n",
                            Kernel->name);
-    POCL_ABORT ("TCE compilation error\n");
+    return CL_COMPILE_PROGRAM_FAILURE;
   }
 
   // 12 == strlen (POCL_PARALLEL_BC_FILENAME)
@@ -509,7 +504,6 @@ void pocl_tce_compile_kernel(_cl_command_node *Command, cl_kernel Kernel,
                                   Command->program_device_i,
                                   Kernel, "", Command, Specialize);
   RunCommand->device_data = strdup(CacheDir);
-
   POCL_MSG_PRINT_TCE("CACHE DIR: %s\n", CacheDir);
 
   if (Dev->isNewKernel(RunCommand)) {
@@ -532,29 +526,29 @@ void pocl_tce_compile_kernel(_cl_command_node *Command, cl_kernel Kernel,
       POCL_MEASURE_START(TCE_COMPILATION);
       Error = system(BuildCmd.c_str());
       POCL_MEASURE_FINISH(TCE_COMPILATION);
-      if (Error != 0)
-        POCL_ABORT("Error while running tcecc.\n");
+      if (Error != 0) {
+        POCL_UNLOCK(Dev->tce_compile_lock);
+        POCL_MSG_ERR("Error while running tcecc.\n");
+        return CL_COMPILE_PROGRAM_FAILURE;
+      }
     }
   }
 
   pocl_restore_builtin_kernel_name(Kernel, Save);
 
   POCL_UNLOCK(Dev->tce_compile_lock);
+  return CL_SUCCESS;
 }
 
-
-
-#define CHECK_AND_ALIGN_ARGBUFFER(DSIZE)                                      \
-  do                                                                          \
-    {                                                                         \
-      if (write_pos + (DSIZE) > last_pos)                                     \
-        POCL_ABORT (                                                          \
-            "pocl-tce: kernel arguments do not fit into argbuffer!\n");       \
-      unsigned unaligned = (intptr_t)write_pos % DSIZE;                       \
-      if (unaligned > 0)                                                      \
-        write_pos += (DSIZE - unaligned);                                     \
-    }                                                                         \
-  while (0)
+#define CHECK_AND_ALIGN_ARGBUFFER(DSIZE)                                       \
+  do {                                                                         \
+    if (write_pos + (DSIZE) > last_pos)                                        \
+      POCL_ABORT("tce: too many kernel arguments!\n");                         \
+    int AlignTarget = MAX_EXTENDED_ALIGNMENT;                                  \
+    unsigned T = (intptr_t)write_pos % AlignTarget;                            \
+    if (T > 0)                                                                 \
+      write_pos += (AlignTarget - T);                                          \
+  } while (0)
 
 void
 pocl_tce_run(void *data, _cl_command_node* cmd)
@@ -612,10 +606,11 @@ pocl_tce_run(void *data, _cl_command_node* cmd)
   __kernel_exec_cmd dev_cmd;
   dev_cmd.kernel_meta = pocl_byteswap_uint32_t(kernelAddr, d->needsByteSwap);
 
-  /* assume 8KB is enough for kernargs */
-  char *temp = (char *)alloca(8200);
+  const size_t KernArgsSize = 8 * 1024;
+  char *temp =
+      (char *)pocl_aligned_malloc(MAX_EXTENDED_ALIGNMENT, KernArgsSize);
   char *write_pos = temp;
-  char *last_pos = temp + 8192;
+  char *last_pos = temp + KernArgsSize;
 
   struct pocl_argument *al;
 
@@ -760,10 +755,10 @@ pocl_tce_run(void *data, _cl_command_node* cmd)
         d->printf_position_chunk->start_address, d->needsByteSwap);
     d->writeWordToDevice(d->printf_position_chunk->start_address, 0);
     POCL_MSG_PRINT_TCE(
-        "Device side printf buffer=%d, position: %d and capacity %d \n",
-        d->printf_buffer->start_address,
-        d->printf_position_chunk->start_address,
-        cmd->device->printf_buffer_size);
+        "Device side printf buffer=%x, position: %u and capacity %u\n",
+        (unsigned)d->printf_buffer->start_address,
+        (int)d->printf_position_chunk->start_address,
+        (unsigned)cmd->device->printf_buffer_size);
 
     POCL_MSG_PRINT_TCE("COPYING %u bytes to CONTEXT: %u \n",
                        (uint32_t)sizeof(struct pocl_context32),
@@ -856,6 +851,7 @@ pocl_tce_run(void *data, _cl_command_node* cmd)
        i != tempChunks.end(); ++i) 
     pocl_free_chunk(*i);
 
+  free(temp);
   pocl_free_chunk(kernargs);
   pocl_free_chunk(context);
 
@@ -1116,10 +1112,10 @@ static void tce_push_command(_cl_command_node *node) {
   cl_device_id device = node->device;
   TCEDevice *d = (TCEDevice*)device->data;
 
-  POCL_FAST_LOCK(d->wq_lock);
+  POCL_LOCK(d->wq_lock);
   DL_APPEND(d->work_queue, node);
   POCL_SIGNAL_COND(d->wakeup_cond);
-  POCL_FAST_UNLOCK(d->wq_lock);
+  POCL_UNLOCK(d->wq_lock);
 }
 
 void pocl_tce_submit(_cl_command_node *node, cl_command_queue cq) {
@@ -1133,7 +1129,7 @@ void pocl_tce_submit(_cl_command_node *node, cl_command_queue cq) {
   POCL_INIT_COND(e_d->event_cond);
   e->data = (void *)e_d;
 
-  node->ready = 1;
+  node->state = POCL_COMMAND_READY;
   if (pocl_command_is_ready(node->sync.event.event)) {
     pocl_update_event_submitted(node->sync.event.event);
     tce_push_command(node);
@@ -1175,12 +1171,25 @@ pocl_tce_notify (cl_device_id device, cl_event event, cl_event finished)
   _cl_command_node *node = event->command;
 
   if (finished->status < CL_COMPLETE) {
-    pocl_update_event_failed(event);
+    /* Unlock the finished event in order to prevent a lock order violation
+     * with the command queue that will be locked during
+     * pocl_update_event_failed.
+     */
+    pocl_unlock_events_inorder(event, finished);
+    pocl_update_event_failed(CL_FAILED, NULL, 0, event, NULL);
+    /* Lock events in this order to avoid a lock order violation between
+     * the finished/notifier and event/wait events.
+     */
+    pocl_lock_events_inorder(finished, event);
     return;
   }
 
-  if (!node->ready)
+  if (node->state != POCL_COMMAND_READY) {
+    POCL_MSG_PRINT_EVENTS(
+        "tce: command related to the notified event %lu not ready\n",
+        event->id);
     return;
+  }
 
   if (pocl_command_is_ready(node->sync.event.event)) {
     assert(event->status == CL_QUEUED);
@@ -1226,21 +1235,21 @@ void pocl_tce_notify_event_finished(cl_event event) {
 void *pocl_tce_driver_thread(void *cldev) {
   TCEDevice *d = (TCEDevice *)cldev;
 
-  POCL_FAST_LOCK(d->wq_lock);
+  POCL_LOCK(d->wq_lock);
 
   while (1) {
     _cl_command_node *cmd;
 
   RETRY:
     if (d->shutdownRequested) {
-      POCL_FAST_UNLOCK(d->wq_lock);
+      POCL_UNLOCK(d->wq_lock);
       return NULL;
     }
 
     cmd = d->work_queue;
     if (cmd) {
       DL_DELETE(d->work_queue, cmd);
-      POCL_FAST_UNLOCK(d->wq_lock);
+      POCL_UNLOCK(d->wq_lock);
 
       assert(pocl_command_is_ready(cmd->sync.event.event));
       assert(cmd->sync.event.event->status == CL_SUBMITTED);
@@ -1250,7 +1259,7 @@ void *pocl_tce_driver_thread(void *cldev) {
 
       pocl_exec_command(cmd);
 
-      POCL_FAST_LOCK(d->wq_lock);
+      POCL_LOCK(d->wq_lock);
     }
 
     if ((d->work_queue == NULL) && (d->shutdownRequested == false)) {

@@ -31,6 +31,7 @@ IGNORE_COMPILER_WARNING("-Wmaybe-uninitialized")
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
 
 #include "Barrier.h"
+#include "DebugHelpers.h"
 #include "ImplicitConditionalBarriers.h"
 #include "LLVMUtils.h"
 #include "VariableUniformityAnalysis.h"
@@ -42,8 +43,6 @@ POP_COMPILER_DIAGS
 #include <iostream>
 
 #include "pocl.h"
-
-// #define DEBUG_COND_BARRIERS
 
 #define PASS_NAME "implicit-cond-barriers"
 #define PASS_CLASS pocl::ImplicitConditionalBarriers
@@ -86,6 +85,11 @@ ImplicitConditionalBarriers::run(llvm::Function &F,
   if (WIH == WorkitemHandlerType::CBS)
     return PreservedAnalyses::all();
 
+#ifdef POCL_KERNEL_COMPILER_DUMP_CFGS
+  dumpCFG(F, F.getName().str() + "_before_implicit_cond_barriers.dot", nullptr,
+          nullptr);
+#endif
+
   llvm::PostDominatorTree &PDT = FAM.getResult<PostDominatorTreeAnalysis>(F);
   llvm::DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(F);
   llvm::LoopInfo &LI = FAM.getResult<LoopAnalysis>(F);
@@ -99,14 +103,6 @@ ImplicitConditionalBarriers::run(llvm::Function &F,
   BarrierBlockIndex ConditionalBarriers;
 
   bool Changed = false;
-
-  // Required workaround hack. See the documentation of
-  // removeUnreachableSwitchCases().
-  DT.reset();
-  PDT.reset();
-  removeUnreachableSwitchCases(F);
-  DT.recalculate(F);
-  PDT.recalculate(F);
 
   for (Function::iterator FI = F.begin(), FE = F.end(); FI != FE; ++FI) {
     BasicBlock *BB = &*FI;
@@ -167,7 +163,7 @@ ImplicitConditionalBarriers::run(llvm::Function &F,
     // TODO: investigate. It might related to the alloca-converted
     // PHIs. It has a loop that is autoconverted to a b-loop and the
     // conditional barrier is inserted after the loop short cut check.
-    Barrier::create(Pos->getFirstNonPHI());
+    Barrier::createAtStart(Pos);
 
     Changed = true;
 
@@ -176,7 +172,7 @@ ImplicitConditionalBarriers::run(llvm::Function &F,
     Pos->dump();
 #endif
     if (BasicBlock *Source = Pos->getSinglePredecessor()) {
-      Barrier::create(Source->getTerminator());
+      Barrier::createAtEnd(Source);
 #ifdef DEBUG_COND_BARRIERS
       std::cerr << "### added an implicit barrier to a source of the BB as well"
                 << std::endl;
@@ -188,6 +184,11 @@ ImplicitConditionalBarriers::run(llvm::Function &F,
 #ifdef DEBUG_COND_BARRIERS
   std::cerr << "### After implicit conditional barrier handling:" << std::endl;
   F.dump();
+#endif
+
+#ifdef POCL_KERNEL_COMPILER_DUMP_CFGS
+  dumpCFG(F, F.getName().str() + "_after_implicit_cond_barriers.dot", nullptr,
+          nullptr);
 #endif
 
   return Changed ? PAChanged : PreservedAnalyses::all();

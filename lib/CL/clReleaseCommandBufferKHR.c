@@ -25,12 +25,6 @@
 #include "pocl_mem_management.h"
 #include "pocl_util.h"
 
-#if defined(__FreeBSD__)
-#include <stdlib.h>
-#else
-#include <alloca.h>
-#endif
-
 CL_API_ENTRY cl_int CL_API_CALL
 POname (clReleaseCommandBufferKHR) (cl_command_buffer_khr command_buffer)
     CL_API_SUFFIX__VERSION_1_2
@@ -80,6 +74,14 @@ POname (clReleaseCommandBufferKHR) (cl_command_buffer_khr command_buffer)
           POname (clReleaseCommandQueue) (q);
         }
 
+      pocl_buffer_migration_info *mi, *tmp;
+      LL_FOREACH_SAFE (command_buffer->migr_infos, mi, tmp)
+        {
+          /* Don't free the mem objects themselves here -- only the recorded
+           * commands hold counted references to them. */
+          POCL_MEM_FREE (mi);
+        }
+
       _cl_command_node *cmd = command_buffer->cmds;
       while (cmd != NULL)
         {
@@ -96,8 +98,8 @@ POname (clReleaseCommandBufferKHR) (cl_command_buffer_khr command_buffer)
                   if (ai->type == POCL_ARG_TYPE_SAMPLER)
                     POname (clReleaseSampler) (
                         cmd->command.run.arguments[i].value);
-                  if (cmd->command.run.arguments[i].value != NULL)
-                    POCL_MEM_FREE (cmd->command.run.arguments[i].value);
+                  else if (cmd->command.run.arguments[i].value != NULL)
+                    pocl_aligned_free (cmd->command.run.arguments[i].value);
                 }
               POname (clReleaseKernel) (cmd->command.run.kernel);
               POCL_MEM_FREE (cmd->command.run.arguments);
@@ -109,10 +111,13 @@ POname (clReleaseCommandBufferKHR) (cl_command_buffer_khr command_buffer)
             case CL_COMMAND_COPY_IMAGE_TO_BUFFER:
               break;
             case CL_COMMAND_FILL_BUFFER:
-              POCL_MEM_FREE (cmd->command.memfill.pattern);
+              pocl_aligned_free (cmd->command.memfill.pattern);
               break;
             case CL_COMMAND_SVM_MEMFILL:
-              POCL_MEM_FREE (cmd->command.svm_fill.pattern);
+              pocl_aligned_free (cmd->command.svm_fill.pattern);
+              break;
+            case CL_COMMAND_SVM_MEMFILL_RECT_POCL:
+              pocl_aligned_free (cmd->command.svm_fill_rect.pattern);
               break;
             case CL_COMMAND_FILL_IMAGE:
               break;
@@ -131,6 +136,7 @@ POname (clReleaseCommandBufferKHR) (cl_command_buffer_khr command_buffer)
       POCL_DESTROY_OBJECT (command_buffer);
       POCL_MEM_FREE (command_buffer->queues);
       POCL_MEM_FREE (command_buffer->properties);
+      POCL_MEM_FREE (command_buffer->data);
       POCL_MEM_FREE (command_buffer);
     }
   else

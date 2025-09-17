@@ -31,18 +31,18 @@ __kernel void __attribute__ ((reqd_work_group_size(128, 1, 1))) grudge_assign_0(
 
 int main(int argc, char *argv[]) {
   int n = 8;
-  unsigned successful = 0;
+  int successful = 0;
 
   cl::Platform platform = cl::Platform::getDefault();
   cl::Device device = cl::Device::getDefault();
   try {
     cl::CommandQueue queue = cl::CommandQueue::getDefault();
-    cl::Program program(SOURCE, true);
 
     if (poclu_supports_extension(device.get(), "cl_khr_fp64") == 0) {
       std::cout << "this test requires cl_khr_fp64, test SKIPPED\n";
       return 77;
     }
+    cl::Program program(SOURCE, true);
 
     // Create buffers on the device.
     cl::Buffer buffer_A(CL_MEM_READ_WRITE, sizeof(double) * n);

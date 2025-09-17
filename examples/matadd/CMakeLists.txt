@@ -25,12 +25,9 @@
 
 add_compile_options(${OPENCL_CFLAGS})
 
-if (MSVC)
-  set_source_files_properties( matadd.c matadd_exec.c PROPERTIES LANGUAGE CXX )
-endif(MSVC)
 add_executable("matadd" matadd.c matadd_exec.c matadd.cl)
-
 target_link_libraries("matadd" ${POCLU_LINK_OPTIONS})
+add_symlink_to_built_opencl_dynlib(matadd)
 
 add_test(NAME "examples/matadd" COMMAND "matadd")
 
@@ -45,5 +42,5 @@ set_tests_properties( "examples/matadd"
     COST 3.0
     ${PROPS}
     PROCESSORS 1
-    LABELS "internal;vulkan;level0"
+    LABELS "cpu;vulkan;level0"
     DEPENDS "pocl_version_check")

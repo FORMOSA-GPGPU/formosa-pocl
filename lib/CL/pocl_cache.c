@@ -25,7 +25,6 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "config.h"
 #include "common.h"
@@ -93,13 +92,16 @@ void pocl_cache_program_path(char*        path,
   program_device_dir (path, program, device_i, "");
 }
 
-void pocl_cache_program_bc_path(char*        program_bc_path,
-                                cl_program   program,
-                                unsigned     device_i) {
+POCL_EXPORT
+void
+pocl_cache_program_bc_path(char* program_bc_path,
+                           cl_program   program,
+                           unsigned     device_i) {
   program_device_dir (program_bc_path, program,
                       device_i, POCL_PROGRAM_BC_FILENAME);
 }
 
+POCL_EXPORT
 void
 pocl_cache_program_spv_path (char *program_bc_path, cl_program program,
                              unsigned device_i)
@@ -120,8 +122,9 @@ pocl_cache_program_spv_path (char *program_bc_path, cl_program program,
  * string will be written (must have at least max_length + 1 of storage).
  */
 static void
-pocl_hash_clipped_name (const char *str, size_t max_length, char *new_str)
+pocl_hash_clipped_name (const char *str, char *new_str)
 {
+  size_t max_length = POCL_HASH_FILENAME_LENGTH;
   if (strlen (str) > max_length)
     {
       SHA1_CTX hash_ctx;
@@ -178,8 +181,7 @@ pocl_cache_kernel_cachedir_path (char *kernel_cachedir_path,
   size_t max_grid_width = pocl_cmd_max_grid_dim_width (run_cmd);
 
   char kernel_dir_name[POCL_MAX_DIRNAME_LENGTH + 1];
-  pocl_hash_clipped_name (kernel->name, POCL_MAX_DIRNAME_LENGTH,
-                          &kernel_dir_name[0]);
+  pocl_hash_clipped_name (kernel->name, &kernel_dir_name[0]);
 
   bytes_written = snprintf (
       tempstring, POCL_MAX_PATHNAME_LENGTH, "/%s/%zu-%zu-%zu%s%s%s",
@@ -210,7 +212,7 @@ pocl_cache_kernel_cachedir (char *kernel_cachedir_path, cl_program program,
   char tempstring[POCL_MAX_PATHNAME_LENGTH];
   char file_name[POCL_MAX_FILENAME_LENGTH + 1];
 
-  pocl_hash_clipped_name (kernel_name, POCL_MAX_FILENAME_LENGTH, &file_name[0]);
+  pocl_hash_clipped_name (kernel_name, &file_name[0]);
 
   bytes_written
       = snprintf (tempstring, POCL_MAX_PATHNAME_LENGTH, "/%s", file_name);
@@ -256,10 +258,7 @@ pocl_cache_final_binary_path (char *final_binary_path, cl_program program,
   else
     {
       char file_name[POCL_MAX_FILENAME_LENGTH + 1];
-      /* -5: Leave space for .so and for additional .o if temp file debugging
-         is enabled. */
-      pocl_hash_clipped_name (kernel->name, POCL_MAX_FILENAME_LENGTH - 5,
-                              &file_name[0]);
+      pocl_hash_clipped_name (kernel->name, &file_name[0]);
       bytes_written = snprintf (final_binary_name, POCL_MAX_PATHNAME_LENGTH,
                                 "/%s.so", file_name);
     }
@@ -280,6 +279,7 @@ pocl_cache_create_tempdir (char *path)
   return pocl_mk_tempdir (path, tempdir_pattern);
 }
 
+POCL_EXPORT
 int
 pocl_cache_tempname (char *path, const char *suffix, int *fd)
 {
@@ -292,9 +292,8 @@ pocl_cache_tempname (char *path, const char *suffix, int *fd)
 int
 pocl_cache_write_program_source (char *program_cl_path, cl_program program)
 {
-  return pocl_write_tempfile (program_cl_path, tempfile_pattern,
-                              ".cl", program->source,
-                              strlen (program->source), NULL);
+  return pocl_write_tempfile (program_cl_path, tempfile_pattern, ".cl",
+                              program->source, strlen (program->source));
 }
 
 int
@@ -302,8 +301,9 @@ pocl_cache_write_kernel_objfile (char *objfile_path,
                                  const char *objfile_content,
                                  uint64_t objfile_size)
 {
-  return pocl_write_tempfile (objfile_path, tempfile_pattern, ".so.o",
-                              objfile_content, objfile_size, NULL);
+  return pocl_write_tempfile (objfile_path, tempfile_pattern,
+                              OBJ_EXT,
+                              objfile_content, objfile_size);
 }
 
 int
@@ -312,7 +312,16 @@ pocl_cache_write_spirv (char *spirv_path,
                         uint64_t file_size)
 {
   return pocl_write_tempfile (spirv_path, tempfile_pattern, ".spirv",
-                              spirv_content, file_size, NULL);
+                              spirv_content, file_size);
+}
+
+int
+pocl_cache_write_kernel_asmfile (char *asmfile_path,
+                                 const char *asmfile_content,
+                                 uint64_t asmfile_size)
+{
+  return pocl_write_tempfile (asmfile_path, tempfile_pattern, ASM_EXT,
+                              asmfile_content, asmfile_size);
 }
 
 int
@@ -321,7 +330,19 @@ pocl_cache_write_generic_objfile (char *objfile_path,
                                   uint64_t objfile_size)
 {
   return pocl_write_tempfile (objfile_path, tempfile_pattern, ".binary",
-                              objfile_content, objfile_size, NULL);
+                              objfile_content, objfile_size);
+}
+
+int
+pocl_cache_write_header (char *header_path,
+                         const char *header_name,
+                         const char *header_content,
+                         uint64_t header_size)
+{
+  int bytes_written = snprintf (header_path, POCL_MAX_PATHNAME_LENGTH, "%s/%s",
+                                cache_topdir, header_name);
+  assert (bytes_written > 0 && bytes_written < POCL_MAX_PATHNAME_LENGTH);
+  return pocl_write_file (header_path, header_content, header_size, 0);
 }
 
 /******************************************************************************/
@@ -537,15 +558,19 @@ pocl_cache_init_topdir ()
       needed = snprintf (cache_topdir, POCL_MAX_PATHNAME_LENGTH, "%s", tmp_path);
     } else {
 #ifdef __ANDROID__
-        POCL_ABORT ("Please set the POCL_CACHE_DIR env var to your app's cache directory (Context.getCacheDir())\n");
+      POCL_MSG_ERR ("Please set the POCL_CACHE_DIR env var to your app's "
+                    "cache directory (Context.getCacheDir())\n");
+      return CL_FAILED;
 
 #elif defined(_WIN32)
-        tmp_path = getenv("LOCALAPPDATA");
-        if (!tmp_path)
-            tmp_path = getenv("TEMP");
-        assert(tmp_path);
-        needed = snprintf (cache_topdir, POCL_MAX_PATHNAME_LENGTH, "%s\\pocl",
-                           tmp_path);
+      tmp_path = getenv ("TEMP");
+      if (!tmp_path) {
+	tmp_path = getenv("LOCALAPPDATA");
+      }
+      if (tmp_path == NULL)
+	return CL_FAILED;
+      needed = snprintf (cache_topdir, POCL_MAX_PATHNAME_LENGTH, "%s\\pocl",
+                         tmp_path);
 #else
         // "If $XDG_CACHE_HOME is either not set or empty, a default equal to
         // $HOME/.cache should be used."
@@ -575,7 +600,7 @@ pocl_cache_init_topdir ()
   if (needed >= POCL_MAX_PATHNAME_LENGTH)
     {
       POCL_MSG_ERR ("pocl: cache path longer than maximum filename length\n");
-      return 1;
+      return CL_FAILED;
     }
 
     assert(strlen(cache_topdir) > 0);
@@ -594,7 +619,7 @@ pocl_cache_init_topdir ()
             "installed from your linux distribution's packages should "
             "work.\n",
             cache_topdir);
-        return 1;
+        return CL_FAILED;
       }
 
     strncpy (tempfile_pattern, cache_topdir, POCL_MAX_PATHNAME_LENGTH);
@@ -620,7 +645,7 @@ pocl_cache_init_topdir ()
 
     cache_topdir_initialized = 1;
 
-    return 0;
+    return CL_SUCCESS;
 }
 
 /* Create the new program cachedir, invalidating the old program
@@ -630,7 +655,7 @@ pocl_cache_init_topdir ()
  * that cache-related functions (which include log retrieval) still
  * work correctly even if preprocessing fails
  */
-
+POCL_EXPORT
 int
 pocl_cache_create_program_cachedir (cl_program program, unsigned device_i,
                                     const char *hash_source,

@@ -28,13 +28,18 @@
 
 #include "pocl_export.h"
 
+#ifdef SPIRV_PARSER_LIB
+#define SPIRV_PARSER_EXPORT
+#else
+#define SPIRV_PARSER_EXPORT POCL_EXPORT
+#endif
+
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <set>
 #include <string>
 #include <vector>
-
-namespace SPIRVParser {
 
 #ifndef HAVE_SIZE_T_3
 #define HAVE_SIZE_T_3
@@ -43,6 +48,8 @@ typedef struct
   size_t size[3];
 } size_t_3;
 #endif
+
+namespace SPIRVParser {
 
 enum class OCLType : unsigned {
   POD,
@@ -61,12 +68,12 @@ enum class OCLSpace : unsigned {
 };
 
 typedef struct {
-  int CPacked : 1;
-  int Restrict : 1;
-  int Volatile : 1;
-  int Constant : 1;
-  int ReadableImg : 1;
-  int WriteableImg : 1;
+  char CPacked;
+  char Restrict;
+  char Volatile;
+  char Constant;
+  char ReadableImg;
+  char WriteableImg;
 } ArgAttrs;
 
 struct OCLArgTypeInfo {
@@ -92,13 +99,16 @@ struct OCLFuncInfo {
 typedef std::map<std::string, std::shared_ptr<OCLFuncInfo>>
     OpenCLFunctionInfoMap;
 
-POCL_EXPORT
+SPIRV_PARSER_EXPORT
 bool parseSPIRV(const int32_t *Stream, size_t NumWords,
                 OpenCLFunctionInfoMap &FuncInfoMap);
 
-POCL_EXPORT
-void applyAtomicCmpXchgWorkaround(const int32_t *InStream, size_t NumWords,
+SPIRV_PARSER_EXPORT
+bool applyAtomicCmpXchgWorkaround(const int32_t *InStream, size_t NumWords,
                                   std::vector<uint8_t> &OutStream);
+
+SPIRV_PARSER_EXPORT
+bool applyAtomicCmpXchgWorkaroundInPlace(int32_t *InStream, size_t *NumWords);
 
 } // namespace SPIRVParser
 

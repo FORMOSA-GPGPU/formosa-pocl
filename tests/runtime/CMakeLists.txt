@@ -30,6 +30,7 @@ if (UNIX AND HAVE_DLFCN_H)
     target_link_libraries("test_dlopen" ${SANITIZER_LIBS})
   endif()
   target_link_libraries("test_dlopen" ${DL_LIB})
+  add_symlink_to_built_opencl_dynlib(test_dlopen)
 endif ()
 
 include_directories(${CMAKE_SOURCE_DIR})
@@ -42,38 +43,34 @@ set(C_PROGRAMS_TO_BUILD test_clFinish test_clGetDeviceInfo test_clGetEventInfo
   test_read-copy-write-buffer test_buffer-image-copy test_clCreateSubDevices test_event_free
   test_event_double_wait test_buffer_migration test_buffer_ping_pong
   test_enqueue_kernel_from_binary test_user_event test_fill-buffer
-  test_clSetMemObjectDestructorCallback
+  test_clSetMemObjectDestructorCallback test_dbk_jpeg
   test_cl_pocl_content_size test_cl_pocl_content_size_migration
   test_deviceside_enqueue test_command_buffer test_command_buffer_images
-  test_command_buffer_multi_device
-  test_dbk_jpeg
-  )
+  test_command_buffer_multi_device test_queue_creation_with_hints
+  test_remote_discovery test_dbk_color_convert)
 
-if(OPENCL_HEADER_VERSION GREATER 299)
-    list(APPEND C_PROGRAMS_TO_BUILD test_queue_creation_with_hints)
+if(HAVE_ONNXRT)
+  list(APPEND C_PROGRAMS_TO_BUILD test_dbk_onnx_inference)
 endif()
 
 set(CXX_PROGRAMS_TO_BUILD test_device_address test_svm test_large_buf
-  test_subbuffers test_compile_n_link)
-
-if(OPENCL_HEADER_VERSION GREATER 299)
-  list(APPEND CXX_PROGRAMS_TO_BUILD test_dbk_matmul)
-endif()
+  test_subbuffers test_compile_n_link test_dbk_matmul)
 
 add_compile_options(${OPENCL_CFLAGS} -I${CMAKE_SOURCE_DIR}/include)
 
+add_library(image_test_utils STATIC image_test_utils.c image_test_utils.h)
+
 foreach(PROG ${C_PROGRAMS_TO_BUILD})
-  if(MSVC)
-    set_source_files_properties( "${PROG}.c" PROPERTIES LANGUAGE CXX )
-  endif(MSVC)
   add_executable("${PROG}" "${PROG}.c")
-  target_link_libraries("${PROG}" ${POCLU_LINK_OPTIONS})
+  target_link_libraries("${PROG}"  image_test_utils ${POCLU_LINK_OPTIONS})
+  add_symlink_to_built_opencl_dynlib("${PROG}")
 endforeach()
 
 foreach(PROG ${CXX_PROGRAMS_TO_BUILD})
   set_source_files_properties( "${PROG}.cpp" PROPERTIES LANGUAGE CXX )
   add_executable("${PROG}" "${PROG}.cpp")
   target_link_libraries("${PROG}" ${POCLU_LINK_OPTIONS})
+  add_symlink_to_built_opencl_dynlib("${PROG}")
 endforeach()
 
 #######################################################################
@@ -166,43 +163,69 @@ if(HAVE_LIBJPEG_TURBO)
     PROPERTIES
     COST 2.0
     PROCESSORS 1
+    SKIP_RETURN_CODE 77
     DEPENDS "pocl_version_check"
-    LABELS "internal;runtime")
+    LABELS "cpu;runtime")
 endif()
 
-if(OPENCL_HEADER_VERSION GREATER 299)
-  add_test(NAME "runtime/test_queue_creation_with_hints" COMMAND "test_queue_creation_with_hints")
-  set(OCL_30_TESTS "runtime/test_queue_creation_with_hints")
+add_test(NAME "runtime/test_queue_creation_with_hints" COMMAND "test_queue_creation_with_hints")
+set_property(TEST "runtime/test_queue_creation_with_hints" PROPERTY SKIP_RETURN_CODE 77)
 
+if(HAVE_LIBXSMM)
   add_test(NAME "runtime/test_dbk_matmul" COMMAND test_dbk_matmul)
-  set(OCL_30_TESTS ${OCL_30_TESTS} "runtime/test_dbk_matmul")
+  set_tests_properties("runtime/test_dbk_matmul"
+    PROPERTIES
+    COST 2.0
+    PROCESSORS 1
+    SKIP_RETURN_CODE 77
+    DEPENDS "pocl_version_check"
+    LABELS "cpu;runtime")
+endif()
+
+if(HAVE_ONNXRT)
+  add_test(NAME "runtime/test_dbk_onnx_inference" COMMAND "test_dbk_onnx_inference")
+  set_tests_properties("runtime/test_dbk_onnx_inference"
+    PROPERTIES
+    COST 2.0
+    PROCESSORS 1
+    SKIP_RETURN_CODE 77
+    DEPENDS "pocl_version_check"
+    LABELS "cpu;runtime")
+endif()
+
+unset(ENABLED_CPU_TESTS)
+if(NOT ENABLE_ANYSAN)
+  list(APPEND ENABLED_CPU_TESTS "runtime/clCreateSubDevices")
+endif()
+
+if(HAVE_WORKING_IMAGES_WITH_SPIR)
+  list(APPEND ENABLED_CPU_TESTS "runtime/clGetKernelArgInfo")
 endif()
 
 set_tests_properties( "runtime/clGetDeviceInfo" "runtime/clEnqueueNativeKernel"
   "runtime/clGetEventInfo" "runtime/clCreateProgramWithBinary"
   "runtime/clBuildProgram" "runtime/clFinish" "runtime/clSetEventCallback"
   "runtime/clGetSupportedImageFormats" "runtime/clCreateKernelsInProgram"
-  "runtime/clCreateKernel" "runtime/clGetKernelArgInfo"
   "runtime/test_kernel_cache_includes" "runtime/test_event_cycle"
   "runtime/test_read-copy-write-buffer" "runtime/test_buffer-image-copy"
-  "runtime/test_fill-buffer"
-  "runtime/test_event_free" "runtime/test_event_double_wait" "runtime/clCreateSubDevices"
+  "runtime/clCreateKernel" "runtime/test_fill-buffer"
+  "runtime/test_event_free" "runtime/test_event_double_wait"
   "runtime/test_enqueue_kernel_from_binary" "runtime/test_user_event"
-  "runtime/test_buffer_migration"
-  "runtime/test_buffer_ping_pong"
+  "runtime/test_buffer_migration" "runtime/test_buffer_ping_pong"
   "runtime/clSetMemObjectDestructorCallback" "runtime/test_link_error"
   "runtime/test_cl_pocl_content_size" "runtime/test_deviceside_enqueue"
   "runtime/test_command_buffer" "runtime/test_command_buffer_images"
   "runtime/test_command_buffer_multi_device"
   "runtime/test_device_address" "runtime/test_svm"
   "runtime/test_device_address" "runtime/test_svm"
-  "runtime/test_compile_n_link"
-  "runtime/test_subbuffers"
+  "runtime/test_compile_n_link" "runtime/test_subbuffers"
+  "runtime/test_queue_creation_with_hints"
+  ${ENABLED_CPU_TESTS}
   PROPERTIES
     COST 2.0
     PROCESSORS 1
     DEPENDS "pocl_version_check"
-    LABELS "internal;runtime")
+    LABELS "cpu;runtime")
 
 set_tests_properties(
   "runtime/clCreateSubDevices"
@@ -218,7 +241,6 @@ set_tests_properties(
   "runtime/test_device_address"
   "runtime/test_svm"
   "runtime/test_large_buf"
-  "runtime/test_dbk_matmul"
   PROPERTIES SKIP_RETURN_CODE 77)
 
 if(ENABLE_REMOTE_CLIENT AND ENABLE_REMOTE_SERVER AND ENABLE_HOST_CPU_DEVICES)
@@ -282,12 +304,8 @@ if(ENABLE_REMOTE_CLIENT AND ENABLE_REMOTE_SERVER AND ENABLE_HOST_CPU_DEVICES)
            COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/scripts/test_remote_runner_single.sh" "${CMAKE_BINARY_DIR}" "tests/runtime/test_device_address")
   add_test(NAME "remote/test_svm"
            COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/scripts/test_remote_runner_multi.sh" "${CMAKE_BINARY_DIR}" "tests/runtime/test_svm")
-
-if(OPENCL_HEADER_VERSION GREATER 299)
   add_test(NAME "remote/test_queue_creation_with_hints"
            COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/scripts/test_remote_runner_single.sh" "${CMAKE_BINARY_DIR}" "tests/runtime/test_queue_creation_with_hints")
-  set(OCL_30_REMOTE_TESTS "remote/test_queue_creation_with_hints")
-endif()
 
   set_tests_properties(
     "remote/clCreateSubDevices"
@@ -304,7 +322,7 @@ endif()
     "remote/test_command_buffer_multi_device"
     "remote/test_device_address"
     "remote/test_svm"
-    ${OCL_30_REMOTE_TESTS}
+    "remote/test_queue_creation_with_hints"
     PROPERTIES SKIP_RETURN_CODE 77)
 
   set_property(TEST "remote/test_svm"
@@ -328,7 +346,7 @@ endif()
     "remote/test_command_buffer" "remote/test_command_buffer_images"
     "remote/test_command_buffer_multi_device"
     "remote/test_device_address" "remote/test_svm"
-    ${OCL_30_REMOTE_TESTS}
+    "remote/test_queue_creation_with_hints"
     PROPERTIES
       PASS_REGULAR_EXPRESSION "OK"
       COST 2.0
@@ -347,6 +365,54 @@ endif()
   endif()
 endif()
 
+if(ENABLE_REMOTE_DISCOVERY_AVAHI AND
+   ENABLE_REMOTE_ADVERTISEMENT_AVAHI AND
+   ENABLE_REMOTE_CLIENT AND
+   ENABLE_REMOTE_SERVER AND
+   ENABLE_HOST_CPU_DEVICES)
+
+  add_test(NAME "discovery/remote_discovery_mDNS"
+           COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/scripts/test_remote_runner_discovery.sh"
+           "${CMAKE_BINARY_DIR}"
+           "tests/runtime/test_remote_discovery"
+           "mdns")
+
+  set_tests_properties(
+    "discovery/remote_discovery_mDNS"
+    PROPERTIES
+      PASS_REGULAR_EXPRESSION "OK"
+      COST 2.0
+      PROCESSORS 1
+      DEPENDS "pocl_version_check"
+      LABELS "discovery"
+      RESOURCE_LOCK "pocld_ports")
+
+endif()
+
+if(ENABLE_REMOTE_DISCOVERY_DHT AND
+   ENABLE_REMOTE_ADVERTISEMENT_DHT AND
+   ENABLE_REMOTE_CLIENT AND
+   ENABLE_REMOTE_SERVER AND
+   ENABLE_HOST_CPU_DEVICES)
+
+  add_test(NAME "discovery/remote_discovery_dht"
+           COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/scripts/test_remote_runner_discovery.sh"
+           "${CMAKE_BINARY_DIR}"
+           "tests/runtime/test_remote_discovery"
+           "dht")
+
+  set_tests_properties(
+    "discovery/remote_discovery_dht"
+    PROPERTIES
+      PASS_REGULAR_EXPRESSION "OK"
+      COST 2.0
+      PROCESSORS 1
+      DEPENDS "pocl_version_check"
+      LABELS "discovery"
+      RESOURCE_LOCK "pocld_ports")
+
+endif()
+
 if(NOT ENABLE_ANYSAN)
   set_tests_properties("runtime/clCreateKernelsInProgram"
   PROPERTIES
@@ -359,16 +425,6 @@ if(NOT ENABLE_ANYSAN)
   set_tests_properties("runtime/test_kernel_cache_includes"
   PROPERTIES PASS_REGULAR_EXPRESSION
   "function 1.*first include.*function 2.*second include")
-endif()
-
-if(ENABLE_ASAN)
-  set_tests_properties("runtime/clCreateSubDevices"
-    PROPERTIES DISABLED 1)
-endif()
-
-if(NOT HAVE_WORKING_IMAGES_WITH_SPIR)
-  set_tests_properties("runtime/clGetKernelArgInfo"
-    PROPERTIES DISABLED 1)
 endif()
 
 # Label tests that work with CUDA backend
@@ -394,13 +450,13 @@ set_property(TEST
   "runtime/test_compile_n_link"
   "runtime/test_svm"
   "runtime/test_subbuffers"
-  ${OCL_30_TESTS}
+  "runtime/test_queue_creation_with_hints"
   APPEND PROPERTY LABELS "cuda")
 
 # Label tests that work with TCE backend
 set_property(TEST
   "runtime/test_fill-buffer"
-  ${OCL_30_TESTS}
+  "runtime/test_queue_creation_with_hints"
   APPEND PROPERTY LABELS "tce")
 
 
@@ -423,7 +479,7 @@ set_property(TEST
   "runtime/test_user_event"
   "runtime/clSetMemObjectDestructorCallback"
   "runtime/test_deviceside_enqueue"
-  ${OCL_30_TESTS}
+  "runtime/test_queue_creation_with_hints"
   APPEND PROPERTY LABELS "hsa-native")
 
 set_property(TEST
@@ -438,7 +494,7 @@ set_property(TEST
   "runtime/test_event_free"
   "runtime/test_user_event"
   "runtime/clSetMemObjectDestructorCallback"
-  ${OCL_30_TESTS}
+  "runtime/test_queue_creation_with_hints"
   APPEND PROPERTY LABELS "proxy")
 
 # Label tests that work with Vulkan
@@ -448,14 +504,14 @@ set_property(TEST
   "runtime/test_event_free"
   "runtime/test_user_event"
   "runtime/clSetMemObjectDestructorCallback"
-  ${OCL_30_TESTS}
+  "runtime/test_queue_creation_with_hints"
   APPEND PROPERTY LABELS "vulkan")
 
 if (ENABLE_TCE)
     # Label tests that work with Almaif (with compiler) backend
     set_property(TEST
         "runtime/test_fill-buffer"
-        ${OCL_30_TESTS}
+        "runtime/test_queue_creation_with_hints"
         APPEND PROPERTY LABELS "almaif")
 endif()
 
@@ -479,12 +535,5 @@ set_property(TEST
   "runtime/test_device_address"
   "runtime/test_svm"
   "runtime/test_subbuffers"
-  ${OCL_30_TESTS}
+  "runtime/test_queue_creation_with_hints"
   APPEND PROPERTY LABELS "level0")
-
-if(ENABLE_LEVEL0 AND ENABLE_HOST_CPU_DEVICES)
-  add_test(NAME "runtime/test_subbuffers_multidevice" COMMAND "test_subbuffers")
-  set_property(TEST "runtime/test_subbuffers_multidevice"
-    APPEND PROPERTY ENVIRONMENT "POCL_DEVICES=level0 cpu")
-
-endif()

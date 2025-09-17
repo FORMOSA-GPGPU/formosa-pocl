@@ -75,11 +75,6 @@ if(ENABLE_TCE)
                       )
 endif()
 
-
-if(MSVC)
-  set_source_files_properties( ${ALMAIF_SOURCES} PROPERTIES LANGUAGE CXX )
-endif(MSVC)
-
 add_pocl_device_library(pocl-devices-almaif ${ALMAIF_SOURCES})
 
 if(HAVE_XRT)
@@ -94,4 +89,5 @@ if(ENABLE_TCE)
 endif()
 
 install(FILES "tce_builtins.cl"
-        DESTINATION "${POCL_INSTALL_PRIVATE_DATADIR}/almaif" COMPONENT "lib")
+        DESTINATION "${POCL_INSTALL_PRIVATE_DATADIR_REL}/almaif"
+	COMPONENT "lib")

@@ -53,7 +53,6 @@ int main(int argc, char *argv[]) {
     logfilter = getenv("POCLD_LOGLEVEL");
   if (!logfilter)
     logfilter = "";
-  pocl_stderr_is_a_tty = isatty(fileno(stderr));
   pocl_debug_messages_setup(logfilter);
 #endif
 
@@ -114,17 +113,17 @@ int main(int argc, char *argv[]) {
   PoclDaemon server;
   bool UseVsock = false;
   if (ai.vsock_flag == 1) {
-#ifdef ENABLE_VSOCK
+#ifdef HAVE_LINUX_VSOCK_H
     UseVsock = true;
 #else
-    POCL_MSG_ERR("use -DENABLE_VSOCK=1 rebuild the source to use vsock\n");
+    POCL_MSG_ERR("This pocld was built without vsock support\n");
     return -1;
 #endif
   } else {
     UseVsock = false;
   }
   if ((error = server.launch(
-           std::move(std::string(ai.address_arg ? ai.address_arg : "")),
+           std::string(ai.address_arg ? ai.address_arg : ""),
            listen_ports, UseVsock)))
     return error;
 

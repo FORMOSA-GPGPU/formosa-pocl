@@ -47,9 +47,9 @@ extern CALLAPI int exec_matadd_kernel (cl_context context, cl_device_id device,
 int
 main (int argc, char **argv)
 {
-  cl_float *srcA, *srcB;
-  cl_float *dst;
-  int i, j, k, err;
+  cl_float *srcA = NULL, *srcB = NULL;
+  cl_float *dst = NULL;
+  int i, j, k, err = 0;
 
   cl_context context = NULL;
   cl_device_id device = NULL;
@@ -61,8 +61,8 @@ main (int argc, char **argv)
   CHECK_OPENCL_ERROR_IN ("clCreateContext");
 
   const char *basename = "boxadd";
-  err = poclu_load_program (context, device, basename, 0, 0,
-			    NULL, NULL, &program);
+  err = poclu_load_program (platform, context, device, basename, 0, 0, NULL,
+                            NULL, &program);
   if (err != CL_SUCCESS)
     goto FINISH;
 

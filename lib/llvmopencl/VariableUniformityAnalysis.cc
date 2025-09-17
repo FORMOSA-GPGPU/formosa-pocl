@@ -1,6 +1,7 @@
 // Implementation for VariableUniformityAnalysis function pass.
 //
 // Copyright (c) 2013-2019 Pekka Jääskeläinen
+//               2024 Pekka Jääskeläinen / Intel Finland Oy
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -19,7 +20,6 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
-
 
 #include "CompilerWarnings.h"
 IGNORE_COMPILER_WARNING("-Wmaybe-uninitialized")
@@ -40,6 +40,7 @@ POP_COMPILER_DIAGS
 
 #include "Barrier.h"
 #include "Kernel.h"
+#include "KernelCompilerUtils.h"
 #include "LLVMUtils.h"
 #include "VariableUniformityAnalysis.h"
 #include "VariableUniformityAnalysisResult.hh"
@@ -171,8 +172,8 @@ void VariableUniformityAnalysisResult::analyzeBBDivergence(
     llvm::BasicBlock *PreviousUniformBB, llvm::PostDominatorTree &PDT) {
 
 #ifdef DEBUG_UNIFORMITY_ANALYSIS
-  std::cerr << "### Analyzing BB divergence (bb=" << bb->getName().str()
-            << ", prevUniform=" << previousUniformBB->getName().str() << ")"
+  std::cerr << "### Analyzing BB divergence (bb=" << BB->getName().str()
+            << ", prevUniform=" << PreviousUniformBB->getName().str() << ")"
             << std::endl;
 #endif
 
@@ -278,7 +279,13 @@ bool VariableUniformityAnalysisResult::isUniform(llvm::Function *F,
     return true;
   }
 
-  if (isa<llvm::ConstantInt>(V)) {
+  llvm::Module *M = F->getParent();
+  if (isa<llvm::Constant>(V) && !(V == M->getGlobalVariable(LID_G_NAME(0)) ||
+                                  V == M->getGlobalVariable(LID_G_NAME(1)) ||
+                                  V == M->getGlobalVariable(LID_G_NAME(2)) ||
+                                  V == M->getGlobalVariable(GID_G_NAME(0)) ||
+                                  V == M->getGlobalVariable(GID_G_NAME(1)) ||
+                                  V == M->getGlobalVariable(GID_G_NAME(2)))) {
     setUniform(F, V, true);
     return true;
   }
@@ -392,11 +399,26 @@ bool VariableUniformityAnalysisResult::isUniform(llvm::Function *F,
         pointer == M->getGlobalVariable("_local_size_x") ||
         pointer == M->getGlobalVariable("_local_size_y") ||
         pointer == M->getGlobalVariable("_local_size_z") ||
+        // Since we support only uniform SG sizes for now:
+        pointer == M->getGlobalVariable("_pocl_sub_group_size") ||
         pointer == M->getGlobalVariable(PoclGVarBufferName)) {
 
       setUniform(F, V, true);
       return true;
     }
+  } else if (llvm::CallInst *Call = dyn_cast<llvm::CallInst>(V)) {
+    auto Callee = Call->getCalledFunction();
+    if (Callee == nullptr) {
+      // Likely inline asm. Cannot analyze uniformity.
+      setUniform(F, V, false);
+      return false;
+    }
+    auto CalleeName = Callee->getName();
+    bool IsUniformBuiltin = CalleeName == GROUP_ID_BUILTIN_NAME ||
+                            CalleeName == GS_BUILTIN_NAME ||
+                            CalleeName == LS_BUILTIN_NAME;
+    setUniform(F, V, IsUniformBuiltin);
+    return IsUniformBuiltin;
   }
 
   if (isa<llvm::PHINode>(V)) {

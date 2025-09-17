@@ -1,7 +1,7 @@
 /* OpenCL runtime library: clSetKernelExecInfo()
 
    Copyright (c) 2015 Michal Babej / Tampere University of Technology
-                 2024 Pekka Jääskeläinen / Intel Finland Oy
+                 2024-2025 Pekka Jääskeläinen / Intel Finland Oy
 
    Permission is hereby granted, free of charge, to any person obtaining a copy
    of this software and associated documentation files (the "Software"), to
@@ -23,6 +23,7 @@
 */
 
 #include "pocl_cl.h"
+#include "pocl_mem_management.h"
 #include "pocl_util.h"
 
 CL_API_ENTRY cl_int CL_API_CALL
@@ -59,9 +60,15 @@ POname(clSetKernelExecInfo)(cl_kernel kernel,
             (realdev->ops->set_kernel_exec_info_ext == NULL),
             CL_INVALID_OPERATION,
             "This device doesn't support clSetKernelExecInfo\n");
-        return realdev->ops->set_kernel_exec_info_ext (
-            realdev, program_device_i, kernel, param_name, param_value_size,
-            param_value);
+        cl_int ret_val = realdev->ops->set_kernel_exec_info_ext (
+          realdev, program_device_i, kernel, param_name, param_value_size,
+          param_value);
+
+        if (ret_val == CL_SUCCESS)
+          pocl_reset_indirect_ptrs (kernel, (void **)param_value,
+                                    param_value_size / sizeof (void *));
+
+        return ret_val;
       }
 
     case CL_KERNEL_EXEC_INFO_USM_PTRS_INTEL:
@@ -80,8 +87,14 @@ POname(clSetKernelExecInfo)(cl_kernel kernel,
         POCL_RETURN_ERROR_ON (
             (dev->ops->set_kernel_exec_info_ext == NULL), CL_INVALID_OPERATION,
             "This USM allocator device doesn't support clSetKernelExecInfo\n");
-        return dev->ops->set_kernel_exec_info_ext (
-            dev, 0, kernel, param_name, param_value_size, param_value);
+        cl_int ret_val = dev->ops->set_kernel_exec_info_ext (
+          dev, 0, kernel, param_name, param_value_size, param_value);
+
+        if (param_name == CL_KERNEL_EXEC_INFO_USM_PTRS_INTEL
+            && ret_val == CL_SUCCESS)
+          pocl_reset_indirect_ptrs (kernel, (void **)param_value,
+                                    param_value_size);
+        return ret_val;
       }
 
     /* For the cl_ext_buffer_device_address extension. Just error checking
@@ -89,15 +102,19 @@ POname(clSetKernelExecInfo)(cl_kernel kernel,
        because of this. */
     case CL_KERNEL_EXEC_INFO_DEVICE_PTRS_EXT:
       {
-        void **ptrs = (void **)param_value;
+        POCL_RETURN_ERROR_ON (kernel->context->no_devices_support_bda,
+                              CL_INVALID_OPERATION,
+                              "None of devices in the context support "
+                              "cl_ext_buffer_device_address\n");
 
+        void **ptrs = (void **)param_value;
         for (size_t i = 0; i < param_value_size / sizeof (void *); ++i)
           {
             void *dev_ptr = ptrs[i];
             pocl_raw_ptr *raw_ptr_info
                 = pocl_find_raw_ptr_with_dev_ptr (kernel->context, dev_ptr);
             POCL_RETURN_ERROR_ON ((raw_ptr_info == NULL), CL_INVALID_VALUE,
-                                  "the device pointer %p was not found\n",
+                                  "The device pointer %p was not found\n",
                                   dev_ptr);
           }
 
@@ -132,8 +149,8 @@ POname(clSetKernelExecInfo)(cl_kernel kernel,
       }
 
     default:
-      POCL_RETURN_ERROR_ON (1, CL_INVALID_VALUE,
-                            "Given param_name(%u) is not valid\n", param_name);
+      POCL_RETURN_ERROR (CL_INVALID_VALUE,
+                         "Given param_name(%u) is not valid\n", param_name);
     }
 }
 POsym(clSetKernelExecInfo)

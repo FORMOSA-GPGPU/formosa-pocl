@@ -24,9 +24,11 @@
 #include <cassert>
 #include <cerrno>
 #include <chrono>
+#include <cstdio>
 #include <unistd.h>
 
-#include "messages.h"
+#include "common_cl.hh"
+#include "pocl_compiler_macros.h"
 #include "pocl_debug.h"
 #include "request.hh"
 #include "tracing.h"
@@ -87,11 +89,15 @@ const char *request_to_str(RequestMessageType type) {
     return "LinkProgram";
   case MessageType_BuildProgramWithBuiltins:
     return "BuildProgramWithBuiltins";
+  case MessageType_BuildProgramWithDefinedBuiltins:
+      return "BuildProgramWithDefinedBuiltins";
   case MessageType_FreeProgram:
     return "FreeProgram";
 
   case MessageType_MigrateD2D:
     return "MigrateD2D";
+  case MessageType_Barrier:
+    return "Barrier";
 
   case MessageType_ReadBuffer:
     return "ReadBuffer";
@@ -137,28 +143,40 @@ const char *request_to_str(RequestMessageType type) {
   case MessageType_Shutdown:
     return "Shutdown";
 
+  case MessageType_CreateCommandBuffer:
+    return "CreateCommandBuffer";
+  case MessageType_FreeCommandBuffer:
+    return "FreeCommandBuffer";
+  case MessageType_RunCommandBuffer:
+    return "RunCommandBuffer";
+
   default:
     return "UNKNOWN";
   }
 }
 
-/* Returns 0 on success and no-op, otherwise errno */
-static int reentrant_read(int fd, void *dest, size_t size, size_t *tracker) {
-  if (*tracker == size)
+int ByteReader::readReentrant(void *Destination, size_t Bytes,
+                              size_t *Tracker) {
+  if (*Tracker == Bytes)
     return 0;
-
-  ssize_t readb;
-  readb = ::read(fd, (char *)dest + *tracker, size - *tracker);
-  if (readb < 0)
-    return errno;
-
-  if (readb == 0)
-    return EPIPE;
-
-  *tracker += readb;
-  if (*tracker != size)
-    return EAGAIN;
+  size_t Copied = readFull(Destination, Bytes);
+  *Tracker += Copied;
   return 0;
+}
+
+int ByteReader::readFull(void *Destination, size_t Bytes) {
+  size_t CopyableBytes = std::min(Bytes, Length - Offset);
+  std::memcpy(Destination, StartPtr + Offset, CopyableBytes);
+  Offset += CopyableBytes;
+  return CopyableBytes;
+}
+
+std::string ByteReader::describe() {
+  const size_t MaxLength = 32;
+  std::string Tmp;
+  Tmp.reserve(MaxLength);
+  std::snprintf(Tmp.data(), MaxLength, "mem:%p", StartPtr);
+  return Tmp;
 }
 
 #define RETURN_UNLESS_DONE(call)                                               \
@@ -167,72 +185,71 @@ static int reentrant_read(int fd, void *dest, size_t size, size_t *tracker) {
     if (ret) {                                                                 \
       if (ret == EAGAIN || ret == EWOULDBLOCK)                                 \
         return true;                                                           \
-      POCL_MSG_ERR("Read error on " #call ", fd=%d, reason: %s\n", fd,         \
-                   strerror(ret));                                             \
+      POCL_MSG_ERR("Read error on " #call ", %s, reason: %s\n",                \
+                   Source->describe().c_str(), strerror(ret));                 \
       return false;                                                            \
     }                                                                          \
   } while (0);
 
-bool Request::read(int fd) {
+template <class T> bool RequestReadImpl(Request *Req, T *Source) {
   ssize_t readb;
-  Request *request = this;
-  RequestMsg_t *req = &request->req;
 
-  if (!request->read_start_timestamp_ns) {
+  RequestMsg_t *Body = &Req->Body;
+
+  if (!Req->ReadStartTimestampNS) {
     auto now1 = std::chrono::system_clock::now();
-    request->read_start_timestamp_ns =
+    Req->ReadStartTimestampNS =
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             now1.time_since_epoch())
             .count();
   }
 
-  RETURN_UNLESS_DONE(reentrant_read(fd, &request->req_size,
-                                    sizeof(request->req_size),
-                                    &request->req_size_read));
+  RETURN_UNLESS_DONE(Source->readReentrant(
+      &Req->BodySize, sizeof(Req->BodySize), &Req->BodySizeBytesRead));
 
   RETURN_UNLESS_DONE(
-      reentrant_read(fd, req, request->req_size, &request->req_read));
+      Source->readReentrant(Body, Req->BodySize, &Req->BodyBytesRead));
 
-  TP_MSG_RECEIVED(req->msg_id, req->did, req->cq_id, req->message_type);
+  TP_MSG_RECEIVED(Body->msg_id, Body->did, Body->cq_id, Body->message_type);
 
-  RequestMessageType t = static_cast<RequestMessageType>(req->message_type);
+  RequestMessageType t = static_cast<RequestMessageType>(Body->message_type);
   POCL_MSG_PRINT_GENERAL("---------------------------------------------------"
                          "----------------------------\n");
   POCL_MSG_PRINT_GENERAL("MESSAGE RECEIVED, ID: %" PRIu64
-                         " TYPE: %s SIZE: %" PRIu64 "/%" PRIu32 " \n",
-                         uint64_t(req->msg_id), request_to_str(t),
-                         request->req_read, request->req_size);
+                         " TYPE: %s (%d) SIZE: %" PRIu64 "/%" PRIu32 " \n",
+                         uint64_t(Body->msg_id), request_to_str(t), t,
+                         Req->BodyBytesRead, Req->BodySize);
 
-  switch (req->message_type) {
+  switch (Body->message_type) {
   case MessageType_WriteBuffer:
-    request->extra_size = req->m.write.size;
+    Req->ExtraDataSize = Body->m.write.size;
     break;
   case MessageType_WriteBufferRect:
-    request->extra_size = req->m.write_rect.host_bytes;
+    Req->ExtraDataSize = Body->m.write_rect.host_bytes;
     break;
   case MessageType_WriteImageRect:
-    request->extra_size = req->m.write_image_rect.host_bytes;
+    Req->ExtraDataSize = Body->m.write_image_rect.host_bytes;
     break;
   case MessageType_MigrateD2D:
-    if (req->m.migrate.is_external) {
-      request->extra_size = req->m.migrate.size;
+    if (Body->m.migrate.is_external) {
+      Req->ExtraDataSize = Body->m.migrate.size;
     }
     break;
   case MessageType_FillBuffer:
-    request->extra_size = req->m.fill_buffer.pattern_size;
-    assert(request->extra_size <= (16 * sizeof(uint64_t)));
+    Req->ExtraDataSize = Body->m.fill_buffer.pattern_size;
+    assert(Req->ExtraDataSize <= (16 * sizeof(uint64_t)));
     break;
   case MessageType_FillImageRect:
-    request->extra_size = 16;
+    Req->ExtraDataSize = 16;
     break;
   case MessageType_RunKernel:
-    if (req->m.run_kernel.has_new_args) {
-      /* The arguments itself come in through extra data, as well as an array of
+    if (Body->m.run_kernel.has_new_args) {
+      /* The arguments itthis come in through extra data, as well as an array of
          flags which inform whether an argument (buffer) is an
          SVM pointer or not. */
-      request->extra_size = req->m.run_kernel.args_num * sizeof(uint64_t) +
-                            req->m.run_kernel.args_num * sizeof(unsigned char);
-      request->extra_size2 = req->m.run_kernel.pod_arg_size;
+      Req->ExtraDataSize = Body->m.run_kernel.args_num * sizeof(uint64_t) +
+                           Body->m.run_kernel.args_num * sizeof(unsigned char);
+      Req->ExtraData2Size = Body->m.run_kernel.pod_arg_size;
     }
     break;
   /*****************************/
@@ -242,75 +259,89 @@ bool Request::read(int fd) {
   case MessageType_CompileProgramFromSPIRV:
   case MessageType_CompileProgramFromSource:
   case MessageType_LinkProgram:
-    request->extra_size2 = req->m.build_program.options_len;
+    Req->ExtraData2Size = Body->m.build_program.options_len;
     /* intentional fall through to setting payload (i.e. binary) size */
+    POCL_FALLTHROUGH;
   case MessageType_BuildProgramWithBuiltins:
-    request->extra_size = req->m.build_program.payload_size;
+  case MessageType_BuildProgramWithDefinedBuiltins:
+    Req->ExtraDataSize = Body->m.build_program.payload_size;
     break;
   /*****************************/
   case MessageType_CreateKernel:
-    request->extra_size = req->m.create_kernel.name_len;
+    Req->ExtraDataSize = Body->m.create_kernel.name_len;
     break;
+  /*****************************/
+  case MessageType_CreateCommandBuffer:
+    Req->ExtraDataSize = Body->m.create_cmdbuf.num_queues * sizeof(uint32_t) +
+                         Body->m.create_cmdbuf.commands_size;
   default:
     break;
   }
 
   /*****************************/
-  if (req->waitlist_size > 0) {
-    request->waitlist.resize(req->waitlist_size);
+  if (Body->waitlist_size > 0) {
+    Req->Waitlist.resize(Body->waitlist_size);
     POCL_MSG_PRINT_GENERAL("READING WAIT LIST FOR ID: %" PRIu64 " = %" PRIuS
                            "/%" PRIu32 "\n",
-                           uint64_t(req->msg_id), request->waitlist_read,
-                           request->req.waitlist_size);
-    RETURN_UNLESS_DONE(
-        reentrant_read(fd, request->waitlist.data(),
-                       request->req.waitlist_size * sizeof(uint64_t),
-                       &request->waitlist_read));
+                           uint64_t(Body->msg_id), Req->WaitlistBytesRead,
+                           Req->Body.waitlist_size);
+    RETURN_UNLESS_DONE(Source->readReentrant(
+        Req->Waitlist.data(), Req->Body.waitlist_size * sizeof(uint64_t),
+        &Req->WaitlistBytesRead));
   }
   /*****************************/
 
   /*****************************/
-  if (request->extra_size > 0) {
-    request->extra_data.resize(request->extra_size + 1);
+  if (Req->ExtraDataSize > 0) {
+    Req->ExtraData.resize(Req->ExtraDataSize + 1);
     POCL_MSG_PRINT_GENERAL(
         "READING EXTRA FOR ID: %" PRIu64 " = %" PRIuS "/%" PRIu64 "\n",
-        uint64_t(req->msg_id), request->extra_read, request->extra_size);
-    RETURN_UNLESS_DONE(reentrant_read(fd, request->extra_data.data(),
-                                      request->extra_size,
-                                      &request->extra_read));
+        uint64_t(Body->msg_id), Req->ExtraDataBytesRead, Req->ExtraDataSize);
+    RETURN_UNLESS_DONE(Source->readReentrant(
+        Req->ExtraData.data(), Req->ExtraDataSize, &Req->ExtraDataBytesRead));
     /* Always add a null byte at the end - it is needed for strings and it does
      * not harm other things */
-    request->extra_data[request->extra_size] = 0;
+    Req->ExtraData[Req->ExtraDataSize] = 0;
   }
   /*****************************/
 
   /*****************************/
-  if (request->extra_size2 > 0) {
-    request->extra_data2.resize(request->extra_size2 + 1);
+  if (Req->ExtraData2Size > 0) {
+    Req->ExtraData2.resize(Req->ExtraData2Size + 1);
     POCL_MSG_PRINT_GENERAL(
         "READING EXTRA2 FOR ID:%" PRIu64 " = %" PRIuS "/%" PRIu64 "\n",
-        uint64_t(req->msg_id), request->extra_read2, request->extra_size2);
-    RETURN_UNLESS_DONE(reentrant_read(fd, request->extra_data2.data(),
-                                      request->extra_size2,
-                                      &request->extra_read2));
+        uint64_t(Body->msg_id), Req->ExtraData2BytesRead, Req->ExtraData2Size);
+    RETURN_UNLESS_DONE(Source->readReentrant(Req->ExtraData2.data(),
+                                             Req->ExtraData2Size,
+                                             &Req->ExtraData2BytesRead));
     /* Always add null byte here too, just in case extra2 is a string */
-    request->extra_data2[request->extra_size2] = 0;
+    Req->ExtraData2[Req->ExtraData2Size] = 0;
   }
   /*****************************/
 
-  if (!request->read_end_timestamp_ns) {
+  if (!Req->ReadEndTimestampNS) {
     auto now2 = std::chrono::system_clock::now();
-    request->read_end_timestamp_ns =
+    Req->ReadEndTimestampNS =
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             now2.time_since_epoch())
             .count();
   }
 
-  POCL_MSG_PRINT_GENERAL("ALL READS COMPLETE FOR ID: %" PRIu64 ", fd=%d\n",
-                         uint64_t(req->msg_id), fd);
+  POCL_MSG_PRINT_GENERAL("ALL READS COMPLETE FOR ID: %" PRIu64 ", %s\n",
+                         uint64_t(Body->msg_id), Source->describe().c_str());
 
-  IsFullyRead = true;
+  Req->IsFullyRead = true;
   return true;
+}
+
+bool Request::read(Connection *Conn) { return RequestReadImpl(this, Conn); }
+
+bool Request::readFull(ByteReader *Source) {
+  bool Error = false;
+  while (!this->IsFullyRead && !Error) {
+    bool Error = RequestReadImpl(this, Source);
+  }
+  return this->IsFullyRead;
 }
 
 #undef CHECK_READ_RETURN

@@ -40,7 +40,6 @@ set(LLVMPASSES_SOURCES "AllocasToEntry.cc"
                        "DebugHelpers.cc"
                        "DebugHelpers.h"
                        "EmitPrintf.cc"
-                       "EmitPrintf.hh"
                        "Flatten.cc"
                        "FlattenGlobals.cc"
                        "FlattenBarrierSubs.cc"
@@ -63,8 +62,6 @@ set(LLVMPASSES_SOURCES "AllocasToEntry.cc"
                        "LoopBarriers.h"
                        "MinLegalVecSize.cc"
                        "MinLegalVecSize.hh"
-                       "OptimizeWorkItemFuncCalls.cc"
-                       "OptimizeWorkItemFuncCalls.h"
                        "OptimizeWorkItemGVars.cc"
                        "OptimizeWorkItemGVars.h"
                        "PHIsToAllocas.cc"
@@ -75,10 +72,11 @@ set(LLVMPASSES_SOURCES "AllocasToEntry.cc"
                        "ProgramScopeVariables.h"
                        "RemoveBarrierCalls.cc"
                        "RemoveBarrierCalls.h"
-                       "SVMOffset.cc"
-                       "SVMOffset.hh"
+                       "SanitizeUBofDivRem.cc"
+                       "SanitizeUBofDivRem.h"
                        "SubCFGFormation.cc"
                        "SubCFGFormation.h"
+                       "UnreachablesToReturns.cc"
                        "VariableUniformityAnalysis.cc"
                        "VariableUniformityAnalysis.h"
                        "WorkItemAliasAnalysis.cc"
@@ -92,27 +90,21 @@ set(LLVMPASSES_SOURCES "AllocasToEntry.cc"
                        "WorkitemLoops.h")
 
 if (ENABLE_REMOTE_SERVER)
-  list(APPEND LLVMPASSES_SOURCES
-    "SVMOffset.cc"
-    "SVMOffset.hh")
+  list(APPEND LLVMPASSES_SOURCES "SVMOffset.cc")
 endif()
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${LLVM_CFLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${LLVM_CXXFLAGS}")
-
-include_directories(${LLVM_INCLUDE_DIRS})
-include_directories(../CL)
-include_directories(../CL/devices)
-
-if(MSVC)
-  set_source_files_properties( ${LLVMPASSES_SOURCES} PROPERTIES LANGUAGE CXX )
-endif(MSVC)
 
 # This library (just a bunch of objects really) is linked against libpocl
 # to call the kernel compiler passes directly from the host library.
 #noinst_LTLIBRARIES = libllvmpasses.la
 add_library("llvmpasses" OBJECT ${LLVMPASSES_SOURCES})
 harden("llvmpasses")
+
+target_include_directories(llvmpasses PRIVATE "${CMAKE_SOURCE_DIR}/lib/CL")
+target_include_directories(llvmpasses PRIVATE "${CMAKE_SOURCE_DIR}/lib/CL/devices")
+target_include_directories(llvmpasses PRIVATE ${LLVM_INCLUDE_DIRS})
 
 if(OCL_ICD_INCLUDE_DIRS)
   target_include_directories("llvmpasses" SYSTEM PUBLIC ${OCL_ICD_INCLUDE_DIRS})
@@ -152,9 +144,9 @@ if(NOT APPLE)
 endif()
 
 install(TARGETS "llvmopencl"
-        LIBRARY DESTINATION ${POCL_INSTALL_PRIVATE_LIBDIR}
+        LIBRARY DESTINATION ${POCL_INSTALL_PRIVATE_LIBDIR_REL}
         COMPONENT "lib"
-        ARCHIVE DESTINATION ${POCL_INSTALL_PRIVATE_LIBDIR}/static
+        ARCHIVE DESTINATION ${POCL_INSTALL_PRIVATE_LIBDIR_REL}/static
         COMPONENT "dev"
 )
 endif(ENABLE_LIBLLVMOPENCL)

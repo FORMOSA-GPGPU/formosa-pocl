@@ -32,8 +32,15 @@ if(ENABLE_LOADABLE_DRIVERS)
       target_include_directories(${name} SYSTEM PUBLIC ${OCL_ICD_INCLUDE_DIRS})
     endif()
     target_link_libraries(${name} PUBLIC ${POCL_PUBLIC_LINK_LIST} PRIVATE ${POCL_LIBRARY_NAME} ${POCL_PRIVATE_LINK_LIST})
-    set_target_properties(${name} PROPERTIES PREFIX "lib" SUFFIX ".so")
-    install(TARGETS ${name} LIBRARY DESTINATION "${POCL_INSTALL_PRIVATE_LIBDIR}" COMPONENT "lib")
+    if(WIN32)
+      set_target_properties(${name} PROPERTIES PREFIX "")
+    endif()
+    install(TARGETS ${name}
+            LIBRARY DESTINATION ${POCL_INSTALL_PRIVATE_LIBDIR_REL}
+            COMPONENT "lib"
+            RUNTIME DESTINATION ${POCL_INSTALL_PRIVATE_LIBDIR_REL}
+            COMPONENT "lib"
+    )
   endfunction()
 
 else()
@@ -78,6 +85,19 @@ if(BUILD_REMOTE_CLIENT)
   add_subdirectory("remote")
   set(POCL_DEVICES_OBJS "${POCL_DEVICES_OBJS}"
     "$<TARGET_OBJECTS:pocl-devices-remote>")
+
+  if(ENABLE_REMOTE_DISCOVERY_AVAHI)
+    find_library(AVAHI_COMMON_LIB NAMES avahi-common REQUIRED)
+    find_library(AVAHI_CLIENT_LIB NAMES avahi-client REQUIRED)
+    list(APPEND POCL_DEVICES_LINK_LIST ${AVAHI_COMMON_LIB} ${AVAHI_CLIENT_LIB})
+  endif()
+
+  if(ENABLE_REMOTE_DISCOVERY_DHT)
+    find_library(OPENDHT NAMES opendht REQUIRED)
+    find_library(OPENDHT_C NAMES opendht-c REQUIRED)
+    list(APPEND POCL_DEVICES_LINK_LIST ${OPENDHT} ${OPENDHT_C})
+  endif()
+
   if((NOT ENABLE_LOADABLE_DRIVERS) AND ENABLE_RDMA)
     list(APPEND POCL_DEVICES_LINK_LIST RDMAcm::RDMAcm IBVerbs::verbs)
   endif()
@@ -105,11 +125,19 @@ if(ENABLE_TCE)
 endif()
 
 if(ENABLE_PROXY_DEVICE)
+  if(HAVE_TREE_SITTER)
+    add_subdirectory("tree_sitter")
+    list(APPEND POCL_DEVICES_LINK_LIST pocl_tree_sitter_utils tree-sitter)
+    set(POCL_DEVICES_OBJS "${POCL_DEVICES_OBJS}"
+            "$<TARGET_OBJECTS:pocl_tree_sitter_utils>")
+  endif ()
   add_subdirectory("proxy")
   set(POCL_DEVICES_OBJS "${POCL_DEVICES_OBJS}"
     "$<TARGET_OBJECTS:pocl-devices-proxy>")
   # link to libOpenCL(-stub)
-  list(APPEND POCL_DEVICES_LINK_LIST OpenCL)
+  if(NOT PROXY_USE_LIBOPENCL_STUB)
+    list(APPEND POCL_DEVICES_LINK_LIST OpenCL)
+  endif()
 
 endif()
 
@@ -142,7 +170,7 @@ if(ENABLE_LEVEL0)
     "$<TARGET_OBJECTS:pocl-devices-level0>")
 
   if(NOT ENABLE_LOADABLE_DRIVERS)
-    list(APPEND POCL_DEVICES_LINK_LIST ${LEVEL0_LIBRARIES})
+    list(APPEND POCL_DEVICES_LINK_LIST PkgConfig::LEVEL0)
   endif()
 endif()
 
@@ -152,7 +180,7 @@ if(ENABLE_CUDA)
     "$<TARGET_OBJECTS:pocl-devices-cuda>")
 
   if(NOT ENABLE_LOADABLE_DRIVERS)
-    list(APPEND POCL_DEVICES_LINK_LIST cuda)
+    list(APPEND POCL_DEVICES_LINK_LIST ${CUDA_POCL_TARGETS})
   endif()
 endif()
 
@@ -175,6 +203,7 @@ set(POCL_DEVICES_SOURCES
   pocl_local_size.h  pocl_local_size.c
   common_driver.h  common_driver.c
   spirv.hh  spirv_parser.hh  spirv_parser.cc
+  pocl_spirv_utils.cc pocl_spirv_utils.hh
   printf_base.c printf_base.h printf_buffer.c
   cpuinfo.c  cpuinfo.h)
 
@@ -183,19 +212,20 @@ if(ENABLE_HOST_CPU_DEVICES)
     list(APPEND POCL_DEVICES_LINK_LIST PkgConfig::LIBXSMM BLAS::BLAS)
   endif()
   if(ENABLE_HWLOC)
-    list(APPEND POCL_DEVICES_LINK_LIST PkgConfig::HWLOC)
+    if(TARGET PkgConfig::HWLOC)
+      list(APPEND POCL_DEVICES_LINK_LIST PkgConfig::HWLOC)
+    else()
+      message(FATAL_ERROR "missing target PkgConfig::HWLOC")
+    endif()
   endif()
   add_subdirectory(cpu_dbk)
   list(APPEND POCL_DEVICES_SOURCES common_utils.h common_utils.c)
 endif()
 
-if(UNIX AND (CMAKE_SYSTEM_NAME MATCHES "Linux"))
+if(ENABLE_SIGFPE_HANDLER OR ENABLE_SIGUSR2_HANDLER)
   list(APPEND POCL_DEVICES_SOURCES signal_handlers.c)
 endif()
 
-if(MSVC)
-  set_source_files_properties( ${POCL_DEVICES_SOURCES} PROPERTIES LANGUAGE CXX )
-endif(MSVC)
 add_library("pocl-devices" OBJECT ${POCL_DEVICES_SOURCES})
 if(OCL_ICD_INCLUDE_DIRS)
   target_include_directories("pocl-devices" SYSTEM PUBLIC ${OCL_ICD_INCLUDE_DIRS})
@@ -204,8 +234,24 @@ if(HAVE_LIBXSMM) # for includedir flags
   target_link_libraries("pocl-devices" PRIVATE PkgConfig::LIBXSMM)
 endif()
 if(HAVE_LIBJPEG_TURBO)
-  target_link_libraries("pocl-devices" PRIVATE PkgConfig::LIBJPEG_TURBO)
+  target_link_libraries("pocl-devices" PRIVATE ${LIBJPEG_TARGET})
 endif ()
+if(HAVE_ONNXRT)
+  target_link_libraries("pocl-devices" PRIVATE onnxruntime::onnxruntime)
+endif ()
+if(HAVE_OPENCV)
+  target_link_libraries("pocl-devices" PRIVATE opencv_dnn)
+endif ()
+if(BUILD_SHARED_LIBS AND MSVC)
+  # Inject __declspec(dllexport).
+  target_compile_definitions("pocl-devices" PRIVATE EXPORT_POCL_LIB)
+  target_compile_definitions("pocl-devices" INTERFACE IMPORT_POCL_LIB)
+endif()
+
+
+if(HAVE_TREE_SITTER)
+  target_link_libraries("pocl-devices" PRIVATE tree-sitter)
+endif()
 
 set(POCL_DEVICES_OBJS "${POCL_DEVICES_OBJS}"
     "$<TARGET_OBJECTS:pocl-devices>")

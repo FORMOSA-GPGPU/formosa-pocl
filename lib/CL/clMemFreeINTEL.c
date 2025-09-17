@@ -26,8 +26,6 @@
 #include "pocl_util.h"
 #include "utlist.h"
 
-extern unsigned long usm_buffer_c;
-
 /* get & retain all last-events of all command queues of the context */
 static int
 pocl_get_last_events (cl_context context, cl_event **last_events,
@@ -122,7 +120,10 @@ pocl_mem_free_intel (cl_context context, void *usm_pointer, cl_bool blocking)
                                           &last_event_count);
           POCL_UNLOCK_OBJ (context);
           if (err != CL_SUCCESS)
-            return err;
+            {
+              assert (last_events == NULL);
+              return err;
+            }
           if (last_event_count > 0)
             {
               POname (clWaitForEvents) (last_event_count, last_events);
@@ -131,6 +132,7 @@ pocl_mem_free_intel (cl_context context, void *usm_pointer, cl_bool blocking)
                   POname (clReleaseEvent) (last_events[i]);
                 }
             }
+          free (last_events);
           item->device->ops->usm_free (item->device, usm_pointer);
         }
     }

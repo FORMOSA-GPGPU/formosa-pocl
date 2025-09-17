@@ -28,64 +28,85 @@
 #include <cstring>
 #include <vector>
 
+#include "connection.hh"
 #include "messages.h"
 
 #ifdef __GNUC__
 #pragma GCC visibility push(hidden)
 #endif
 
-class Request {
-
+/// Helper class for reading a Request from memory instead of a Connection
+/// stream
+class ByteReader {
 public:
-  /** Size, in bytes, of the main request body (up to sizeof RequestMsg_t) */
-  uint32_t req_size;
-  /** Tracker for how many bytes of req_size have been read from the network
-   * socket */
-  size_t req_size_read;
-  /** Main body of the reuqest */
-  RequestMsg_t req;
-  /** Tracker for how many bytes of the main request body have been read from
-   * the network socket */
-  size_t req_read;
+  ByteReader() = delete;
+  ByteReader(uint8_t *Start, size_t Len)
+      : StartPtr(Start), Offset(0), Length(Len) {}
+  bool eof() { return Offset >= Length; }
+  int readFull(void *Destination, size_t Bytes);
+  int readReentrant(void *Destination, size_t Bytes, size_t *Tracker);
+  std::string describe();
 
-  /** List of event ids that must complete before this Request can be processed
-   */
-  std::vector<uint64_t> waitlist;
-  /** Tracker for how many bytes of the waitlist have been read */
-  size_t waitlist_read;
+private:
+  uint8_t *StartPtr;
+  size_t Offset;
+  size_t Length;
+};
 
-  /** Auxiliary data required for the Request (buffer contents, program binaries
-   * etc) */
-  std::vector<uint8_t> extra_data;
-  /** Size of the auxiliary data buffer */
-  uint64_t extra_size;
-  /** Tracker for how many bytes of the auxiliary data buffer have been read
-   * from the network socket */
-  size_t extra_read;
+class Request {
+public:
+  /// Size, in bytes, of the main request body (up to sizeof RequestMsg_t)
+  uint32_t BodySize = 0;
+  /// Tracker for how many bytes of req_size have been read from the network
+  /// socket
+  size_t BodySizeBytesRead = 0;
+  /// Main body of the reuqest
+  RequestMsg_t Body{};
+  /// Tracker for how many bytes of the main request body have been read from
+  /// the network socket
+  size_t BodyBytesRead = 0;
 
-  /** Second auxiliary data required for the Request */
-  std::vector<uint8_t> extra_data2;
-  /** Size of the auxiliary data buffer */
-  uint64_t extra_size2;
-  /** Tracker for how many bytes of the second auxiliary data buffer have been
-   * read from the network socket */
-  size_t extra_read2;
+  /// List of event ids that must complete before this Request can be processed
+  std::vector<uint64_t> Waitlist;
+  /// Tracker for how many bytes of the waitlist have been read
+  size_t WaitlistBytesRead = 0;
 
-  /** Server side timestamp for when reading the request from the network socket
-   * started */
-  uint64_t read_start_timestamp_ns;
-  /** Server side timestamp for when the last bit of data for the request has
-   * been successfully read from the network socket. */
-  uint64_t read_end_timestamp_ns;
+  /// Auxiliary data required for the Request (buffer contents, program binaries
+  /// etc)
+  std::vector<uint8_t> ExtraData;
+  /// Size of the auxiliary data buffer
+  uint64_t ExtraDataSize = 0;
+  /// Tracker for how many bytes of the auxiliary data buffer have been read
+  /// from the network socket
+  size_t ExtraDataBytesRead = 0;
 
-  /** Flag indicating that the request has been fully read from the network
-   * socket. Set at the very end of the read() function. */
-  bool IsFullyRead;
+  /// Second auxiliary data required for the Request
+  std::vector<uint8_t> ExtraData2;
+  /// Size of the auxiliary data buffer
+  uint64_t ExtraData2Size = 0;
+  /// Tracker for how many bytes of the second auxiliary data buffer have been
+  /// read from the network socket
+  size_t ExtraData2BytesRead = 0;
 
-  /** Incrementally reads the request from given fd. Returns true on success and
-   * false if an error occurs while reading. Call repeatedly until `fully_read`
-   * gets set to true. */
-  bool read(int fd);
+  /// Server side timestamp for when reading the request from the network socket
+  /// started
+  uint64_t ReadStartTimestampNS = 0;
+  /// Server side timestamp for when the last bit of data for the request has
+  /// been successfully read from the network socket.
+  uint64_t ReadEndTimestampNS = 0;
+
+  /// Flag indicating that the request has been fully read from the network
+  /// socket. Set at the very end of the read() function.
+  bool IsFullyRead = false;
+
+  /// Incrementally reads the request from given Connection. Returns true on
+  /// success and false if an error occurs while reading. Call repeatedly until
+  /// `fully_read` gets set to true.
+  bool read(Connection *);
+
+  /// Attempts to copy a whole Request from a ByteReader. Returns true if
+  /// Request was fully read, false otherwise.
+  bool readFull(ByteReader *);
 };
 
 #ifdef __GNUC__

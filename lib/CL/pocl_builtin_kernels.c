@@ -25,22 +25,25 @@
 
 #include "pocl_tensor_util.h"
 
+#include "dbk/pocl_dbk_khr_dnn_utils_shared.h"
+#include "dbk/pocl_dbk_khr_img_shared.h"
 #include "dbk/pocl_dbk_khr_jpeg_shared.h"
+#include "dbk/pocl_dbk_khr_onnxrt_shared.h"
 
 #include <string.h>
 
 /*
   steps to add a new builtin kernel:
 
-  1) add it to the end of BuiltinKernelId enum in the
+  1) add it to the end of cl_dbk_id_exp enum in the
      cl_exp_defined_builtin_kernels.h header, before
      POCL_CDBI_LAST
 
   2) open builtin_kernels.c and edit pocl_BIDescriptors, add a new struct
      for the new kernel, with argument metadata
 
-  2.5)if adding a Defined Built-in Kernel (DBK) add code specific to that kernel
-     to:
+  2.5)if adding a Defined Built-in Kernel (DBK) add code specific to that
+  kernel to:
        * pocl_validate_dbk_attributes
        * pocl_copy_defined_builtin_attributes
        * pocl_release_defined_builtin_attributes
@@ -64,8 +67,8 @@
          lib/CL/devices/almaif/tce_builtins.cl
        * almaif driver with other backends has builtin kernels in binary format
   (bitstream)
-  4.5) to add DBK kernels to cpu devices, add your specific code to the following
-  functions:
+  4.5) to add DBK kernels to cpu devices, add your specific code to the
+  following functions:
        * pocl_basic_create_kernel
        * pocl_basic_free_kernel
        * pocl_cpu_init_common
@@ -93,13 +96,14 @@
     .type_qualifier = CL_KERNEL_ARG_TYPE_NONE, .type_size = 0                 \
   }
 
+/* TODO: IS_DBK is currently not used */
 /* initializers for builtin kernel */
-#define BIKD_FULL(ID, NAME, NARGS, IS_DBK, LOCAL_SIZE, ARGUMENTS...)          \
+#define BIKD_FULL(ID, NAME, NARGS, IS_DBK, LOCAL_SIZE, ...)                   \
   {                                                                           \
     .num_args = NARGS, .num_locals = ((LOCAL_SIZE > 0) ? 1 : 0),              \
     .local_sizes = (LOCAL_SIZE > 0) ? (size_t[]){ LOCAL_SIZE } : NULL,        \
     .name = NAME, .attributes = NULL,                                         \
-    .arg_info = (pocl_argument_info[NARGS]){ ARGUMENTS },                     \
+    .arg_info = (pocl_argument_info[NARGS]){ __VA_ARGS__ },                   \
     .has_arg_metadata                                                         \
       = (POCL_HAS_KERNEL_ARG_ADDRESS_QUALIFIER                                \
          | POCL_HAS_KERNEL_ARG_ACCESS_QUALIFIER                               \
@@ -107,11 +111,12 @@
          | POCL_HAS_KERNEL_ARG_NAME),                                         \
     .reqd_wg_size = { 0, 0, 0 }, .wg_size_hint = { 0, 0, 0 },                 \
     .vectypehint = { 0 }, .total_argument_storage_size = 0,                   \
-    .max_subgroups = 0, .compile_subgroups = 0, .max_workgroup_size = NULL,   \
+    .max_subgroups = NULL, .compile_subgroups = NULL,                         \
+    .max_workgroup_size = NULL,                                               \
     .preferred_wg_multiple = NULL, .local_mem_size = NULL,                    \
     .private_mem_size = NULL, .spill_mem_size = NULL, .build_hash = NULL,     \
-    .builtin_kernel_id = ID, .builtin_max_global_work = { 0, 0, 0 },          \
-    .data = NULL                                                              \
+    .builtin_kernel_id = ID, .builtin_kernel_attrs = NULL,                    \
+    .builtin_max_global_work = {{ 0, 0, 0 }}, .data = NULL                    \
   }
 
 // BIKD for non-DBK
@@ -175,35 +180,38 @@ pocl_init_builtin_kernel_metadata ()
     BIKD (POCL_CDBI_COPY_I8, "pocl.copy.i8", 2,
           BI_ARG_READ_BUF ("char*", "input"),
           BI_ARG_WRITE_BUF ("char*", "output")),
-    BIKD (
-      POCL_CDBI_ADD_I32, "pocl.add.i32", 3, BI_ARG_READ_BUF ("int*", "input1"),
-      BI_ARG_READ_BUF ("int*", "input2"), BI_ARG_WRITE_BUF ("int*", "output")),
-    BIKD (
-      POCL_CDBI_MUL_I32, "pocl.mul.i32", 3, BI_ARG_READ_BUF ("int*", "input1"),
-      BI_ARG_READ_BUF ("int*", "input2"), BI_ARG_WRITE_BUF ("int*", "output")),
+    BIKD (POCL_CDBI_ADD_I32, "pocl.add.i32", 3,
+          BI_ARG_READ_BUF ("int*", "input1"),
+          BI_ARG_READ_BUF ("int*", "input2"),
+          BI_ARG_WRITE_BUF ("int*", "output")),
+    BIKD (POCL_CDBI_MUL_I32, "pocl.mul.i32", 3,
+          BI_ARG_READ_BUF ("int*", "input1"),
+          BI_ARG_READ_BUF ("int*", "input2"),
+          BI_ARG_WRITE_BUF ("int*", "output")),
     BIKD (POCL_CDBI_LEDBLINK, "pocl.ledblink", 2,
           BI_ARG_READ_BUF ("int*", "input1"),
           BI_ARG_READ_BUF ("int*", "input2")),
     BIKD (POCL_CDBI_COUNTRED, "pocl.countred", 2,
           BI_ARG_READ_BUF ("int*", "input"),
           BI_ARG_WRITE_BUF ("int*", "output")),
-    BIKD (
-      POCL_CDBI_DNN_CONV2D_RELU_I8, "pocl.dnn.conv2d.relu.i8", 12,
-      BI_ARG_READ_BUF ("char*", "input"), BI_ARG_READ_BUF ("char*", "weights"),
-      BI_ARG_WRITE_BUF ("char*", "output"), BI_ARG_READ_BUF ("int*", "bias"),
-      BI_ARG_READ_BUF ("int*", "scale"), BI_ARG_READ_BUF ("int*", "shift"),
-      BI_ARG_READ_BUF ("char*", "zero_point"),
-      BI_ARG_POD_32b ("unsigned", "window_size_x"),
-      BI_ARG_POD_32b ("unsigned", "window_size_y"),
-      BI_ARG_POD_32b ("unsigned", "stride_x"),
-      BI_ARG_POD_32b ("unsigned", "stride_y"),
-      BI_ARG_POD_32b ("unsigned", "input_depth")),
+    BIKD (POCL_CDBI_DNN_CONV2D_RELU_I8, "pocl.dnn.conv2d.relu.i8", 12,
+          BI_ARG_READ_BUF ("char*", "input"),
+          BI_ARG_READ_BUF ("char*", "weights"),
+          BI_ARG_WRITE_BUF ("char*", "output"),
+          BI_ARG_READ_BUF ("int*", "bias"), BI_ARG_READ_BUF ("int*", "scale"),
+          BI_ARG_READ_BUF ("int*", "shift"),
+          BI_ARG_READ_BUF ("char*", "zero_point"),
+          BI_ARG_POD_32b ("unsigned", "window_size_x"),
+          BI_ARG_POD_32b ("unsigned", "window_size_y"),
+          BI_ARG_POD_32b ("unsigned", "stride_x"),
+          BI_ARG_POD_32b ("unsigned", "stride_y"),
+          BI_ARG_POD_32b ("unsigned", "input_depth")),
     BIKD_LOCAL (
-      POCL_CDBI_SGEMM_LOCAL_F32, "pocl.sgemm.local.f32", 6,
-      (2 * 16 * 16 * 4), // local mem size, 2 float arrays 16x16
-      BI_ARG_READ_BUF ("float*", "A"), BI_ARG_READ_BUF ("float*", "B"),
-      BI_ARG_WRITE_BUF ("float*", "C"), BI_ARG_POD_32b ("unsigned", "M"),
-      BI_ARG_POD_32b ("unsigned", "N"), BI_ARG_POD_32b ("unsigned", "K"), ),
+        POCL_CDBI_SGEMM_LOCAL_F32, "pocl.sgemm.local.f32", 6,
+        (2 * 16 * 16 * 4), // local mem size, 2 float arrays 16x16
+        BI_ARG_READ_BUF ("float*", "A"), BI_ARG_READ_BUF ("float*", "B"),
+        BI_ARG_WRITE_BUF ("float*", "C"), BI_ARG_POD_32b ("unsigned", "M"),
+        BI_ARG_POD_32b ("unsigned", "N"), BI_ARG_POD_32b ("unsigned", "K"), ),
     BIKD (POCL_CDBI_SGEMM_TENSOR_F16F16F32_SCALE,
           "pocl.sgemm.scale.tensor.f16f16f32", 8,
           BI_ARG_READ_BUF ("half*", "A"), BI_ARG_READ_BUF ("half*", "B"),
@@ -220,16 +228,17 @@ pocl_init_builtin_kernel_metadata ()
 
           BI_ARG_READ_BUF ("float*", "input"),
           BI_ARG_WRITE_BUF ("float*", "output"), ),
-    BIKD (
-      POCL_CDBI_DNN_DENSE_RELU_I8, "pocl.dnn.dense.relu.i8", 9,
+    BIKD (POCL_CDBI_DNN_DENSE_RELU_I8, "pocl.dnn.dense.relu.i8", 9,
 
-      BI_ARG_READ_BUF ("char*", "input"), BI_ARG_READ_BUF ("char*", "weights"),
-      BI_ARG_WRITE_BUF ("char*", "output"), BI_ARG_READ_BUF ("int*", "bias"),
-      BI_ARG_POD_32b ("unsigned", "scale"),
-      BI_ARG_POD_32b ("unsigned", "shift"),
-      BI_ARG_POD_32b ("unsigned", "zero_point"),
-      BI_ARG_POD_32b ("unsigned", "output_minus"),
-      BI_ARG_POD_32b ("unsigned", "input_size"), ),
+          BI_ARG_READ_BUF ("char*", "input"),
+          BI_ARG_READ_BUF ("char*", "weights"),
+          BI_ARG_WRITE_BUF ("char*", "output"),
+          BI_ARG_READ_BUF ("int*", "bias"),
+          BI_ARG_POD_32b ("unsigned", "scale"),
+          BI_ARG_POD_32b ("unsigned", "shift"),
+          BI_ARG_POD_32b ("unsigned", "zero_point"),
+          BI_ARG_POD_32b ("unsigned", "output_minus"),
+          BI_ARG_POD_32b ("unsigned", "input_size"), ),
     BIKD (POCL_CDBI_MAXPOOL_I8, "pocl.maxpool.i8", 6,
 
           BI_ARG_READ_BUF ("char*", "input"),
@@ -263,38 +272,41 @@ pocl_init_builtin_kernel_metadata ()
     BIKD (POCL_CDBI_STREAMIN_I32, "pocl.streamin.i32", 1,
           BI_ARG_WRITE_BUF ("int*", "output")),
     BIKD (
-      POCL_CDBI_VOTE_U32, "pocl.vote.u32", 10,
-      BI_ARG_READ_BUF ("int*", "output"),
-      BI_ARG_POD_32b ("unsigned", "num_inputs"),
-      BI_ARG_READ_BUF ("int*", "input0"), BI_ARG_READ_BUF ("int*", "input1"),
-      BI_ARG_READ_BUF ("int*", "input2"), BI_ARG_READ_BUF ("int*", "input3"),
-      BI_ARG_READ_BUF ("int*", "input4"), BI_ARG_READ_BUF ("int*", "input5"),
-      BI_ARG_READ_BUF ("int*", "input6"),
-      BI_ARG_READ_BUF ("int*", "input7"), ),
+        POCL_CDBI_VOTE_U32, "pocl.vote.u32", 10,
+        BI_ARG_READ_BUF ("int*", "output"),
+        BI_ARG_POD_32b ("unsigned", "num_inputs"),
+        BI_ARG_READ_BUF ("int*", "input0"), BI_ARG_READ_BUF ("int*", "input1"),
+        BI_ARG_READ_BUF ("int*", "input2"), BI_ARG_READ_BUF ("int*", "input3"),
+        BI_ARG_READ_BUF ("int*", "input4"), BI_ARG_READ_BUF ("int*", "input5"),
+        BI_ARG_READ_BUF ("int*", "input6"),
+        BI_ARG_READ_BUF ("int*", "input7"), ),
+    BIKD (POCL_CDBI_VOTE_U8, "pocl.vote.u8", 10,
+          BI_ARG_READ_BUF ("char*", "output"),
+          BI_ARG_POD_32b ("unsigned", "num_inputs"),
+          BI_ARG_READ_BUF ("char*", "input0"),
+          BI_ARG_READ_BUF ("char*", "input1"),
+          BI_ARG_READ_BUF ("char*", "input2"),
+          BI_ARG_READ_BUF ("char*", "input3"),
+          BI_ARG_READ_BUF ("char*", "input4"),
+          BI_ARG_READ_BUF ("char*", "input5"),
+          BI_ARG_READ_BUF ("char*", "input6"),
+          BI_ARG_READ_BUF ("char*", "input7"), ),
     BIKD (
-      POCL_CDBI_VOTE_U8, "pocl.vote.u8", 10,
-      BI_ARG_READ_BUF ("char*", "output"),
-      BI_ARG_POD_32b ("unsigned", "num_inputs"),
-      BI_ARG_READ_BUF ("char*", "input0"), BI_ARG_READ_BUF ("char*", "input1"),
-      BI_ARG_READ_BUF ("char*", "input2"), BI_ARG_READ_BUF ("char*", "input3"),
-      BI_ARG_READ_BUF ("char*", "input4"), BI_ARG_READ_BUF ("char*", "input5"),
-      BI_ARG_READ_BUF ("char*", "input6"),
-      BI_ARG_READ_BUF ("char*", "input7"), ),
-    BIKD (
-      POCL_CDBI_DNN_CONV2D_NCHW_F32, "pocl.dnn.conv2d.nchw.f32", 20,
+        POCL_CDBI_DNN_CONV2D_NCHW_F32, "pocl.dnn.conv2d.nchw.f32", 20,
 
-      BI_ARG_READ_BUF ("float*", "input"),
-      BI_ARG_READ_BUF ("float*", "weights"),
-      BI_ARG_WRITE_BUF ("float*", "output"), BI_ARG_POD_32b ("int", "input_n"),
-      BI_ARG_POD_32b ("int", "input_c"), BI_ARG_POD_32b ("int", "input_h"),
-      BI_ARG_POD_32b ("int", "input_w"), BI_ARG_POD_32b ("int", "filt_k"),
-      BI_ARG_POD_32b ("int", "filt_c"), BI_ARG_POD_32b ("int", "filt_h"),
-      BI_ARG_POD_32b ("int", "filt_w"), BI_ARG_POD_32b ("int", "stride_h"),
-      BI_ARG_POD_32b ("int", "stride_w"), BI_ARG_POD_32b ("int", "dilation_h"),
-      BI_ARG_POD_32b ("int", "dilation_w"),
-      BI_ARG_POD_32b ("int", "padding_h"), BI_ARG_POD_32b ("int", "padding_w"),
-      BI_ARG_POD_32b ("int", "groups"), BI_ARG_POD_32b ("float", "alpha"),
-      BI_ARG_POD_32b ("float", "beta"), ),
+        BI_ARG_READ_BUF ("float*", "input"),
+        BI_ARG_READ_BUF ("float*", "weights"),
+        BI_ARG_WRITE_BUF ("float*", "output"),
+        BI_ARG_POD_32b ("int", "input_n"), BI_ARG_POD_32b ("int", "input_c"),
+        BI_ARG_POD_32b ("int", "input_h"), BI_ARG_POD_32b ("int", "input_w"),
+        BI_ARG_POD_32b ("int", "filt_k"), BI_ARG_POD_32b ("int", "filt_c"),
+        BI_ARG_POD_32b ("int", "filt_h"), BI_ARG_POD_32b ("int", "filt_w"),
+        BI_ARG_POD_32b ("int", "stride_h"), BI_ARG_POD_32b ("int", "stride_w"),
+        BI_ARG_POD_32b ("int", "dilation_h"),
+        BI_ARG_POD_32b ("int", "dilation_w"),
+        BI_ARG_POD_32b ("int", "padding_h"),
+        BI_ARG_POD_32b ("int", "padding_w"), BI_ARG_POD_32b ("int", "groups"),
+        BI_ARG_POD_32b ("float", "alpha"), BI_ARG_POD_32b ("float", "beta"), ),
     BIKD (POCL_CDBI_OPENVX_SCALEIMAGE_NN_U8,
           "org.khronos.openvx.scale_image.nn.u8", 6,
 
@@ -396,7 +408,7 @@ pocl_init_builtin_kernel_metadata ()
     BIKD (POCL_CDBI_GAUSSIAN3X3_P512, "pocl.gaussian3x3.p512", 2,
           BI_ARG_READ_PIPE ("uchar64", "in"),
           BI_ARG_WRITE_PIPE ("uchar64", "out"), ),
-    BIKD_DBK (POCL_CDBI_DBK_EXP_GEMM, "exp_gemm", 6,
+    BIKD_DBK (CL_DBK_GEMM_EXP, "gemm_exp", 6,
               // The types are placeholders
               BI_ARG_READ_BUF ("unsigned char*", "a"),
               BI_ARG_READ_BUF ("unsigned char*", "b"),
@@ -407,18 +419,31 @@ pocl_init_builtin_kernel_metadata ()
               // given to clCreateProgramWithDefinedBuiltinKernels
               BI_ARG_POD_MUTABLE ("mutable", "alpha"),
               BI_ARG_POD_MUTABLE ("mutable", "beta"), ),
-    BIKD_DBK (POCL_CDBI_DBK_EXP_MATMUL, "exp_matmul", 3,
+    BIKD_DBK (CL_DBK_MATMUL_EXP, "matmul_exp", 3,
               BI_ARG_READ_BUF ("unsigned char*", "a"),
               BI_ARG_READ_BUF ("unsigned char*", "b"),
               BI_ARG_WRITE_BUF ("unsigned char*", "c"), ),
-    BIKD_DBK (POCL_CDBI_DBK_EXP_JPEG_ENCODE, "exp_jpeg_encode", 3,
+    BIKD_DBK (CL_DBK_JPEG_ENCODE_EXP, "jpeg_encode_exp", 3,
               BI_ARG_READ_BUF ("uint8_t*", "image"),
               BI_ARG_WRITE_BUF ("uint8_t*", "jpeg"),
               BI_ARG_WRITE_BUF ("int64_t*", "jpeg_size"), ),
-    BIKD_DBK (POCL_CDBI_DBK_EXP_JPEG_DECODE, "exp_jpeg_decode", 3,
+    BIKD_DBK (CL_DBK_JPEG_DECODE_EXP, "jpeg_decode_exp", 3,
               BI_ARG_READ_BUF ("uint8_t*", "jpeg"),
               BI_ARG_READ_BUF ("int64_t*", "jpeg_size"),
               BI_ARG_WRITE_BUF ("uint8_t*", "image"), ),
+    BIKD_DBK (CL_DBK_ONNX_INFERENCE_EXP, "onnx_inference_exp", 4,
+              BI_ARG_READ_BUF ("unsigned long*", "input_offsets"),
+              BI_ARG_READ_BUF ("unsigned char*", "inputs"),
+              BI_ARG_READ_BUF ("unsigned long*", "output_offsets"),
+              BI_ARG_WRITE_BUF ("unsigned char*", "outputs"), ),
+    BIKD_DBK (CL_DBK_IMG_COLOR_CONVERT_EXP, "img_color_convert_exp", 2,
+              BI_ARG_READ_BUF ("uint8_t*", "input"),
+              BI_ARG_WRITE_BUF ("uint8_t*", "output"), ),
+    BIKD_DBK (CL_DBK_NMS_BOX_EXP, "nms_box_exp", 4,
+              BI_ARG_READ_BUF ("int32_t*", "boxes"),
+              BI_ARG_READ_BUF ("float*", "scores"),
+              BI_ARG_WRITE_BUF ("int32_t*", "index_count"),
+              BI_ARG_WRITE_BUF ("int32_t*", "indices"), ),
 
   };
   memcpy (pocl_BIDescriptors, temporary_BIDescriptors,
@@ -494,57 +519,57 @@ pocl_clone_builtin_kernel_metadata_by_name (cl_device_id dev,
 static void
 pocl_set_defined_arg_info (pocl_argument_info *DstArg,
                            pocl_argument_info *SrcArg,
-                           cl_tensor_datatype dtype)
+                           cl_tensor_datatype_exp dtype)
 {
   memcpy (DstArg, SrcArg, sizeof (pocl_argument_info));
   DstArg->type = POCL_ARG_TYPE_NONE;
   switch (dtype)
     {
-    case CL_TENSOR_DTYPE_FP16:
+    case CL_TENSOR_DTYPE_FP16_EXP:
       DstArg->type_name = "half";
       DstArg->type_size = 2;
       break;
-    case CL_TENSOR_DTYPE_FP32:
+    case CL_TENSOR_DTYPE_FP32_EXP:
       DstArg->type_name = "float";
       DstArg->type_size = 4;
       break;
-    case CL_TENSOR_DTYPE_FP64:
+    case CL_TENSOR_DTYPE_FP64_EXP:
       DstArg->type_name = "double";
       DstArg->type_size = 8;
       break;
     // case CL_TENSOR_FP8: DstArg->type_name = "fp8"; DstArg->type_size = 1;
     // break;
-    case CL_TENSOR_DTYPE_INT64:
+    case CL_TENSOR_DTYPE_INT64_EXP:
       DstArg->type_name = "long";
       DstArg->type_size = 8;
       break;
-    case CL_TENSOR_DTYPE_INT32:
+    case CL_TENSOR_DTYPE_INT32_EXP:
       DstArg->type_name = "int";
       DstArg->type_size = 4;
       break;
-    case CL_TENSOR_DTYPE_INT16:
+    case CL_TENSOR_DTYPE_INT16_EXP:
       DstArg->type_name = "short";
       DstArg->type_size = 2;
       break;
-    case CL_TENSOR_DTYPE_INT8:
+    case CL_TENSOR_DTYPE_INT8_EXP:
       DstArg->type_name = "char";
       DstArg->type_size = 1;
       break;
     // case CL_TENSOR_INT4: DstArg->type_name = "int4_t"; DstArg->type_size =
     // 1; break;
-    case CL_TENSOR_DTYPE_UINT64:
+    case CL_TENSOR_DTYPE_UINT64_EXP:
       DstArg->type_name = "ulong";
       DstArg->type_size = 8;
       break;
-    case CL_TENSOR_DTYPE_UINT32:
+    case CL_TENSOR_DTYPE_UINT32_EXP:
       DstArg->type_name = "uint";
       DstArg->type_size = 4;
       break;
-    case CL_TENSOR_DTYPE_UINT16:
+    case CL_TENSOR_DTYPE_UINT16_EXP:
       DstArg->type_name = "ushort";
       DstArg->type_size = 2;
       break;
-    case CL_TENSOR_DTYPE_UINT8:
+    case CL_TENSOR_DTYPE_UINT8_EXP:
       DstArg->type_name = "uchar";
       DstArg->type_size = 1;
       break;
@@ -562,7 +587,7 @@ pocl_set_defined_arg_info (pocl_argument_info *DstArg,
  * (that should be in the kernel metadata) depends on the builtin kernel
  * attributes. This functions sets up the actual metadata types. */
 static void
-pocl_generate_dbk_defined_arg_info (BuiltinKernelId kernel_id,
+pocl_generate_dbk_defined_arg_info (cl_dbk_id_exp kernel_id,
                                     pocl_kernel_metadata_t *desc,
                                     pocl_argument_info *extra,
                                     void *attrs)
@@ -570,10 +595,10 @@ pocl_generate_dbk_defined_arg_info (BuiltinKernelId kernel_id,
   switch (kernel_id)
     {
     // currently only GEMM has mutable POD arguments
-    case POCL_CDBI_DBK_EXP_GEMM:
+    case CL_DBK_GEMM_EXP:
       {
-        const cl_dbk_attributes_exp_gemm *gemm_attrs
-          = (const cl_dbk_attributes_exp_gemm *)attrs;
+        const cl_dbk_attributes_gemm_exp *gemm_attrs
+          = (const cl_dbk_attributes_gemm_exp *)attrs;
         // BI_ARG_POD_MUTABLE("mutable", "alpha"),
         // BI_ARG_POD_MUTABLE("mutable", "beta"),
         //  TODO should we support separate datatypes for alpha/beta ?
@@ -590,7 +615,7 @@ pocl_generate_dbk_defined_arg_info (BuiltinKernelId kernel_id,
 /* creates a deep copy of pocl_kernel_metadata_t in 'target' */
 static cl_int
 pocl_clone_builtin_kernel_metadata_by_id (cl_device_id dev,
-                                          BuiltinKernelId id,
+                                          cl_dbk_id_exp id,
                                           pocl_kernel_metadata_t *target,
                                           void *attrs)
 {
@@ -687,7 +712,8 @@ pocl_restore_builtin_kernel_name (cl_kernel kernel, char *saved_name)
 }
 
 static cl_bool
-pocl_tensor_shape_equals (const cl_tensor_desc *A, const cl_tensor_desc *B)
+pocl_tensor_shape_equals (const cl_tensor_desc_exp *A,
+                          const cl_tensor_desc_exp *B)
 {
   assert (A);
   assert (B);
@@ -705,42 +731,46 @@ pocl_tensor_shape_equals (const cl_tensor_desc *A, const cl_tensor_desc *B)
 static int
 pocl_validate_khr_gemm (cl_bool TransA,
                         cl_bool TransB,
-                        const cl_tensor_desc *TenA,
-                        const cl_tensor_desc *TenB,
-                        const cl_tensor_desc *TenCIOpt,
-                        const cl_tensor_desc *TenCOut,
-                        const cl_tensor_datatype_value *Alpha,
-                        const cl_tensor_datatype_value *Beta)
+                        const cl_tensor_desc_exp *TenA,
+                        const cl_tensor_desc_exp *TenB,
+                        const cl_tensor_desc_exp *TenCIOpt,
+                        const cl_tensor_desc_exp *TenCOut,
+                        const cl_tensor_datatype_value_exp *Alpha,
+                        const cl_tensor_datatype_value_exp *Beta)
 {
-  POCL_RETURN_ERROR_COND ((TenA == NULL), CL_INVALID_DBK_ATTRIBUTE);
-  POCL_RETURN_ERROR_COND ((TenB == NULL), CL_INVALID_DBK_ATTRIBUTE);
-  POCL_RETURN_ERROR_COND ((TenCOut == NULL), CL_INVALID_DBK_ATTRIBUTE);
+  POCL_RETURN_ERROR_COND ((TenA == NULL), CL_DBK_INVALID_ATTRIBUTE_EXP);
+  POCL_RETURN_ERROR_COND ((TenB == NULL), CL_DBK_INVALID_ATTRIBUTE_EXP);
+  POCL_RETURN_ERROR_COND ((TenCOut == NULL), CL_DBK_INVALID_ATTRIBUTE_EXP);
 
   if (Alpha)
     {
-      POCL_RETURN_ERROR_COND (Alpha->l == 0, CL_INVALID_DBK_ATTRIBUTE);
+      /* FIXME: potential non-conformant C type punning here. Also, -0.0f is
+       * not handled correctly. */
+      POCL_RETURN_ERROR_COND (Alpha->ul == 0, CL_DBK_INVALID_ATTRIBUTE_EXP);
     }
   // beta can be 0
-  // POCL_RETURN_ERROR_COND (Beta->l == 0, CL_INVALID_DBK_ATTRIBUTE);
+  // POCL_RETURN_ERROR_COND (Beta->ul == 0, CL_DBK_INVALID_ATTRIBUTE_EXP);
 
   // TBC: 4D+ tensor could be supported by treating the additional
   //      dimensions as batch dimensions - but it might not be
   //      worthwhile due the extra work to support them and processing
   //      overhead they may impose.
-  POCL_RETURN_ERROR_ON ((TenA->rank > 3), CL_INVALID_TENSOR_RANK,
+  POCL_RETURN_ERROR_ON ((TenA->rank > 3), CL_INVALID_TENSOR_RANK_EXP,
                         "Unsupported high-degree tensors.\n");
-  POCL_RETURN_ERROR_ON ((TenA->rank < 2), CL_INVALID_TENSOR_RANK,
+  POCL_RETURN_ERROR_ON ((TenA->rank < 2), CL_INVALID_TENSOR_RANK_EXP,
                         "Rank of A/B tensors must be in {2,3}.\n");
 
-  POCL_RETURN_ERROR_ON ((TenA->rank != TenB->rank), CL_INVALID_TENSOR_RANK,
+  POCL_RETURN_ERROR_ON ((TenA->rank != TenB->rank), CL_INVALID_TENSOR_RANK_EXP,
                         "Rank mismatch between A and B\n");
-  POCL_RETURN_ERROR_ON ((TenB->rank != TenCOut->rank), CL_INVALID_TENSOR_RANK,
+  POCL_RETURN_ERROR_ON ((TenB->rank != TenCOut->rank),
+                        CL_INVALID_TENSOR_RANK_EXP,
                         "Rank mismatch between A/B and COut\n");
 
   POCL_RETURN_ERROR_ON (
     (TenCIOpt != NULL
      && pocl_tensor_shape_equals (TenCIOpt, TenCOut) == CL_FALSE),
-    CL_INVALID_TENSOR_SHAPE, "Tensor shape mismatch between C_in and C_out.");
+    CL_INVALID_TENSOR_SHAPE_EXP,
+    "Tensor shape mismatch between C_in and C_out.");
 
   size_t BatchDims = TenA->rank - 2;
 
@@ -767,9 +797,9 @@ pocl_validate_khr_gemm (cl_bool TransA,
   size_t COm = TenCOut->shape[BatchDims + 0];
   size_t COn = TenCOut->shape[BatchDims + 1];
 
-  POCL_RETURN_ERROR_COND ((Ak != Bk), CL_INVALID_DBK_ATTRIBUTE);
-  POCL_RETURN_ERROR_COND ((Am != COm), CL_INVALID_DBK_ATTRIBUTE);
-  POCL_RETURN_ERROR_COND ((Bn != COn), CL_INVALID_DBK_ATTRIBUTE);
+  POCL_RETURN_ERROR_COND ((Ak != Bk), CL_DBK_INVALID_ATTRIBUTE_EXP);
+  POCL_RETURN_ERROR_COND ((Am != COm), CL_DBK_INVALID_ATTRIBUTE_EXP);
+  POCL_RETURN_ERROR_COND ((Bn != COn), CL_DBK_INVALID_ATTRIBUTE_EXP);
 
   // Check batch dimensions match.
   if (TenA->rank == 3)
@@ -778,24 +808,26 @@ pocl_validate_khr_gemm (cl_bool TransA,
       POCL_RETURN_ERROR_ON ((BatchSize > 1
                              && (BatchSize != TenB->shape[0]
                                  || TenB->shape[0] != TenCOut->shape[0])),
-                            CL_INVALID_TENSOR_SHAPE, "Batch size mismatch.\n");
+                            CL_INVALID_TENSOR_SHAPE_EXP,
+                            "Batch size mismatch.\n");
 
       POCL_RETURN_ERROR_ON (
         (BatchSize > 1 && TenCIOpt && TenCIOpt->shape[0] != TenCOut->shape[0]),
-        CL_INVALID_TENSOR_SHAPE, "Batch size mismatch.\n");
+        CL_INVALID_TENSOR_SHAPE_EXP, "Batch size mismatch.\n");
     }
 
   // Check datatypes
   POCL_RETURN_ERROR_ON (
     (TenA->dtype >= CL_TENSOR_DTYPE_LAST || TenB->dtype >= CL_TENSOR_DTYPE_LAST
      || TenCOut->dtype >= CL_TENSOR_DTYPE_LAST),
-    CL_INVALID_TENSOR_DATATYPE, "Unknown data type in input Tensors");
+    CL_INVALID_TENSOR_DATATYPE_EXP, "Unknown data type in input Tensors");
 
-  POCL_RETURN_ERROR_ON ((TenA->dtype != TenB->dtype), CL_INVALID_TENSOR_DATATYPE,
+  POCL_RETURN_ERROR_ON ((TenA->dtype != TenB->dtype),
+                        CL_INVALID_TENSOR_DATATYPE_EXP,
                         "datatype mismatch between A and B.\n");
 
   POCL_RETURN_ERROR_ON (TenCIOpt && (TenCIOpt->dtype != TenCOut->dtype),
-                        CL_INVALID_TENSOR_DATATYPE,
+                        CL_INVALID_TENSOR_DATATYPE_EXP,
                         "datatype mismatch between C_ind and C_out\n");
 
   // TODO: check validity of data layouts of the tensors. Now assumes they're
@@ -805,7 +837,7 @@ pocl_validate_khr_gemm (cl_bool TransA,
 }
 
 int
-pocl_validate_dbk_attributes (BuiltinKernelId kernel_id,
+pocl_validate_dbk_attributes (cl_dbk_id_exp kernel_id,
                               const void *kernel_attributes,
                               pocl_validate_khr_gemm_callback_t GemmCB)
 {
@@ -813,75 +845,124 @@ pocl_validate_dbk_attributes (BuiltinKernelId kernel_id,
     GemmCB = pocl_validate_khr_gemm;
   switch (kernel_id)
     {
-    case POCL_CDBI_DBK_EXP_GEMM:
+    case CL_DBK_GEMM_EXP:
       {
-        const cl_dbk_attributes_exp_gemm *Attrs
-          = (const cl_dbk_attributes_exp_gemm *)kernel_attributes;
+        const cl_dbk_attributes_gemm_exp *Attrs
+          = (const cl_dbk_attributes_gemm_exp *)kernel_attributes;
 
         return GemmCB (Attrs->trans_a, Attrs->trans_b, &Attrs->a, &Attrs->b,
                        &Attrs->c_in, &Attrs->c_out, &Attrs->alpha,
                        &Attrs->beta);
       }
-    case POCL_CDBI_DBK_EXP_MATMUL:
+    case CL_DBK_MATMUL_EXP:
       {
-        const cl_dbk_attributes_exp_matmul *Attrs
-          = (const cl_dbk_attributes_exp_matmul *)kernel_attributes;
+        const cl_dbk_attributes_matmul_exp *Attrs
+          = (const cl_dbk_attributes_matmul_exp *)kernel_attributes;
 
         return GemmCB (Attrs->trans_a, Attrs->trans_b, &Attrs->a, &Attrs->b,
                        NULL, &Attrs->c, NULL, NULL);
       }
-    case POCL_CDBI_DBK_EXP_JPEG_DECODE:
-    case POCL_CDBI_DBK_EXP_JPEG_ENCODE:
+    case CL_DBK_JPEG_DECODE_EXP:
+    case CL_DBK_JPEG_ENCODE_EXP:
       return pocl_validate_khr_jpeg (kernel_id, kernel_attributes);
+#ifdef HAVE_ONNXRT
+    case CL_DBK_ONNX_INFERENCE_EXP:
+      {
+        /* TODO: validate I/O tensor list */
+        const cl_dbk_attributes_onnx_inference_exp *attrs
+          = (cl_dbk_attributes_onnx_inference_exp *)kernel_attributes;
+
+        if (attrs->num_initializers == 0
+            && (attrs->initializer_names != NULL
+                || attrs->initializer_data != NULL
+                || attrs->initializer_tensor_descs != NULL))
+          return CL_INVALID_ARG_VALUE;
+        if (attrs->num_initializers == 1
+            && (attrs->initializer_names == NULL
+                || attrs->initializer_data == NULL
+                || attrs->initializer_tensor_descs == NULL))
+          return CL_INVALID_ARG_VALUE;
+
+        return CL_SUCCESS;
+      }
+#endif
+    case CL_DBK_IMG_COLOR_CONVERT_EXP:
+      return pocl_validate_img_attrs (kernel_id, kernel_attributes);
+#ifdef HAVE_OPENCV
+    case CL_DBK_NMS_BOX_EXP:
+      return pocl_validate_dnn_utils_attrs (kernel_id, kernel_attributes);
+#endif
     default:
       break;
     }
-  POCL_RETURN_ERROR_ON (1, CL_INVALID_DBK_ID, "Unknown builtin kernel ID: %u",
-                        kernel_id);
+  POCL_RETURN_ERROR (CL_DBK_INVALID_ID_EXP, "Unknown builtin kernel ID: %u.\n",
+                     kernel_id);
 }
 
 void *
-pocl_copy_defined_builtin_attributes (BuiltinKernelId kernel_id,
+pocl_copy_defined_builtin_attributes (cl_dbk_id_exp kernel_id,
                                       const void *kernel_attributes)
 {
   int err = CL_SUCCESS;
   switch (kernel_id)
     {
-    case POCL_CDBI_DBK_EXP_GEMM:
+    case CL_DBK_GEMM_EXP:
       {
-        cl_dbk_attributes_exp_gemm *attrs
-          = malloc (sizeof (cl_dbk_attributes_exp_gemm));
+        cl_dbk_attributes_gemm_exp *attrs
+          = malloc (sizeof (cl_dbk_attributes_gemm_exp));
         if (attrs == NULL)
           return NULL;
-        cl_dbk_attributes_exp_gemm *src
-          = (cl_dbk_attributes_exp_gemm *)kernel_attributes;
-        memcpy (attrs, src, sizeof (cl_dbk_attributes_exp_gemm));
+        cl_dbk_attributes_gemm_exp *src
+          = (cl_dbk_attributes_gemm_exp *)kernel_attributes;
+        memcpy (attrs, src, sizeof (cl_dbk_attributes_gemm_exp));
         err = pocl_copy_tensor_desc_layout (&attrs->a, &src->a);
-        err = pocl_copy_tensor_desc_layout (&attrs->b, &src->b);
-        err = pocl_copy_tensor_desc_layout (&attrs->c_in, &src->c_in);
-        err = pocl_copy_tensor_desc_layout (&attrs->c_out, &src->c_out);
+        err |= pocl_copy_tensor_desc_layout(&attrs->b, &src->b);
+        err |= pocl_copy_tensor_desc_layout(&attrs->c_in, &src->c_in);
+        err |= pocl_copy_tensor_desc_layout(&attrs->c_out, &src->c_out);
+        if (err != CL_SUCCESS)
+          {
+            POCL_MSG_WARN (
+              "Could not copy CL_DBK_GEMM_EXP attributes (err: %d).\n", err);
+            free (attrs);
+            return NULL;
+          }
 
         return attrs;
       }
-    case POCL_CDBI_DBK_EXP_MATMUL:
+    case CL_DBK_MATMUL_EXP:
       {
-        cl_dbk_attributes_exp_matmul *attrs
-          = malloc (sizeof (cl_dbk_attributes_exp_matmul));
+        cl_dbk_attributes_matmul_exp *attrs
+          = malloc (sizeof (cl_dbk_attributes_matmul_exp));
         if (attrs == NULL)
           return NULL;
-        cl_dbk_attributes_exp_matmul *src
-          = (cl_dbk_attributes_exp_matmul *)kernel_attributes;
-        memcpy (attrs, src, sizeof (cl_dbk_attributes_exp_matmul));
+        cl_dbk_attributes_matmul_exp *src
+          = (cl_dbk_attributes_matmul_exp *)kernel_attributes;
+        memcpy (attrs, src, sizeof (cl_dbk_attributes_matmul_exp));
 
         err = pocl_copy_tensor_desc_layout (&attrs->a, &src->a);
-        err = pocl_copy_tensor_desc_layout (&attrs->b, &src->b);
-        err = pocl_copy_tensor_desc_layout (&attrs->c, &src->c);
-
+        err |= pocl_copy_tensor_desc_layout (&attrs->b, &src->b);
+        err |= pocl_copy_tensor_desc_layout (&attrs->c, &src->c);
+        if (err != CL_SUCCESS) {
+            POCL_MSG_WARN (
+              "Could not copy CL_DBK_MATMUL_EXP attributes (err: %d).\n", err);
+            free (attrs);
+            return NULL;
+        }
         return attrs;
       }
-    case POCL_CDBI_DBK_EXP_JPEG_ENCODE:
-    case POCL_CDBI_DBK_EXP_JPEG_DECODE:
+    case CL_DBK_JPEG_ENCODE_EXP:
+    case CL_DBK_JPEG_DECODE_EXP:
       return pocl_copy_dbk_attributes_khr_jpeg (kernel_id, kernel_attributes);
+#ifdef HAVE_ONNXRT
+    case CL_DBK_ONNX_INFERENCE_EXP:
+      return pocl_copy_onnx_inference_dbk_attributes (kernel_attributes);
+#endif
+    case CL_DBK_IMG_COLOR_CONVERT_EXP:
+      return pocl_copy_img_attrs (kernel_id, kernel_attributes);
+#ifdef HAVE_OPENCV
+    case CL_DBK_NMS_BOX_EXP:
+      return pocl_copy_dnn_utils_attrs (kernel_id, kernel_attributes);
+#endif
     default:
       break;
     }
@@ -890,39 +971,505 @@ pocl_copy_defined_builtin_attributes (BuiltinKernelId kernel_id,
 }
 
 int
-pocl_release_defined_builtin_attributes (BuiltinKernelId kernel_id,
+pocl_release_defined_builtin_attributes (cl_dbk_id_exp kernel_id,
                                          void *kernel_attributes)
 {
   switch (kernel_id)
     {
-    case POCL_CDBI_DBK_EXP_GEMM:
+    case CL_DBK_GEMM_EXP:
       {
-        cl_dbk_attributes_exp_gemm *attrs
-          = (cl_dbk_attributes_exp_gemm *)kernel_attributes;
-        POCL_MEM_FREE (attrs->a.layout);
-        POCL_MEM_FREE (attrs->b.layout);
-        POCL_MEM_FREE (attrs->c_in.layout);
-        POCL_MEM_FREE (attrs->c_out.layout);
-        POCL_MEM_FREE (attrs);
+        cl_dbk_attributes_gemm_exp *attrs
+          = (cl_dbk_attributes_gemm_exp *)kernel_attributes;
+        free ((void *)attrs->a.layout);
+        free ((void *)attrs->b.layout);
+        free ((void *)attrs->c_in.layout);
+        free ((void *)attrs->c_out.layout);
+        free (attrs);
         return CL_SUCCESS;
       }
-    case POCL_CDBI_DBK_EXP_MATMUL:
+    case CL_DBK_MATMUL_EXP:
       {
-        cl_dbk_attributes_exp_matmul *attrs
-          = (cl_dbk_attributes_exp_matmul *)kernel_attributes;
-        POCL_MEM_FREE (attrs->a.layout);
-        POCL_MEM_FREE (attrs->b.layout);
-        POCL_MEM_FREE (attrs->c.layout);
-        POCL_MEM_FREE (attrs);
+        cl_dbk_attributes_matmul_exp *attrs
+          = (cl_dbk_attributes_matmul_exp *)kernel_attributes;
+        free ((void *)attrs->a.layout);
+        free ((void *)attrs->b.layout);
+        free ((void *)attrs->c.layout);
+        free (attrs);
         return CL_SUCCESS;
       }
-    case POCL_CDBI_DBK_EXP_JPEG_ENCODE:
-    case POCL_CDBI_DBK_EXP_JPEG_DECODE:
+    case CL_DBK_JPEG_ENCODE_EXP:
+    case CL_DBK_JPEG_DECODE_EXP:
       return pocl_release_dbk_attributes_khr_jpeg (kernel_id,
                                                    kernel_attributes);
+#ifdef HAVE_ONNXRT
+    case CL_DBK_ONNX_INFERENCE_EXP:
+      {
+        pocl_release_onnx_inference_dbk_attributes (kernel_attributes);
+        return CL_SUCCESS;
+      }
+#endif
+    case CL_DBK_IMG_COLOR_CONVERT_EXP:
+      return pocl_release_img_attrs (kernel_id, kernel_attributes);
+#ifdef HAVE_OPENCV
+    case CL_DBK_NMS_BOX_EXP:
+      {
+        pocl_release_dnn_utils_attrs (kernel_id, kernel_attributes);
+        return CL_SUCCESS;
+      }
+#endif
     default:
       break;
     }
-  POCL_RETURN_ERROR_ON (1, CL_INVALID_DBK_ID, "Unknown builtin kernel ID: %u",
-                        kernel_id);
+  POCL_RETURN_ERROR (CL_DBK_INVALID_ID_EXP, "Unknown builtin kernel ID: %u.\n",
+                     kernel_id);
 }
+
+/** Helper functions for (de)serializing dbk attributes in the remote driver */
+
+/******************************* SERIALIZATION *******************************/
+#define SERIALIZE(name)                                                       \
+  do                                                                          \
+    {                                                                         \
+      if (buf)                                                                \
+        {                                                                     \
+          memcpy (*buf, &(name), sizeof (name));                              \
+          *buf += sizeof (name);                                              \
+        }                                                                     \
+      total += sizeof (name);                                                 \
+    }                                                                         \
+  while (0)
+
+#define COPY(name, size)                                                      \
+  do                                                                          \
+    {                                                                         \
+      if (buf)                                                                \
+        {                                                                     \
+          memcpy (*buf, (name), size);                                        \
+          *buf += size;                                                       \
+        }                                                                     \
+      total += size;                                                          \
+    }                                                                         \
+  while (0)
+
+uint64_t
+pocl_serialize_cl_tensor_desc (const cl_tensor_desc_exp *t, char **buf)
+{
+  uint64_t total = 0;
+  uint8_t has_layout = t->layout != NULL;
+
+  SERIALIZE (t->rank);
+  SERIALIZE (t->dtype);
+  SERIALIZE (t->properties);
+  SERIALIZE (t->shape);
+  SERIALIZE (t->layout_type);
+  SERIALIZE (has_layout);
+  if (has_layout)
+    {
+      switch (t->layout_type)
+        {
+        case CL_TENSOR_LAYOUT_BLAS_EXP:
+          {
+            const cl_tensor_layout_blas_exp *layout = t->layout;
+            SERIALIZE (layout->leading_dims);
+            break;
+          }
+        case CL_TENSOR_LAYOUT_BLAS_PITCHED_EXP:
+          {
+            const cl_tensor_layout_blas_pitched_exp *layout = t->layout;
+            SERIALIZE (layout->leading_dims);
+            SERIALIZE (layout->leading_strides);
+            break;
+          }
+        case CL_TENSOR_LAYOUT_ML_EXP:
+          {
+            const cl_tensor_layout_ml_exp *layout = t->layout;
+            SERIALIZE (layout->ml_type);
+            break;
+          }
+        default:
+          break;
+        }
+    }
+
+  return total;
+}
+
+uint64_t
+pocl_serialize_image_attr (const pocl_image_attr_t *t, char **buf)
+{
+
+  uint64_t total = 0;
+  SERIALIZE (t->width);
+  SERIALIZE (t->height);
+  SERIALIZE (t->color_space);
+  SERIALIZE (t->channel_range);
+  SERIALIZE (t->format);
+  return total;
+}
+
+uint64_t
+pocl_serialize_dbk_attribs (cl_dbk_id_exp id,
+                            const void *attributes,
+                            char **buf)
+{
+  /* First item shall be the cl_dbk_id_exp */
+  uint64_t total = 0;
+  uint64_t dbk_id = id;
+
+  SERIALIZE (dbk_id);
+  switch (id)
+    {
+    case CL_DBK_GEMM_EXP:
+      {
+        const cl_dbk_attributes_gemm_exp *attr = attributes;
+        total += pocl_serialize_cl_tensor_desc (&attr->a, buf);
+        total += pocl_serialize_cl_tensor_desc (&attr->b, buf);
+        total += pocl_serialize_cl_tensor_desc (&attr->c_in, buf);
+        total += pocl_serialize_cl_tensor_desc (&attr->c_out, buf);
+        SERIALIZE (attr->trans_a);
+        SERIALIZE (attr->trans_b);
+        SERIALIZE (attr->alpha);
+        SERIALIZE (attr->beta);
+        SERIALIZE (attr->kernel_props);
+        break;
+      }
+    case CL_DBK_MATMUL_EXP:
+      {
+        const cl_dbk_attributes_matmul_exp *attr = attributes;
+        total += pocl_serialize_cl_tensor_desc (&attr->a, buf);
+        total += pocl_serialize_cl_tensor_desc (&attr->b, buf);
+        total += pocl_serialize_cl_tensor_desc (&attr->c, buf);
+        SERIALIZE (attr->trans_a);
+        SERIALIZE (attr->trans_b);
+        SERIALIZE (attr->kernel_props);
+        break;
+      }
+    case CL_DBK_JPEG_ENCODE_EXP:
+      {
+        const cl_dbk_attributes_jpeg_encode_exp *attr = attributes;
+        SERIALIZE (attr->width);
+        SERIALIZE (attr->height);
+        SERIALIZE (attr->quality);
+        break;
+      }
+    case CL_DBK_ONNX_INFERENCE_EXP:
+      {
+        const cl_dbk_attributes_onnx_inference_exp *attr = attributes;
+        uint64_t model_size = attr->model_size;
+        uint64_t num_inputs = attr->num_inputs;
+        uint64_t num_outputs = attr->num_outputs;
+        uint64_t num_initializers = attr->num_initializers;
+        SERIALIZE (model_size);
+        COPY (attr->model_data, model_size);
+        SERIALIZE (num_inputs);
+        for (size_t i = 0; i < num_inputs; ++i)
+          {
+            uint64_t name_len = strlen (attr->input_tensor_names[i]);
+            SERIALIZE (name_len);
+            COPY (attr->input_tensor_names[i], name_len);
+            total += pocl_serialize_cl_tensor_desc (
+              &(attr->input_tensor_descs[i]), buf);
+          }
+        SERIALIZE (num_outputs);
+        for (size_t i = 0; i < num_outputs; ++i)
+          {
+            uint64_t name_len = strlen (attr->output_tensor_names[i]);
+            SERIALIZE (name_len);
+            COPY (attr->output_tensor_names[i], name_len);
+            total += pocl_serialize_cl_tensor_desc (
+              &(attr->output_tensor_descs[i]), buf);
+          }
+        SERIALIZE (num_initializers);
+        for (size_t i = 0; i < num_initializers; ++i)
+          {
+            uint64_t name_len = strlen (attr->initializer_names[i]);
+            uint64_t data_len
+              = pocl_tensor_data_size (&(attr->initializer_tensor_descs[i]));
+            assert (data_len > 0);
+            SERIALIZE (name_len);
+            COPY (attr->initializer_names[i], name_len);
+            total += pocl_serialize_cl_tensor_desc (
+              &(attr->initializer_tensor_descs[i]), buf);
+            SERIALIZE (data_len);
+            COPY (attr->initializer_data[i], data_len);
+          }
+        break;
+      }
+    case CL_DBK_NMS_BOX_EXP:
+      {
+        const cl_dbk_attributes_nms_box_exp *attr = attributes;
+        SERIALIZE (attr->score_threshold);
+        SERIALIZE (attr->iou_threshold);
+        SERIALIZE (attr->top_k);
+        SERIALIZE (attr->num_boxes);
+        break;
+      }
+    case CL_DBK_IMG_COLOR_CONVERT_EXP:
+      {
+        const cl_dbk_attributes_img_color_convert_exp *attr = attributes;
+        total += pocl_serialize_image_attr (&(attr->input_image), buf);
+        total += pocl_serialize_image_attr (&(attr->output_image), buf);
+        break;
+      }
+    default:
+      POCL_ABORT ("Could not serialize DBK, Unknown id: %d.\n", id);
+    }
+
+  return total;
+}
+
+#undef COPY
+#undef SERIALIZE
+
+/****************************** DESERIALIZATION ******************************/
+
+#define DESERIALIZE(name)                                                     \
+  do                                                                          \
+    {                                                                         \
+      memcpy (&(name), *buf, sizeof (name));                                  \
+      *buf += sizeof (name);                                                  \
+    }                                                                         \
+  while (0)
+
+#define COPY(name, size)                                                      \
+  do                                                                          \
+    {                                                                         \
+      if (buf)                                                                \
+        {                                                                     \
+          memcpy ((name), *buf, size);                                        \
+          *buf += size;                                                       \
+        }                                                                     \
+    }                                                                         \
+  while (0)
+
+int
+pocl_deserialize_cl_tensor_desc (cl_tensor_desc_exp *t, const char **buf)
+{
+  uint8_t has_layout = 0;
+  DESERIALIZE (t->rank);
+  DESERIALIZE (t->dtype);
+  DESERIALIZE (t->properties);
+  DESERIALIZE (t->shape);
+  DESERIALIZE (t->layout_type);
+  DESERIALIZE (has_layout);
+  if (has_layout)
+    {
+      switch (t->layout_type)
+        {
+        case CL_TENSOR_LAYOUT_BLAS_EXP:
+          {
+            cl_tensor_layout_blas_exp *layout
+              = malloc (sizeof (cl_tensor_layout_blas_exp));
+            DESERIALIZE (layout->leading_dims);
+            t->layout = layout;
+            break;
+          }
+        case CL_TENSOR_LAYOUT_BLAS_PITCHED_EXP:
+          {
+            cl_tensor_layout_blas_pitched_exp *layout
+              = malloc (sizeof (cl_tensor_layout_blas_pitched_exp));
+            DESERIALIZE (layout->leading_dims);
+            DESERIALIZE (layout->leading_strides);
+            t->layout = layout;
+            break;
+          }
+        case CL_TENSOR_LAYOUT_ML_EXP:
+          {
+            cl_tensor_layout_ml_exp *layout
+              = malloc (sizeof (cl_tensor_layout_ml_exp));
+            DESERIALIZE (layout->ml_type);
+            t->layout = layout;
+            break;
+          }
+        default:
+          break;
+        }
+    }
+  else
+    t->layout = NULL;
+
+  return 1;
+}
+
+int
+pocl_deserialize_image_attr (pocl_image_attr_t *t, const char **buf)
+{
+
+  DESERIALIZE (t->width);
+  DESERIALIZE (t->height);
+  DESERIALIZE (t->color_space);
+  DESERIALIZE (t->channel_range);
+  DESERIALIZE (t->format);
+  return 1;
+}
+
+int
+pocl_deserialize_dbk_attribs (cl_dbk_id_exp *id,
+                              void **attributes,
+                              const char **buf)
+{
+  uint64_t dbk_id;
+  DESERIALIZE (dbk_id);
+  *id = (cl_dbk_id_exp)dbk_id;
+  switch (dbk_id)
+    {
+    case CL_DBK_GEMM_EXP:
+      {
+        cl_dbk_attributes_gemm_exp *attr
+          = malloc (sizeof (cl_dbk_attributes_gemm_exp));
+        pocl_deserialize_cl_tensor_desc (&attr->a, buf);
+        pocl_deserialize_cl_tensor_desc (&attr->b, buf);
+        pocl_deserialize_cl_tensor_desc (&attr->c_in, buf);
+        pocl_deserialize_cl_tensor_desc (&attr->c_out, buf);
+        DESERIALIZE (attr->trans_a);
+        DESERIALIZE (attr->trans_b);
+        DESERIALIZE (attr->alpha);
+        DESERIALIZE (attr->beta);
+        DESERIALIZE (attr->kernel_props);
+        *attributes = attr;
+        break;
+      }
+    case CL_DBK_MATMUL_EXP:
+      {
+        cl_dbk_attributes_matmul_exp *attr
+          = malloc (sizeof (cl_dbk_attributes_matmul_exp));
+        pocl_deserialize_cl_tensor_desc (&attr->a, buf);
+        pocl_deserialize_cl_tensor_desc (&attr->b, buf);
+        pocl_deserialize_cl_tensor_desc (&attr->c, buf);
+        DESERIALIZE (attr->trans_a);
+        DESERIALIZE (attr->trans_b);
+        DESERIALIZE (attr->kernel_props);
+        *attributes = attr;
+        break;
+      }
+    case CL_DBK_JPEG_ENCODE_EXP:
+      {
+        cl_dbk_attributes_jpeg_encode_exp *attr
+          = malloc (sizeof (cl_dbk_attributes_jpeg_encode_exp));
+        DESERIALIZE (attr->width);
+        DESERIALIZE (attr->height);
+        DESERIALIZE (attr->quality);
+        *attributes = attr;
+        break;
+      }
+    case CL_DBK_ONNX_INFERENCE_EXP:
+      {
+        cl_dbk_attributes_onnx_inference_exp *attr
+          = calloc (1, sizeof (cl_dbk_attributes_onnx_inference_exp));
+        uint64_t model_size;
+        uint64_t num_inputs;
+        uint64_t num_outputs;
+        uint64_t num_initializers;
+        DESERIALIZE (model_size);
+        attr->model_size = model_size;
+        if (model_size > 0)
+          {
+            attr->model_data = malloc (model_size);
+            COPY ((char *)attr->model_data, model_size);
+          }
+        DESERIALIZE (num_inputs);
+        attr->num_inputs = num_inputs;
+        if (num_inputs > 0)
+          {
+            attr->input_tensor_names = malloc (sizeof (char *) * num_inputs);
+            attr->input_tensor_descs
+              = malloc (sizeof (cl_tensor_desc_exp) * num_inputs);
+            for (size_t i = 0; i < num_inputs; ++i)
+              {
+                uint64_t name_len;
+
+                DESERIALIZE (name_len);
+                attr->input_tensor_names[i] = malloc (name_len + 1);
+                COPY ((char *)attr->input_tensor_names[i], name_len);
+                ((char *)attr->input_tensor_names[i])[name_len] = 0;
+                pocl_deserialize_cl_tensor_desc (
+                  (cl_tensor_desc_exp *)&(attr->input_tensor_descs[i]), buf);
+              }
+          }
+
+        DESERIALIZE (num_outputs);
+        attr->num_outputs = num_outputs;
+        if (num_outputs > 0)
+          {
+            attr->output_tensor_names = malloc (sizeof (char *) * num_outputs);
+            attr->output_tensor_descs
+              = malloc (sizeof (cl_tensor_desc_exp) * num_outputs);
+            for (size_t i = 0; i < num_outputs; ++i)
+              {
+                uint64_t name_len;
+
+                DESERIALIZE (name_len);
+                attr->output_tensor_names[i] = malloc (name_len + 1);
+                COPY ((char *)attr->output_tensor_names[i], name_len);
+                ((char *)attr->output_tensor_names[i])[name_len] = 0;
+                pocl_deserialize_cl_tensor_desc (
+                  (cl_tensor_desc_exp *)&(attr->output_tensor_descs[i]), buf);
+              }
+          }
+
+        DESERIALIZE (num_initializers);
+        attr->num_initializers = num_initializers;
+        if (num_initializers > 0)
+          {
+            attr->initializer_names
+              = malloc (sizeof (char *) * num_initializers);
+            attr->initializer_tensor_descs
+              = malloc (sizeof (cl_tensor_desc_exp) * num_initializers);
+            attr->initializer_data
+              = malloc (sizeof (char *) * num_initializers);
+            for (size_t i = 0; i < num_initializers; ++i)
+              {
+                uint64_t name_len;
+                uint64_t data_len;
+
+                DESERIALIZE (name_len);
+                attr->initializer_names[i] = malloc (name_len + 1);
+                COPY ((char *)attr->initializer_names[i], name_len);
+                ((char *)attr->initializer_names[i])[name_len] = 0;
+                pocl_deserialize_cl_tensor_desc (
+                  (cl_tensor_desc_exp *)&(attr->initializer_tensor_descs[i]),
+                  buf);
+                DESERIALIZE (data_len);
+                if (data_len > 0)
+                  {
+                    attr->initializer_data[i] = malloc (data_len);
+                    COPY ((char *)attr->initializer_data[i], data_len);
+                  }
+              }
+          }
+
+        *attributes = attr;
+        break;
+      }
+    case CL_DBK_NMS_BOX_EXP:
+      {
+        cl_dbk_attributes_nms_box_exp *attrs
+          = malloc (sizeof (cl_dbk_attributes_nms_box_exp));
+        DESERIALIZE (attrs->score_threshold);
+        DESERIALIZE (attrs->iou_threshold);
+        DESERIALIZE (attrs->top_k);
+        DESERIALIZE (attrs->num_boxes);
+        *attributes = attrs;
+        break;
+      }
+    case CL_DBK_IMG_COLOR_CONVERT_EXP:
+      {
+        cl_dbk_attributes_img_color_convert_exp *attrs
+          = malloc (sizeof (cl_dbk_attributes_img_color_convert_exp));
+        pocl_deserialize_image_attr (&(attrs->input_image), buf);
+        pocl_deserialize_image_attr (&(attrs->output_image), buf);
+        *attributes = attrs;
+        break;
+      }
+    default:
+      {
+        POCL_MSG_ERR ("Could not deserialize DBK, unknown id: %lu.\n", dbk_id);
+        break;
+      }
+    }
+
+  return 1;
+}
+
+#undef COPY
+#undef DESERIALIZE

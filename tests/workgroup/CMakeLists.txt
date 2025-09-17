@@ -1,7 +1,8 @@
 #=============================================================================
 #   CMake build system files
 #
-#   Copyright (c) 2014-2019 pocl developers
+#   Copyright (c) 2014-2024 pocl developers
+#                 2024-2025 Pekka Jääskeläinen / Intel Finland Oy
 #
 #   Permission is hereby granted, free of charge, to any person obtaining a copy
 #   of this software and associated documentation files (the "Software"), to deal
@@ -28,9 +29,6 @@ add_definitions("-DSRCDIR=\"${CMAKE_CURRENT_SOURCE_DIR}\"")
 include_directories("${CMAKE_SOURCE_DIR}/lib/CL")
 add_compile_options(${OPENCL_CFLAGS})
 
-if(MSVC)
-  set_source_files_properties( run_kernel.c PROPERTIES LANGUAGE CXX )
-endif(MSVC)
 add_executable("run_kernel" "run_kernel.c")
 target_link_libraries("run_kernel" ${POCLU_LINK_OPTIONS})
 
@@ -84,7 +82,7 @@ foreach(VARIANT ${VARIANTS})
       COST 2.0
       PROCESSORS 1
       DEPENDS "pocl_version_check"
-      LABELS "internal;workgroup")
+      LABELS "cpu;workgroup")
 endforeach()
 
 set_tests_properties(
@@ -94,7 +92,7 @@ set_tests_properties(
     COST 2.0
     PROCESSORS 1
     DEPENDS "pocl_version_check"
-    LABELS "internal;workgroup")
+    LABELS "cpu;workgroup")
 
 add_test_pocl(NAME "workgroup/unconditional_barriers"
               EXPECTED_OUTPUT "basic_barriers_2_2_2_2.stdout"
@@ -104,10 +102,16 @@ add_test_pocl(NAME "workgroup/conditional_barrier_loopvec"
               EXPECTED_OUTPUT "cond_barriers_1_2_1_1_loopvec.stdout"
               COMMAND "run_kernel" "conditional_barriers.cl" 1 2 1 1
               WORKITEM_HANDLER "loopvec")
+
 add_test_pocl(NAME "workgroup/conditional_barrier_cbs"
               EXPECTED_OUTPUT "cond_barriers_1_2_1_1_cbs.stdout"
               COMMAND "run_kernel" "conditional_barriers.cl" 1 2 1 1
               WORKITEM_HANDLER "cbs")
+
+add_test_pocl(NAME "workgroup/conditional_barrier_dynamic"
+              EXPECTED_OUTPUT "cond_barriers_dynamic_1_16_1_1_loopvec.stdout"
+              COMMAND "run_kernel" "conditional_barrier_dynamic.cl" 1 16 1 1
+              WORKITEM_HANDLER "loopvec")
 
 add_test_pocl(NAME "workgroup/forcing_horizontal_parallelization_to_some_outer_loopvec"
               EXPECTED_OUTPUT "outerlooppar_2_2_1_1.stdout"
@@ -131,6 +135,10 @@ add_test_pocl(NAME "workgroup/issue_548_convergent_propagation"
               EXPECTED_OUTPUT "issue_548_1_2_1_1.stdout"
               COMMAND "run_kernel" "issue_548.cl" "1" "2" "1" "1")
 
+add_test_pocl(NAME "workgroup/issue_1747_wg_divergent_barrier"
+              EXPECTED_OUTPUT "issue_1747.stdout"
+              COMMAND "run_kernel" "issue_1747.cl" "2" "2" "1" "1")
+
 add_test_pocl(NAME "workgroup/range_md_small_grid"
               EXPECTED_OUTPUT "range_md_small_grid.stdout"
               COMMAND "run_kernel" "range_md.cl" "1" "13" "1" "1")
@@ -138,6 +146,10 @@ add_test_pocl(NAME "workgroup/range_md_small_grid"
 add_test_pocl(NAME "workgroup/range_md_large_grid"
               EXPECTED_OUTPUT ""
               COMMAND "run_kernel" "range_md.cl" "1000" "128" "1" "1")
+
+add_test_pocl(NAME "workgroup/ballot"
+              EXPECTED_OUTPUT "ballot_1_32_1_1.stdout"
+              COMMAND "run_kernel" "ballot.cl" "1" "32" "1" "1")
 
 # These tests are now always ran with the basic device with a predefined
 # work-group execution order. Their printout verification depends
@@ -152,18 +164,28 @@ foreach(VARIANT ${VARIANTS})
   "workgroup/workgroup_sizes_work_items_get_wrong_ids_${VARIANT}"
   "workgroup/issue_548_convergent_propagation_${VARIANT}"
   "workgroup/range_md_small_grid_${VARIANT}"
-  "workgroup/range_md_large_grid_${VARIANT}")
+  "workgroup/range_md_large_grid_${VARIANT}"
+  "workgroup/issue_1747_wg_divergent_barrier_${VARIANT}"
+  )
+  if(NOT ENABLE_CONFORMANCE)
+    list(APPEND TEST_LIST "workgroup/ballot_${VARIANT}")
+  endif()
   set_tests_properties(
     ${TEST_LIST}
     PROPERTIES
       COST 2.0
       PROCESSORS 1
       DEPENDS "pocl_version_check"
-      LABELS "internal;workgroup")
+      LABELS "cpu;workgroup")
   set_property(TEST ${TEST_LIST}
-    APPEND PROPERTY ENVIRONMENT "POCL_DEVICES=basic")
+    APPEND PROPERTY ENVIRONMENT "POCL_MAX_COMPUTE_UNITS=1")
   
 endforeach()
+
+set_property(TEST
+  "workgroup/issue_548_convergent_propagation_loopvec"
+  "workgroup/issue_548_convergent_propagation_cbs"
+  APPEND PROPERTY LABELS "mingw_fail")
 
 set_property(TEST
   "workgroup/unconditional_barriers_loopvec"
@@ -201,3 +223,5 @@ set_property(TEST
   "workgroup/b_loop_with_none_of_the_WIs_reaching_the_barrier_loopvec"
   "workgroup/cond_barriers_in_for_loopvec"
   APPEND PROPERTY LABELS "level0")
+
+add_symlink_to_built_opencl_dynlib(run_kernel)

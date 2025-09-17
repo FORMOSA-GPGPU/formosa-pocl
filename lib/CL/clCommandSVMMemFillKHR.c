@@ -29,6 +29,7 @@
 CL_API_ENTRY cl_int
 POname (clCommandSVMMemFillKHR) (
     cl_command_buffer_khr command_buffer, cl_command_queue command_queue,
+    const cl_command_properties_khr* properties,
     void *svm_ptr, const void *pattern,
     size_t pattern_size, size_t size,
     cl_uint num_sync_points_in_wait_list,
@@ -37,19 +38,12 @@ POname (clCommandSVMMemFillKHR) (
     cl_mutable_command_khr *mutable_handle) CL_API_SUFFIX__VERSION_1_2
 {
   cl_int errcode;
-  _cl_command_node *cmd = NULL;
-
   CMDBUF_VALIDATE_COMMON_HANDLES;
-
-  if (command_queue != NULL
-      && strstr (command_buffer->queues[0]->device->extensions,
-                 "cl_khr_command_buffer_multi_device")
-           == NULL)
-    return CL_INVALID_COMMAND_QUEUE;
+  SETUP_MUTABLE_HANDLE;
 
   return pocl_svm_memfill_common (
-      command_buffer, command_queue, CL_COMMAND_SVM_MEMFILL, svm_ptr, size,
-      pattern, pattern_size, num_sync_points_in_wait_list, NULL, NULL,
-      sync_point_wait_list, sync_point, &cmd);
+    command_buffer, command_queue, CL_COMMAND_SVM_MEMFILL, svm_ptr, size,
+    pattern, pattern_size, num_sync_points_in_wait_list, NULL, NULL,
+    sync_point_wait_list, sync_point, mutable_handle);
 }
 POsym (clCommandSVMMemFillKHR)

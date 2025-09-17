@@ -54,6 +54,12 @@ main (int _argc, char **_argv)
 
   ext.clCreateCommandBufferKHR = clGetExtensionFunctionAddressForPlatform (
       platform, "clCreateCommandBufferKHR");
+  if (ext.clCreateCommandBufferKHR == NULL)
+    {
+      printf ("Command buffers are not supported, skipping test\n");
+      return 77;
+    }
+
   ext.clCommandCopyBufferToImageKHR
       = clGetExtensionFunctionAddressForPlatform (
           platform, "clCommandCopyBufferToImageKHR");
@@ -116,8 +122,18 @@ main (int _argc, char **_argv)
                                &img_desc, NULL, &error);
   CHECK_CL_ERROR (error);
 
-  cl_command_queue command_queue = clCreateCommandQueue (
-      context, device, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, &error);
+  cl_command_queue_properties props = 0;
+  cl_command_queue_properties supported = 0;
+  CHECK_CL_ERROR (clGetDeviceInfo (
+    device, CL_DEVICE_COMMAND_BUFFER_SUPPORTED_QUEUE_PROPERTIES_KHR,
+    sizeof (supported), &supported, NULL));
+  if (supported & CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE)
+    props = CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE;
+  else
+    props = 0;
+
+  cl_command_queue command_queue
+    = clCreateCommandQueue (context, device, props, &error);
   CHECK_CL_ERROR (error);
 
   /**** Command buffer creation ****/
@@ -129,21 +145,21 @@ main (int _argc, char **_argv)
     cl_sync_point_khr fill_syncpt;
     size_t origin[3] = { 0, 0, 0 };
     size_t region[3] = { img_width, img_height, img_depth };
-    CHECK_CL_ERROR (ext.clCommandFillImageKHR (command_buffer, NULL, img1,
+    CHECK_CL_ERROR (ext.clCommandFillImageKHR (command_buffer, NULL, NULL, img1,
                                                fill_pixel, origin, region, 0,
                                                NULL, &fill_syncpt, NULL));
     cl_sync_point_khr buf2img_syncpt;
     CHECK_CL_ERROR (ext.clCommandCopyBufferToImageKHR (
-        command_buffer, NULL, buffer, img2, 0, origin, region, 0, NULL,
+        command_buffer, NULL, NULL, buffer, img2, 0, origin, region, 0, NULL,
         &buf2img_syncpt, NULL));
     cl_sync_point_khr img2img_syncpt;
     cl_sync_point_khr img2img_deps[2] = { fill_syncpt, buf2img_syncpt };
     CHECK_CL_ERROR (ext.clCommandCopyImageKHR (
-        command_buffer, NULL, img2, img1, img2img_origin, img2img_origin,
+        command_buffer, NULL, NULL, img2, img1, img2img_origin, img2img_origin,
         img2img_region, 2, img2img_deps, &img2img_syncpt, NULL));
 
     CHECK_CL_ERROR (ext.clCommandCopyImageToBufferKHR (
-        command_buffer, NULL, img1, buffer, origin, region, 0, 1,
+        command_buffer, NULL, NULL, img1, buffer, origin, region, 0, 1,
         &img2img_syncpt, NULL, NULL));
   }
 
@@ -158,7 +174,7 @@ main (int _argc, char **_argv)
 
   /*** Main test ***/
   {
-    uint8_t img_src[buf_size];
+    uint8_t *img_src = malloc (buf_size);
     for (size_t i = 0; i < img_npixels; ++i)
       {
         for (size_t j = 0; j < img_channels; ++j)
@@ -214,6 +230,7 @@ main (int _argc, char **_argv)
 
     CHECK_CL_ERROR (clReleaseEvent (write_src_event));
     CHECK_CL_ERROR (clReleaseEvent (command_buf_event));
+    free (img_src);
   }
 
   CHECK_CL_ERROR (ext.clReleaseCommandBufferKHR (command_buffer));

@@ -37,8 +37,6 @@
 #include "pocl_util.h"
 #include "utlist.h"
 
-extern unsigned long kernel_c;
-
 CL_API_ENTRY cl_kernel CL_API_CALL
 POname(clCreateKernel)(cl_program program,
                const char *kernel_name,
@@ -97,10 +95,15 @@ POname(clCreateKernel)(cl_program program,
       size_t offset = 0;
       for (i = 0; i < kernel->meta->num_args; ++i)
         {
-          kernel->dyn_argument_offsets[i]
-              = kernel->dyn_argument_storage + offset;
           unsigned type_size = kernel->meta->arg_info[i].type_size;
           assert (type_size > 0);
+          size_t alignment = pocl_size_ceil2 (type_size);
+          if (offset & (alignment - 1))
+            offset = (offset | (alignment - 1)) + 1;
+
+          kernel->dyn_argument_offsets[i]
+            = kernel->dyn_argument_storage + offset;
+
           offset += type_size;
         }
       assert (offset == kernel->meta->total_argument_storage_size);
@@ -133,7 +136,7 @@ POname(clCreateKernel)(cl_program program,
   errcode = CL_SUCCESS;
 
   POCL_MSG_PRINT_GENERAL ("Created Kernel %s (%p)\n", kernel->name, kernel);
-  goto OUT;
+  goto EXIT_NO_ERROR;
 
 ERROR:
   if (kernel)
@@ -146,7 +149,7 @@ ERROR:
   POCL_MEM_FREE (kernel);
   kernel = NULL;
 
-OUT:
+EXIT_NO_ERROR:
   if(errcode_ret != NULL)
   {
     *errcode_ret = errcode;

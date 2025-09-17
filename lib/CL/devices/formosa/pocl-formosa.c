@@ -634,7 +634,7 @@ static void formosa_command_scheduler(pocl_formosa_data_t *dd) {
 void pocl_formosa_submit(_cl_command_node *node, cl_command_queue cq) {
   pocl_formosa_data_t *dd = node->device->data;
 
-  node->ready = 1;
+  node->state = POCL_COMMAND_READY;
   POCL_LOCK(dd->cq_lock);
   pocl_command_push(node, &dd->ready_list, &dd->command_list);
 
@@ -669,11 +669,26 @@ void pocl_formosa_notify(cl_device_id device, cl_event event,
   _cl_command_node *volatile node = event->command;
 
   if (finished->status < CL_COMPLETE) {
-    pocl_update_event_failed(event);
+    /* Unlock the finished event in order to prevent a lock order violation
+     * with the command queue that will be locked during
+     * pocl_update_event_failed.
+     */
+    pocl_unlock_events_inorder (event, finished);
+    pocl_update_event_failed (CL_FAILED, NULL, 0, event, NULL);
+    /* Lock events in this order to avoid a lock order violation between
+     * the finished/notifier and event/wait events.
+     */
+    pocl_lock_events_inorder (finished, event);
     return;
   }
 
-  if (!node->ready) return;
+
+  if (node->state != POCL_COMMAND_READY) {
+    POCL_MSG_PRINT_EVENTS (
+      "formosa: command related to the notified event %lu not ready\n",
+      event->id);
+    return;
+  }
 
   if (pocl_command_is_ready(event)) {
     if (event->status == CL_QUEUED) {

@@ -27,6 +27,7 @@
 #include <assert.h>
 #include <fcntl.h>
 #include <stdarg.h>
+#include <stddef.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -132,7 +133,7 @@ append_to_build_log (cl_program program, unsigned device_i, const char *format,
   char temp[4096];
   va_list args;
   va_start (args, format);
-  ssize_t written = vsnprintf (temp, 4096, format, args);
+  int written = vsnprintf (temp, 4096, format, args);
   va_end (args);
   size_t l = 0;
   if (written > 0)
@@ -548,22 +549,27 @@ setup_kernel_metadata (cl_program program)
   /* calculate argument storage size */
   for (i = 0; i < program->num_kernels; ++i)
     {
-      program->kernel_meta[i].total_argument_storage_size = 0;
-      if (program->kernel_meta[i].num_args > 0)
+      pocl_kernel_metadata_t *kmeta = &program->kernel_meta[i];
+      kmeta->total_argument_storage_size = 0;
+      if (kmeta->num_args > 0)
         {
           size_t total = 0;
-          for (j = 0; j < program->kernel_meta[i].num_args; ++j)
+          for (j = 0; j < kmeta->num_args; ++j)
             {
               /* if one of the arguments have size 0,
                  the driver couldn't figure it out. In that case,
                  leave total_argument_storage_size == zero, and use
                  the old way of setting arguments. */
-              if (program->kernel_meta[i].arg_info[j].type_size == 0)
+              if (kmeta->arg_info[j].type_size == 0)
                 break;
-              total += program->kernel_meta[i].arg_info[j].type_size;
+              unsigned type_size = kmeta->arg_info[j].type_size;
+              size_t alignment = pocl_size_ceil2 (type_size);
+              if (total & (alignment - 1))
+                total = (total | (alignment - 1)) + 1;
+              total += kmeta->arg_info[j].type_size;
             }
-          if (j >= program->kernel_meta[i].num_args)
-            program->kernel_meta[i].total_argument_storage_size = total;
+          if (j >= kmeta->num_args)
+            kmeta->total_argument_storage_size = total;
         }
     }
 
@@ -712,7 +718,9 @@ compile_and_link_program(int compile_program,
           compile_program, link_program, &create_library, &flush_denorms,
           &requires_cr_sqrt_div, &spir_build, &cl_c_version, size);
       if (errcode != CL_SUCCESS)
-        goto ERROR_CLEAN_OPTIONS;
+        {
+          goto ERROR;
+        }
     }
 
   /* The build option -x spir is only needed for the old SPIR format.
@@ -969,14 +977,11 @@ compile_and_link_program(int compile_program,
 
 ERROR:
   clean_program_on_rebuild (program, 1);
-
-ERROR_CLEAN_OPTIONS:
-  if (temp_options != options)
-    free (temp_options);
-
   program->build_status = CL_BUILD_ERROR;
 
 FINISH:
+  if (temp_options != options)
+    free (temp_options);
   POCL_UNLOCK_OBJ (program);
 
 PFN_NOTIFY:

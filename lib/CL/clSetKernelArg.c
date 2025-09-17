@@ -26,6 +26,7 @@
 #include "config.h"
 #include "pocl_cl.h"
 #include "pocl_debug.h"
+#include "pocl_tensor_util.h"
 #include "pocl_util.h"
 #include <assert.h>
 #include <stdbool.h>
@@ -51,32 +52,32 @@ dump_hex (const char *data, size_t size, char *buffer)
 }
 
 static int
-pocl_verify_dbk_kernel_arg (cl_mem buf, const cl_tensor_desc *desc)
+pocl_verify_dbk_kernel_arg (cl_mem buf, const cl_tensor_desc_exp *desc)
 {
   POCL_RETURN_ERROR_ON ((buf->is_tensor == CL_FALSE), CL_INVALID_ARG_VALUE,
                         "the cl_mem argument must be a tensor\n");
 
-  const cl_tensor_properties *P = desc->properties;
+  const cl_tensor_properties_exp *props = desc->properties;
   char tensor_mutable_layout = 0;
   char tensor_mutable_shape = 0;
   char tensor_mutable_dtype = 0;
-  while (*P)
+  while (*props)
     {
-      switch (*P)
+      switch (*props)
         {
-        case CL_TENSOR_PROPERTY_MUTABLE_SHAPE:
+        case CL_TENSOR_PROPERTY_MUTABLE_SHAPE_EXP:
           tensor_mutable_shape = 1;
           break;
-        case CL_TENSOR_PROPERTY_MUTABLE_DTYPE:
+        case CL_TENSOR_PROPERTY_MUTABLE_DTYPE_EXP:
           tensor_mutable_dtype = 1;
           break;
-        case CL_TENSOR_PROPERTY_MUTABLE_LAYOUT:
+        case CL_TENSOR_PROPERTY_MUTABLE_LAYOUT_EXP:
           tensor_mutable_layout = 1;
           break;
         default:
           break;
         }
-      ++P;
+      ++props;
     }
 
   POCL_RETURN_ERROR_ON ((buf->tensor_rank != desc->rank), CL_INVALID_ARG_VALUE,
@@ -95,13 +96,17 @@ pocl_verify_dbk_kernel_arg (cl_mem buf, const cl_tensor_desc *desc)
   int cmp = 0;
   switch (desc->layout_type)
     {
-    case CL_TENSOR_LAYOUT_ML:
+    case CL_TENSOR_LAYOUT_ML_EXP:
       cmp = memcmp (buf->tensor_layout, desc->layout,
-                    sizeof (cl_tensor_layout_ml));
+                    sizeof (cl_tensor_layout_ml_exp));
       break;
-    case CL_TENSOR_LAYOUT_BLAS:
+    case CL_TENSOR_LAYOUT_BLAS_EXP:
       cmp = memcmp (buf->tensor_layout, desc->layout,
-                    sizeof (cl_tensor_layout_blas));
+                    sizeof (cl_tensor_layout_blas_exp));
+      break;
+    case CL_TENSOR_LAYOUT_BLAS_PITCHED_EXP:
+      cmp = memcmp (buf->tensor_layout, desc->layout,
+                    sizeof (cl_tensor_layout_blas_pitched_exp));
       break;
     default:
       break;
@@ -126,10 +131,10 @@ pocl_verify_dbk_kernel_args (cl_mem buf,
 {
   switch (meta->builtin_kernel_id)
     {
-    case POCL_CDBI_DBK_EXP_GEMM:
+    case CL_DBK_GEMM_EXP:
       {
-        const cl_dbk_attributes_exp_gemm *Attrs
-          = (cl_dbk_attributes_exp_gemm *)meta->builtin_kernel_attrs;
+        const cl_dbk_attributes_gemm_exp *Attrs
+          = (cl_dbk_attributes_gemm_exp *)meta->builtin_kernel_attrs;
         if (arg_index == 0)
           return pocl_verify_dbk_kernel_arg (buf, &Attrs->a);
         if (arg_index == 1)
@@ -138,24 +143,118 @@ pocl_verify_dbk_kernel_args (cl_mem buf,
           return pocl_verify_dbk_kernel_arg (buf, &Attrs->c_in);
         if (arg_index == 3)
           return pocl_verify_dbk_kernel_arg (buf, &Attrs->c_out);
-        POCL_ABORT ("this should not be reached \n");
+        POCL_RETURN_ERROR (CL_INVALID_ARG_INDEX, "invalid arg index to "
+                                                 "POCL_CDBI_DBK_EXP_GEMM");
       }
-    case POCL_CDBI_DBK_EXP_MATMUL:
+    case CL_DBK_MATMUL_EXP:
       {
-        const cl_dbk_attributes_exp_matmul *Attrs
-          = (const cl_dbk_attributes_exp_matmul *)meta->builtin_kernel_attrs;
+        const cl_dbk_attributes_matmul_exp *Attrs
+          = (const cl_dbk_attributes_matmul_exp *)meta->builtin_kernel_attrs;
         if (arg_index == 0)
           return pocl_verify_dbk_kernel_arg (buf, &Attrs->a);
         if (arg_index == 1)
           return pocl_verify_dbk_kernel_arg (buf, &Attrs->b);
         if (arg_index == 2)
           return pocl_verify_dbk_kernel_arg (buf, &Attrs->c);
-        POCL_ABORT ("this should not be reached \n");
+        POCL_RETURN_ERROR (CL_INVALID_ARG_INDEX, "invalid arg index to "
+                                                 "POCL_CDBI_DBK_EXP_MATMUL");
       }
-    case POCL_CDBI_DBK_EXP_JPEG_ENCODE:
-    case POCL_CDBI_DBK_EXP_JPEG_DECODE:
+    case CL_DBK_JPEG_ENCODE_EXP:
+    case CL_DBK_JPEG_DECODE_EXP:
+    case CL_DBK_IMG_COLOR_CONVERT_EXP:
       return CL_SUCCESS;
-    default:
+    case CL_DBK_ONNX_INFERENCE_EXP:
+      {
+        const cl_dbk_attributes_onnx_inference_exp *attrs
+          = (const cl_dbk_attributes_onnx_inference_exp *)
+              meta->builtin_kernel_attrs;
+
+        /* Input offsets */
+        if (arg_index == 0
+            && buf->size < attrs->num_inputs * sizeof (uint64_t))
+          return CL_OUT_OF_RESOURCES;
+
+        /* Input tensor data */
+        if (arg_index == 1)
+          {
+            size_t total_input_size = 0;
+            for (size_t i = 0; i < attrs->num_inputs; ++i)
+              {
+                size_t data_len
+                  = pocl_tensor_type_size (attrs->input_tensor_descs[i].dtype);
+                for (size_t dim = 0; dim < attrs->input_tensor_descs[i].rank;
+                     ++dim)
+                  {
+                    data_len *= attrs->input_tensor_descs[i].shape[dim];
+                  }
+                total_input_size += data_len;
+              }
+            if (buf->size < total_input_size)
+              return CL_OUT_OF_RESOURCES;
+          }
+
+        /* Output offsets */
+        if (arg_index == 2
+            && buf->size < attrs->num_outputs * sizeof (uint64_t))
+          return CL_OUT_OF_RESOURCES;
+
+        /* Output tensor data */
+        if (arg_index == 3)
+          {
+            size_t total_output_size = 0;
+            for (size_t i = 0; i < attrs->num_outputs; ++i)
+              {
+                size_t data_len = pocl_tensor_type_size (
+                  attrs->output_tensor_descs[i].dtype);
+                for (size_t dim = 0; dim < attrs->output_tensor_descs[i].rank;
+                     ++dim)
+                  {
+                    data_len *= attrs->output_tensor_descs[i].shape[dim];
+                  }
+                total_output_size += data_len;
+              }
+
+            if (buf->size < total_output_size)
+              return CL_OUT_OF_RESOURCES;
+          }
+        return CL_SUCCESS;
+      }
+    case CL_DBK_NMS_BOX_EXP:
+      {
+        const cl_dbk_attributes_nms_box_exp *attrs
+          = (const cl_dbk_attributes_nms_box_exp *)meta->builtin_kernel_attrs;
+        switch (arg_index)
+          {
+          case 0:
+            return (buf->size >= attrs->num_boxes * sizeof (cl_uint) * 4)
+                   ? CL_SUCCESS
+                   : CL_INVALID_ARG_VALUE;
+          case 1:
+            return (buf->size >= attrs->num_boxes * sizeof (cl_float))
+                     ? CL_SUCCESS
+                     : CL_INVALID_ARG_VALUE;
+          case 2:
+            return CL_SUCCESS;
+          case 3:
+            {
+              int res;
+              if (attrs->top_k > 0)
+                res = (buf->size >= attrs->top_k * sizeof (cl_uint))
+                        ? CL_SUCCESS
+                        : CL_INVALID_ARG_VALUE;
+              else
+                res = ((attrs->num_boxes > 0)
+                       && buf->size >= attrs->num_boxes * sizeof (cl_uint) * 4)
+                        ? CL_SUCCESS
+                        : CL_INVALID_ARG_VALUE;
+              return res;
+            }
+          default:
+            POCL_RETURN_ERROR (CL_INVALID_ARG_INDEX, "invalid arg index to "
+                                                     "CL_DBK_NMS_BOX_EXP.\n");
+          }
+      }
+  default:
       {
         POCL_MSG_ERR ("pocl_verify_dbk_kernel_args called on "
                       "unknown/unsupported DBK type %d.\n",
@@ -336,10 +435,7 @@ POname(clSetKernelArg)(cl_kernel kernel,
             arg_alloc_size = arg_alignment;
 
           value = pocl_aligned_malloc (arg_alignment, arg_alloc_size);
-          if (value == NULL)
-            {
-              return CL_OUT_OF_HOST_MEMORY;
-            }
+          POCL_RETURN_ERROR_COND ((value == NULL), CL_OUT_OF_HOST_MEMORY);
         }
 
       memcpy (value, arg_value, arg_size);

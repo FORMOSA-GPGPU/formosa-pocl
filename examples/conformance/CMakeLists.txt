@@ -2,7 +2,7 @@
 #   CMake build system files
 #
 #   Copyright (c) 2017 Michal Babej / Tampere University of Technology
-#   Copyright (c) 2022-24 Michal Babej / Tampere University of Technology
+#   Copyright (c) 2022-24 Michal Babej / Intel Finland Oy
 #
 #   Permission is hereby granted, free of charge, to any person obtaining a copy
 #   of this software and associated documentation files (the "Software"), to deal
@@ -85,22 +85,16 @@ if(CUSTOM_CTS_GIT_TAG)
   set(CTS_GIT_TAG "${CUSTOM_CTS_GIT_TAG}")
 else()
   # Use PoCL's fork which has pending fixes.
-  set(CTS_GIT_TAG "v2024.08.28")
+  set(CTS_GIT_TAG "v2025.03.21.1")
 endif()
 
 set(TS_BUILDDIR "${TS_BUILDDIR}/test_conformance")
 set(TS_SRCDIR "${TS_SRCDIR}/test_conformance")
 
 if(ENABLE_SPIRV AND HAVE_SPIRV_TOOLS)
-  # build SPIR-V binary files required by the SPIR-V subtests
-  set(CTS_INSTALL_COMMAND "${TS_SRCDIR}/spirv_new/assemble_spirv.py"
-    "-s" "${TS_SRCDIR}/spirv_new/spirv_asm"
-    "-o" "${TS_BUILDDIR}/spirv_new/spirv_bin"
-    "-a" "${SPIRV_AS}"
-    "-l" "${SPIRV_VAL}")
+  message(STATUS "OpenCL-CTS: SPIR-V tests enabled")
 else()
-  message(WARNING "spirv tools not found - disabling SPIRV tests in CTS")
-  set(CTS_INSTALL_COMMAND echo "INSTALLED")
+  message(WARNING "llvm-spirv or spirv-tools not found - disabling SPIRV tests in CTS")
 endif()
 
 set(UPSTREAM_CMAKE_ARGS "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}")
@@ -118,7 +112,7 @@ ExternalProject_Add(
   GIT_REPOSITORY "${CTS_GIT_REPO}"
   GIT_TAG "${CTS_GIT_TAG}"
   ${GIT_OPTIONS}
-  CONFIGURE_COMMAND ${CMAKE_COMMAND}
+  CMAKE_ARGS
     ${UPSTREAM_CMAKE_ARGS}
     -DD3D10_IS_SUPPORTED=0 -DD3D11_IS_SUPPORTED=0
     -DGL_IS_SUPPORTED=0 -DGLES_IS_SUPPORTED=0
@@ -128,7 +122,7 @@ ExternalProject_Add(
     -DENABLE_ASAN=${ENABLE_ASAN}
     -DENABLE_TSAN=${ENABLE_TSAN}
     "${TS_BASEDIR}/src/${TS_NAME}"
-  INSTALL_COMMAND ${CTS_INSTALL_COMMAND}
+  INSTALL_COMMAND ""
 )
 
 
@@ -147,6 +141,55 @@ set(MATH_FUNC_LIST acos acosh acospi asin asinh asinpi atan atanh atanpi atan2 a
   half_recip half_rsqrt half_sin half_sqrt half_tan add subtract divide
   divide_cr multiply assignment not)
 
+#################################################################################
+
+# List of CTS tests *disabled* for LevelZero driver;
+# these will not have level0 label assigned
+
+set(CTS_LEVEL0_BLACKLIST
+  # disabled. Fails since CTS 2024.10.09; this CTS added
+  # testcase printf("%s", "") which causes crash in L0
+  conformance_main_printf
+  conformance_spirv_printf
+
+  # disabled. Fails because of a bug in the L0 driver
+  # when ProgScope variable points to another ProgScope var
+  conformance_main_basic_micro_progvar
+  conformance_spirv_basic_micro_progvar
+  conformance_main_basic
+  conformance_spirv_basic
+
+  # disabled. Fails since CTS 2024.10.09;
+  # this CTS checks FP16 ULP precision
+  conformance_main_math_micro_divide
+  conformance_main_math_micro_divide_cr
+  conformance_spirv_math_micro_divide
+  conformance_spirv_math_micro_divide_cr
+  conformance_main_math_full_divide
+  conformance_main_math_full_divide_cr
+  conformance_spirv_math_full_divide
+  conformance_spirv_math_full_divide_cr
+
+  # disabled. Fails since CTS 2024.10.09;
+  # this CTS checks FP16 ULP precision
+  conformance_main_math_micro_fract
+  conformance_spirv_math_micro_fract
+  conformance_main_math_full_fract
+  conformance_spirv_math_full_fract
+)
+
+set(CTS_CPU_ASAN_BLACKLIST
+  conformance_main_integer_ops_micro_3
+  conformance_main_spirv_new_micro_3
+  conformance_main_basic_micro_other
+)
+set(CTS_CPU_TSAN_BLACKLIST
+  conformance_main_api
+  conformance_main_api_micro_ocl_30
+  conformance_main_math_micro_rint
+  conformance_main_math_micro_sinpi
+  conformance_main_events_micro_other
+)
 
 #################################################################################
 #################################################################################
@@ -447,16 +490,22 @@ set(CTS_FULL_LIST
 foreach(CTSTEST IN LISTS CTS_FULL_LIST)
   set_property(TEST ${CTSTEST}
     APPEND PROPERTY
-    LABELS ${CTS_LABEL})
+    LABELS "${CTS_LABEL};cpu")
   set_property(TEST ${CTSTEST}
     PROPERTY
     ENVIRONMENT "POCL_MEMORY_LIMIT=1")
+  if(ENABLE_LEVEL0)
+    if(CTSTEST IN_LIST CTS_LEVEL0_BLACKLIST)
+      message(STATUS "disabling test ${CTSTEST} for Level0")
+    else()
+      set_property(TEST ${CTSTEST}
+        APPEND PROPERTY LABELS "level0")
+    endif()
+  endif()
 endforeach()
 
 set_property(TEST ${OCL_30_TESTS_FULL}
              APPEND PROPERTY LABELS "conformance_30_only")
-set_property(TEST "${TS_NAME}${TS_SUFFIX}_non_uniform_work_group"
-             PROPERTY ENVIRONMENT "POCL_MEMORY_LIMIT=4")
 endfunction()
 
 # add the full testsuite with online compilation from sources
@@ -777,6 +826,11 @@ add_test(NAME "${TS_NAME}${TS_SUFFIX}_spirv_new_micro_1"
 add_test(NAME "${TS_NAME}${TS_SUFFIX}_spirv_new_micro_2"
          COMMAND "${TS_BUILDDIR}/spirv_new/test_spirv_new" ${EXTRA_ARGS} function_none  function_inline  function_noinline op_lifetime_simple  op_loop_merge_branch_none op_neg_float  op_neg_double op_not_int4  op_type_opaque_simple  op_phi_2_blocks op_selection_merge_if_none  op_selection_merge_if_flatten op_spec_constant_uchar_simple  op_spec_constant_ushort_simple ${SPIRV_OCL_30_EXTRA_TEST}  op_spec_constant_true_simple op_undef_true_simple op_undef_uint_simple  op_undef_char_simple op_undef_float_simple  op_undef_double_simple op_vector_int4_extract  op_vector_float4_extract op_vector_double2_extract  op_vector_char16_extract  op_vector_int4_insert op_vector_times_scalar_double
          WORKING_DIRECTORY "${TS_BUILDDIR}/spirv_new")
+
+add_test(NAME "${TS_NAME}${TS_SUFFIX}_spirv_new_micro_3"
+         COMMAND "${TS_BUILDDIR}/spirv_new/test_spirv_new" ${EXTRA_ARGS} basic_versions ext_cl_khr_spirv_no_integer_wrap_decoration_fadd_uint ext_cl_khr_spirv_no_integer_wrap_decoration_fmul_uint extinst_printf_operands_scalar_fp64 op_assume op_expect op_loop_merge_branch_conditional_unroll spirv14_copylogical spirv14_copymemory_memory_operands spirv14_image_operand_signextend spirv14_loop_control_maxiterations spirv14_loop_control_peelcount spirv14_no_integer_wrap_decoration_fadd_int spirv14_nonwriteable_decoration spirv14_ptrops spirv14_select_composite spirv14_usersemantic_decoratestring spirv15_non_uniform_broadcast spirv15_ptr_bitcast
+         WORKING_DIRECTORY "${TS_BUILDDIR}/spirv_new")
+
 endif()
 
 add_test(NAME "${TS_NAME}${TS_SUFFIX}_images_micro_kernel_image_methods_1D"
@@ -910,7 +964,8 @@ if(ENABLE_SPIRV AND HAVE_SPIRV_TOOLS)
   list(APPEND OCL_30_TESTS_MICRO
     "${TS_NAME}${TS_SUFFIX}_spirv_new_micro_0"
     "${TS_NAME}${TS_SUFFIX}_spirv_new_micro_1"
-    "${TS_NAME}${TS_SUFFIX}_spirv_new_micro_2")
+    "${TS_NAME}${TS_SUFFIX}_spirv_new_micro_2"
+    "${TS_NAME}${TS_SUFFIX}_spirv_new_micro_3")
 endif()
 
 
@@ -999,14 +1054,47 @@ set(CTS_MICRO_LIST
 foreach(CTSTEST IN LISTS CTS_MICRO_LIST)
   set_property(TEST ${CTSTEST}
     APPEND PROPERTY
-    LABELS ${CTS_LABEL})
+    LABELS "${CTS_LABEL};cpu")
   set_property(TEST ${CTSTEST}
     PROPERTY
     ENVIRONMENT "POCL_MEMORY_LIMIT=1")
+  if(ENABLE_LEVEL0)
+    if(CTSTEST IN_LIST CTS_LEVEL0_BLACKLIST)
+      message(STATUS "disabling test ${CTSTEST} for Level0")
+    else()
+      set_property(TEST ${CTSTEST}
+        APPEND PROPERTY LABELS "level0")
+    endif()
+  endif()
+  if(ENABLE_ASAN AND ENABLE_HOST_CPU_DEVICES)
+    if(CTSTEST IN_LIST CTS_CPU_ASAN_BLACKLIST)
+      message(STATUS "disabling test ${CTSTEST} for CPU/ASan")
+    else()
+      set_property(TEST ${CTSTEST}
+        APPEND PROPERTY LABELS "asan")
+    endif()
+  endif()
+  if(ENABLE_TSAN AND ENABLE_HOST_CPU_DEVICES)
+    if(CTSTEST IN_LIST CTS_CPU_TSAN_BLACKLIST)
+      message(STATUS "disabling test ${CTSTEST} for CPU/TSan")
+    else()
+      set_property(TEST ${CTSTEST}
+        APPEND PROPERTY LABELS "tsan")
+    endif()
+  endif()
+
 endforeach()
 
+# note that the environment variables must be set for this test
+# this is to workaround a bug: https://github.com/KhronosGroup/OpenCL-CTS/issues/1142
 set_property(TEST "${TS_NAME}${TS_SUFFIX}_non_uniform_work_group"
-             PROPERTY ENVIRONMENT "POCL_MEMORY_LIMIT=4")
+             PROPERTY ENVIRONMENT "POCL_MEMORY_LIMIT=4;POCL_MAX_WORK_GROUP_SIZE=1024")
+
+# this is required b/c there is a problem with one test in mutable extension:
+# it does not take into account that changing global size (without local size)
+# can result in change of local size (because the runtime calculates optimal size)
+set_property(TEST "${TS_NAME}${TS_SUFFIX}_cl_khr_command_buffer_mutable"
+             PROPERTY ENVIRONMENT "POCL_MEMORY_LIMIT=4;POCL_MAX_WORK_GROUP_SIZE=1024")
 
 endfunction()
 
@@ -1024,194 +1112,6 @@ add_cts_micro_tests("conformance_suite_micro_spirv" "_spirv"
                    "--compilation-cache-path" "${CACHE_DIR}")
 endif()
 
-#################################################################################
-
-# List of CTS tests enabled for LevelZero driver
-
-set(CTS_LEVEL0_LIST
-  conformance_main_api
-  conformance_main_commonfns
-  conformance_main_compiler_micro
-  conformance_main_computeinfo
-  conformance_main_contractions
-  conformance_main_geometrics
-  conformance_main_images_cl_copy_images
-  conformance_main_images_cl_fill_images
-  conformance_main_images_cl_read_write_images
-  conformance_main_images_cl_get_info
-  conformance_main_images_cl_get_info_min
-  conformance_main_images_cl_get_info_max
-  conformance_main_images_cl_get_info_random
-  conformance_main_mem_host_flags
-  conformance_main_multiples
-  conformance_main_non_uniform_work_group
-  conformance_main_printf
-  conformance_main_profiling
-  conformance_main_subgroups_micro
-  conformance_main_cl_khr_command_buffer
-  conformance_main_cl_khr_command_buffer_mutable
-  conformance_main_api_micro_ocl_30
-  conformance_main_basic_micro_other_ocl_30
-  #conformance_main_basic_micro_progvar
-  conformance_main_SVM_micro_1
-  conformance_main_SVM_micro_2
-
-  conformance_main_allocations_micro_buffer
-  conformance_main_allocations_micro_image
-
-  conformance_main_integer_ops_micro_ocl_30
-  conformance_main_generic_AS_micro
-
-  conformance_main_basic_micro_math
-  conformance_main_basic_micro_image
-  conformance_main_basic_micro_other
-
-  conformance_main_basic_micro_memory_1
-  conformance_main_basic_micro_memory_2
-
-  conformance_main_buffers_micro_read
-  conformance_main_buffers_micro_write
-
-  conformance_main_buffers_micro_fill
-  conformance_main_buffers_micro_var1
-  conformance_main_buffers_micro_var2
-
-  conformance_main_buffers_micro_map_read
-  conformance_main_buffers_micro_map_write
-  conformance_main_vectors_micro
-
-  conformance_main_c11_atomics_micro_1
-  conformance_main_c11_atomics_micro_2
-  conformance_main_c11_atomics_micro_3
-  conformance_main_c11_atomics_micro_4
-
-  conformance_main_math_micro_acos
-  conformance_main_math_micro_acosh
-  conformance_main_math_micro_acospi
-  conformance_main_math_micro_asin
-  conformance_main_math_micro_asinh
-  conformance_main_math_micro_asinpi
-  conformance_main_math_micro_atan
-  conformance_main_math_micro_atanh
-  conformance_main_math_micro_atanpi
-  conformance_main_math_micro_atan2
-  conformance_main_math_micro_atan2pi
-  conformance_main_math_micro_add
-  conformance_main_math_micro_assignment
-
-  conformance_main_math_micro_cbrt
-  conformance_main_math_micro_ceil
-  conformance_main_math_micro_copysign
-  conformance_main_math_micro_cos
-  conformance_main_math_micro_cosh
-  conformance_main_math_micro_cospi
-
-  conformance_main_math_micro_divide
-  conformance_main_math_micro_divide_cr
-
-  conformance_main_math_micro_exp
-  conformance_main_math_micro_exp2
-  conformance_main_math_micro_exp10
-  conformance_main_math_micro_expm1
-
-  conformance_main_math_micro_fabs
-  conformance_main_math_micro_fdim
-  conformance_main_math_micro_floor
-  conformance_main_math_micro_fma
-  conformance_main_math_micro_fmax
-  conformance_main_math_micro_fmin
-  conformance_main_math_micro_fmod
-  conformance_main_math_micro_fract
-  conformance_main_math_micro_frexp
-
-  conformance_main_math_micro_hypot
-  conformance_main_math_micro_half_cos
-  conformance_main_math_micro_half_divide
-  conformance_main_math_micro_half_exp
-  conformance_main_math_micro_half_exp2
-  conformance_main_math_micro_half_exp10
-  conformance_main_math_micro_half_log
-  conformance_main_math_micro_half_log2
-  conformance_main_math_micro_half_log10
-  conformance_main_math_micro_half_powr
-  conformance_main_math_micro_half_recip
-  conformance_main_math_micro_half_rsqrt
-  conformance_main_math_micro_half_sin
-  conformance_main_math_micro_half_sqrt
-  conformance_main_math_micro_half_tan
-
-  conformance_main_math_micro_ilogb
-  conformance_main_math_micro_isequal
-  conformance_main_math_micro_isfinite
-  conformance_main_math_micro_isgreater
-  conformance_main_math_micro_isgreaterequal
-  conformance_main_math_micro_isinf
-  conformance_main_math_micro_isless
-  conformance_main_math_micro_islessequal
-  conformance_main_math_micro_islessgreater
-  conformance_main_math_micro_isnan
-  conformance_main_math_micro_isnormal
-  conformance_main_math_micro_isnotequal
-  conformance_main_math_micro_isordered
-  conformance_main_math_micro_isunordered
-
-  conformance_main_math_micro_ldexp
-  conformance_main_math_micro_lgamma
-  conformance_main_math_micro_lgamma_r
-  conformance_main_math_micro_log
-  conformance_main_math_micro_log2
-  conformance_main_math_micro_log10
-  conformance_main_math_micro_log1p
-  conformance_main_math_micro_logb
-
-  conformance_main_math_micro_mad
-  conformance_main_math_micro_maxmag
-  conformance_main_math_micro_minmag
-  conformance_main_math_micro_modf
-  conformance_main_math_micro_multiply
-
-  conformance_main_math_micro_nan
-  conformance_main_math_micro_nextafter
-  conformance_main_math_micro_not
-
-  conformance_main_math_micro_pow
-  conformance_main_math_micro_pown
-  conformance_main_math_micro_powr
-
-  conformance_main_math_micro_remainder
-  conformance_main_math_micro_remquo
-  conformance_main_math_micro_rint
-  conformance_main_math_micro_rootn
-  conformance_main_math_micro_round
-  conformance_main_math_micro_rsqrt
-
-  conformance_main_math_micro_signbit
-  conformance_main_math_micro_sin
-  conformance_main_math_micro_sincos
-  conformance_main_math_micro_sinh
-  conformance_main_math_micro_sinpi
-  conformance_main_math_micro_sqrt
-  conformance_main_math_micro_sqrt_cr
-  conformance_main_math_micro_subtract
-
-  conformance_main_math_micro_tan
-  conformance_main_math_micro_tanh
-  conformance_main_math_micro_tanpi
-  conformance_main_math_micro_trunc
-)
-
-if(ENABLE_SPIRV AND HAVE_SPIRV_TOOLS)
-  list(APPEND CTS_LEVEL0_LIST
-    conformance_main_spirv_new_micro_0
-    conformance_main_spirv_new_micro_1
-    conformance_main_spirv_new_micro_2)
-endif()
-
-foreach(CTSTEST IN LISTS CTS_LEVEL0_LIST)
-  set_property(TEST ${CTSTEST}
-    APPEND PROPERTY
-    LABELS "level0")
-endforeach()
 
 # mark tests that take long, need to avoid them in CI
 foreach(CTSTEST IN ITEMS conformance_main_multiples conformance_main_c11_atomics_micro_1
@@ -1221,3 +1121,12 @@ foreach(CTSTEST IN ITEMS conformance_main_multiples conformance_main_c11_atomics
     APPEND PROPERTY
     LABELS "long")
 endforeach()
+
+# fails currently because of a SPIR-V issue; the non-SPIR-V
+# version of the test works as expected.
+# See https://github.com/pocl/pocl/issues/1582
+# and https://github.com/KhronosGroup/SPIRV-LLVM-Translator/issues/2468
+if(LLVM_VERSION VERSION_GREATER_EQUAL 19.0)
+  set_property(TEST conformance_spirv_basic_micro_progvar
+    PROPERTY DISABLED 1)
+endif()

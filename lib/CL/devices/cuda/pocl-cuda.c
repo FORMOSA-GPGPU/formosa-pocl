@@ -176,7 +176,7 @@ typedef struct pocl_cuda_device_data_s
 
 } pocl_cuda_device_data_t;
 
-extern unsigned int pocl_num_devices;
+extern uint64_t pocl_num_devices;
 
 void *pocl_cuda_submit_thread (void *);
 void *pocl_cuda_finalize_thread (void *);
@@ -385,9 +385,6 @@ setup_kernellib_and_additional_extensions (cl_device_id dev,
   assert (data && "data must not be NULL!");
   assert (data->sm && data->ptx && "CUDA target must be known!");
 
-  dev->kernellib_fallback_name = NULL;
-  dev->kernellib_subdir = "cuda";
-
   int is_64bit_target = (sizeof (void *) == 8);
 
   int has_unified_addressing = 0;
@@ -518,6 +515,11 @@ pocl_cuda_init (unsigned j, cl_device_id dev, const char *parameters)
 
   assert (dev->data == NULL);
 
+  dev->llvm_target_triplet = (sizeof (void *) == 8) ? "nvptx64" : "nvptx";
+  dev->llvm_cpu = "generic";
+  dev->kernellib_fallback_name = NULL;
+  dev->kernellib_subdir = "cuda";
+
   pocl_init_default_device_infos (dev, CUDA_DEVICE_EXTENSIONS);
 
   SETUP_DEVICE_CL_VERSION (dev, CUDA_DEVICE_CL_VERSION_MAJOR,
@@ -529,7 +531,6 @@ pocl_cuda_init (unsigned j, cl_device_id dev, const char *parameters)
   dev->type = CL_DEVICE_TYPE_GPU;
   dev->address_bits = (sizeof (void *) * 8);
 
-  dev->llvm_target_triplet = (sizeof (void *) == 8) ? "nvptx64" : "nvptx";
   dev->llvm_fp_contract_mode = "fast";
 
   dev->spmd = CL_TRUE;
@@ -540,6 +541,13 @@ pocl_cuda_init (unsigned j, cl_device_id dev, const char *parameters)
   dev->local_as_id = 3;
   dev->constant_as_id = 1;
   dev->device_aux_functions = cuda_native_device_aux_funcs;
+
+#if defined(ENABLE_SPIRV)
+  dev->supported_spir_v_versions = "SPIR-V_1.2 SPIR-V_1.1 SPIR-V_1.0";
+  dev->supported_spirv_extensions = "+SPV_KHR_no_integer_wrap_decoration"
+                                    ",+SPV_INTEL_fp_fast_math_mode"
+                                    ",+SPV_EXT_shader_atomic_float_add";
+#endif
 
   /* TODO: Get images working */
   dev->image_support = CL_FALSE;
@@ -894,6 +902,9 @@ pocl_cuda_free_queue (cl_device_id device, cl_command_queue queue)
       PTHREAD_CHECK (pthread_join (queue_data->submit_thread, NULL));
       PTHREAD_CHECK (pthread_join (queue_data->finalize_thread, NULL));
     }
+
+  POCL_MEM_FREE(queue->data);
+
   return CL_SUCCESS;
 }
 
@@ -1535,11 +1546,12 @@ pocl_cuda_build_builtin (cl_program program, cl_uint device_i)
 }
 
 static int
-pocl_cuda_build_ptx (void *llvm_ir, char *out_ptx, CUmodule *out_module,
+pocl_cuda_build_ptx (void *llvm_ir, cl_program prog, char *out_ptx, CUmodule *out_module,
                      cl_device_id device, pocl_cuda_device_data_t *ddata,
                      int use_offsets, CUdeviceptr *constant_mem_base,
                      size_t *constant_mem_size, void **alignments)
 {
+  assert (prog);
   assert (llvm_ir);
   assert (out_ptx);
   assert (out_module);
@@ -1548,7 +1560,7 @@ pocl_cuda_build_ptx (void *llvm_ir, char *out_ptx, CUmodule *out_module,
   /* Generate PTX from LLVM bitcode */
   if (!pocl_exists (out_ptx))
     {
-      int r = pocl_ptx_gen (llvm_ir, out_ptx, device->llvm_cpu, ddata->ptx,
+      int r = pocl_ptx_gen (device, prog, llvm_ir, out_ptx, device->llvm_cpu, ddata->ptx,
                             ddata->libdevice, use_offsets, alignments);
       POCL_RETURN_ERROR_ON ((r != 0), CL_BUILD_PROGRAM_FAILURE,
                             "pocl-cuda: failed to generate PTX file %s\n",
@@ -1647,7 +1659,7 @@ pocl_cuda_post_build_program (cl_program program, cl_uint device_i)
   */
 
   result = pocl_cuda_build_ptx (
-      program->llvm_irs[device_i], ofs_ptx_filename, &ofs_module, device,
+      program->llvm_irs[device_i], program, ofs_ptx_filename, &ofs_module, device,
       ddata, 1, &constant_mem_base, &constant_mem_size, &align_map);
   if (result == CL_SUCCESS)
     {
@@ -1704,11 +1716,13 @@ pocl_cuda_free_program (cl_device_id device, cl_program program,
   return CL_SUCCESS;
 }
 
-void
-pocl_cuda_compile_kernel (_cl_command_node *cmd, cl_kernel kernel,
-                          cl_device_id device, int specialize)
+int
+pocl_cuda_compile_kernel (_cl_command_node *cmd,
+                          cl_kernel kernel,
+                          cl_device_id device,
+                          int specialize)
 {
-  return;
+  return CL_SUCCESS;
 }
 
 int
@@ -1884,7 +1898,7 @@ submit_cudnn_kernel(CUstream stream, _cl_command_node *cmd,
   CUDNN_CALL(cudnnGetConvolutionForwardWorkspaceSize(
         cudnn, in_desc, filt_desc, conv_desc, out_desc, algo, &ws_size));
   float *ws_data;
-  CUDA_CALL(cudaMalloc(&ws_data, ws_size));
+  CUDA_CALL(cudaMalloc((void **)&ws_data, ws_size));
 
   CUDNN_CALL(cudnnConvolutionForward(
       cudnn,
@@ -1989,10 +2003,12 @@ pocl_cuda_submit_kernel (CUstream stream, _cl_command_node *cmd,
   /* Prepare kernel arguments */
   void *null = NULL;
   unsigned sharedMemBytes = 0;
-  void *params[meta->num_args + meta->num_locals + 4];
-  unsigned sharedMemOffsets[meta->num_args + meta->num_locals];
+  void **params
+      = alloca (sizeof (void *) * (meta->num_args + meta->num_locals + 4));
+  unsigned *sharedMemOffsets
+      = alloca (sizeof (unsigned) * (meta->num_args + meta->num_locals));
   unsigned constantMemBytes = 0;
-  unsigned constantMemOffsets[meta->num_args];
+  unsigned *constantMemOffsets = alloca (sizeof (unsigned) * meta->num_args);
   unsigned globalOffsets[3];
 
   CUresult result;
@@ -2085,6 +2101,7 @@ pocl_cuda_submit_kernel (CUstream stream, _cl_command_node *cmd,
           }
         case POCL_ARG_TYPE_IMAGE:
         case POCL_ARG_TYPE_SAMPLER:
+        case POCL_ARG_TYPE_PIPE:
           POCL_ABORT ("Unhandled argument type for CUDA\n");
           break;
         }
@@ -2326,7 +2343,7 @@ pocl_cuda_submit_node (_cl_command_node *node, cl_command_queue cq, int locked)
             pocl_cuda_submit_copy_p2p (
               stream, cmd->migrate.src_device,
               mem->device_ptrs[cmd->migrate.src_device->global_mem_id].mem_ptr,
-              0, cq->device, &mem->device_ptrs[dev->global_mem_id].mem_ptr, 0,
+              0, cq->device, mem->device_ptrs[dev->global_mem_id].mem_ptr, 0,
               mem->size);
             break;
           }
@@ -2370,8 +2387,7 @@ pocl_cuda_submit_node (_cl_command_node *node, cl_command_queue cq, int locked)
         }
       else
         {
-          int i;
-          for (i = 0; i < cmd->svm_free.num_svm_pointers; i++)
+          for (unsigned int i = 0; i < cmd->svm_free.num_svm_pointers; i++)
             {
               void *ptr = cmd->svm_free.svm_pointers[i];
               POCL_LOCK_OBJ (event->context);
@@ -2526,7 +2542,7 @@ pocl_cuda_finalize_command (cl_device_id device, cl_event event)
 
   pocl_update_event_running (event);
   if (event->status < 0)
-    pocl_update_event_failed (event);
+    POCL_UPDATE_EVENT_FAILED_MSG (CL_FAILED, event, "CUDA event failed");
   else
     POCL_UPDATE_EVENT_COMPLETE_MSG (event, "CUDA event");
 }

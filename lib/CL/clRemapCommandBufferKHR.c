@@ -55,9 +55,19 @@ POname (clRemapCommandBufferKHR) (cl_command_buffer_khr command_buffer,
     num_queues, queues, command_buffer->properties, &errcode);
   if (errcode != CL_SUCCESS)
     {
+      assert (new_cmdbuf == NULL);
       *errcode_ret = errcode;
       return NULL;
     }
+
+  cl_command_buffer_properties_khr *props = NULL;
+  cl_command_buffer_properties_khr mutable_props[] = {
+    (cl_properties)CL_COMMAND_BUFFER_FLAGS_KHR,
+    (cl_properties)CL_COMMAND_BUFFER_MUTABLE_KHR,
+    (cl_properties)0 };
+  if (command_buffer->is_mutable) {
+    props = mutable_props;
+  }
 
   _cl_command_node *cmd;
   LL_FOREACH (command_buffer->cmds, cmd)
@@ -73,13 +83,13 @@ POname (clRemapCommandBufferKHR) (cl_command_buffer_khr command_buffer,
       {
       case CL_COMMAND_BARRIER:
         errcode = POname (clCommandBarrierWithWaitListKHR) (
-          new_cmdbuf, new_queue,
+          new_cmdbuf, new_queue, NULL,
           cmd->sync.syncpoint.num_sync_points_in_wait_list,
           cmd->sync.syncpoint.sync_point_wait_list, NULL, NULL);
         break;
       case CL_COMMAND_COPY_BUFFER:
         errcode = POname (clCommandCopyBufferKHR) (
-          new_cmdbuf, new_queue, cmd->command.copy.src, cmd->command.copy.dst,
+          new_cmdbuf, new_queue, NULL, cmd->command.copy.src, cmd->command.copy.dst,
           cmd->command.copy.src_offset, cmd->command.copy.dst_offset,
           cmd->command.copy.size,
           cmd->sync.syncpoint.num_sync_points_in_wait_list,
@@ -87,7 +97,7 @@ POname (clRemapCommandBufferKHR) (cl_command_buffer_khr command_buffer,
         break;
       case CL_COMMAND_COPY_BUFFER_RECT:
         errcode = POname (clCommandCopyBufferRectKHR) (
-          new_cmdbuf, new_queue, cmd->command.copy_rect.src,
+          new_cmdbuf, new_queue, NULL, cmd->command.copy_rect.src,
           cmd->command.copy_rect.dst, cmd->command.copy_rect.src_origin,
           cmd->command.copy_rect.dst_origin, cmd->command.copy_rect.region,
           cmd->command.copy_rect.src_row_pitch,
@@ -99,7 +109,7 @@ POname (clRemapCommandBufferKHR) (cl_command_buffer_khr command_buffer,
         break;
       case CL_COMMAND_COPY_BUFFER_TO_IMAGE:
         errcode = POname (clCommandCopyBufferToImageKHR) (
-          new_cmdbuf, new_queue, cmd->command.write_image.src,
+          new_cmdbuf, new_queue, NULL, cmd->command.write_image.src,
           cmd->command.write_image.dst, cmd->command.write_image.src_offset,
           cmd->command.write_image.origin, cmd->command.write_image.region,
           cmd->sync.syncpoint.num_sync_points_in_wait_list,
@@ -107,7 +117,7 @@ POname (clRemapCommandBufferKHR) (cl_command_buffer_khr command_buffer,
         break;
       case CL_COMMAND_COPY_IMAGE_TO_BUFFER:
         errcode = POname (clCommandCopyImageToBufferKHR) (
-          new_cmdbuf, new_queue, cmd->command.read_image.src,
+          new_cmdbuf, new_queue, NULL, cmd->command.read_image.src,
           cmd->command.read_image.dst, cmd->command.read_image.origin,
           cmd->command.read_image.region, cmd->command.read_image.dst_offset,
           cmd->sync.syncpoint.num_sync_points_in_wait_list,
@@ -115,7 +125,7 @@ POname (clRemapCommandBufferKHR) (cl_command_buffer_khr command_buffer,
         break;
       case CL_COMMAND_COPY_IMAGE:
         errcode = POname (clCommandCopyImageKHR) (
-          new_cmdbuf, new_queue, cmd->command.copy_image.src,
+          new_cmdbuf, new_queue, NULL, cmd->command.copy_image.src,
           cmd->command.copy_image.dst, cmd->command.copy_image.src_origin,
           cmd->command.copy_image.dst_origin, cmd->command.copy_image.region,
           cmd->sync.syncpoint.num_sync_points_in_wait_list,
@@ -124,7 +134,7 @@ POname (clRemapCommandBufferKHR) (cl_command_buffer_khr command_buffer,
 
       case CL_COMMAND_FILL_BUFFER:
         errcode = POname (clCommandFillBufferKHR) (
-          new_cmdbuf, new_queue, cmd->command.memfill.dst,
+          new_cmdbuf, new_queue, NULL, cmd->command.memfill.dst,
           cmd->command.memfill.pattern, cmd->command.memfill.pattern_size,
           cmd->command.memfill.offset, cmd->command.memfill.size,
           cmd->sync.syncpoint.num_sync_points_in_wait_list,
@@ -132,7 +142,7 @@ POname (clRemapCommandBufferKHR) (cl_command_buffer_khr command_buffer,
         break;
       case CL_COMMAND_FILL_IMAGE:
         errcode = POname (clCommandFillImageKHR) (
-          new_cmdbuf, new_queue, cmd->command.fill_image.dst,
+          new_cmdbuf, new_queue, NULL, cmd->command.fill_image.dst,
           cmd->command.fill_image.fill_pixel, cmd->command.fill_image.origin,
           cmd->command.fill_image.region,
           cmd->sync.syncpoint.num_sync_points_in_wait_list,
@@ -149,15 +159,14 @@ POname (clRemapCommandBufferKHR) (cl_command_buffer_khr command_buffer,
                 work_dim > 1 ? (local_size[1] * groups[1]) : 0,
                 work_dim > 2 ? (local_size[2] * groups[2]) : 0 };
 
-          /* Re-record cmd using the original command's kernel arguments.
-           *
-           * TODO: pass along kernel command properties */
+          /* Re-record cmd using the original command's kernel arguments. */
+          _cl_command_node *mutable_h = NULL;
           errcode = pocl_record_ndrange_kernel (
-            new_cmdbuf, new_queue, NULL, cmd->command.run.kernel,
+            new_cmdbuf, new_queue, props, cmd->command.run.kernel,
             cmd->command.run.arguments, work_dim,
             cmd->command.run.pc.global_offset, global_size, local_size,
             cmd->sync.syncpoint.num_sync_points_in_wait_list,
-            cmd->sync.syncpoint.sync_point_wait_list, NULL);
+            cmd->sync.syncpoint.sync_point_wait_list, NULL, &mutable_h);
         }
         break;
 
@@ -195,7 +204,7 @@ POname (clRemapCommandBufferKHR) (cl_command_buffer_khr command_buffer,
 
       case CL_COMMAND_SVM_MEMCPY:
         errcode = POname (clCommandSVMMemcpyKHR) (
-          new_cmdbuf, new_queue, cmd->command.svm_memcpy.dst,
+          new_cmdbuf, new_queue, NULL, cmd->command.svm_memcpy.dst,
           cmd->command.svm_memcpy.src, cmd->command.svm_memcpy.size,
           cmd->sync.syncpoint.num_sync_points_in_wait_list,
           cmd->sync.syncpoint.sync_point_wait_list, NULL, NULL);
@@ -288,7 +297,8 @@ POname (clRemapCommandBufferKHR) (cl_command_buffer_khr command_buffer,
   return new_cmdbuf;
 
 ERROR:
-  POname (clReleaseCommandBufferKHR) (new_cmdbuf);
+  if (new_cmdbuf)
+    POname (clReleaseCommandBufferKHR) (new_cmdbuf);
   if (errcode_ret != NULL)
     *errcode_ret = errcode;
   return NULL;

@@ -21,10 +21,11 @@
    IN THE SOFTWARE.
 */
 
-#include <CL/cl_ext.h>
-
 #include "pocl_cl.h"
+#include "pocl_debug.h"
 #include "pocl_util.h"
+
+#include <CL/cl_ext.h>
 
 CL_API_ENTRY cl_command_buffer_khr CL_API_CALL
 POname (clCreateCommandBufferKHR) (
@@ -34,14 +35,17 @@ POname (clCreateCommandBufferKHR) (
 {
   int errcode = 0;
   cl_command_buffer_khr cmdbuf = NULL;
-
-  POCL_GOTO_ERROR_COND ((num_queues > 1
-                         && strstr (queues[0]->device->extensions,
-                                    "cl_khr_command_buffer_multi_device")
-                              == NULL),
-                        CL_INVALID_VALUE);
   POCL_GOTO_ERROR_COND ((num_queues == 0), CL_INVALID_VALUE);
   POCL_GOTO_ERROR_COND ((queues == NULL), CL_INVALID_VALUE);
+
+  if (num_queues > 1)
+    {
+      for (cl_uint i = 0; i < num_queues; ++i)
+        POCL_GOTO_ERROR_COND ((strstr (queues[i]->device->extensions,
+                                       "cl_khr_command_buffer_multi_device")
+                               == NULL),
+                              CL_INVALID_VALUE);
+    }
 
   /* All queues must have the same OpenCL context */
   cl_context ref_ctx = queues[0]->context;
@@ -60,9 +64,24 @@ POname (clCreateCommandBufferKHR) (
 
       POCL_GOTO_ERROR_COND ((queues[i]->context != ref_ctx),
                             CL_INVALID_COMMAND_QUEUE);
+
+      unsigned num_queues_on_dev = 0;
+      for (unsigned j = 0; j < num_queues; ++j)
+        {
+          if (j != i && queues[i]->device == queues[j]->device)
+            num_queues_on_dev += 1;
+        }
+      POCL_GOTO_ERROR_COND (
+        (num_queues_on_dev > 1
+         && !(queues[i]->device->cmdbuf_capabilities
+              & CL_COMMAND_BUFFER_CAPABILITY_MULTIPLE_QUEUE_KHR)),
+        CL_INCOMPATIBLE_COMMAND_QUEUE_KHR);
     }
 
   cl_uint num_properties = 0;
+  cl_command_buffer_properties_khr *seen_keys = NULL;
+  cl_bool property_mutable = 0;
+  cl_bool property_assert_no_more_wgs = 0;
   if (properties != NULL)
     {
       const cl_command_buffer_properties_khr *key = 0;
@@ -73,7 +92,9 @@ POname (clCreateCommandBufferKHR) (
         "Properties != NULL, but zero properties in array\n");
 
       unsigned i = 0;
-      cl_command_buffer_properties_khr seen_keys[num_properties];
+      seen_keys = alloca (sizeof (cl_command_buffer_properties_khr)
+                          * num_properties);
+
       for (i = 0; i < num_properties; ++i)
         seen_keys[i] = 0;
 
@@ -89,29 +110,79 @@ POname (clCreateCommandBufferKHR) (
                 "*properties\n");
             }
 
-          const cl_command_buffer_properties_khr *val = key + 1;
-          cl_command_buffer_properties_khr tmp = *val;
+          cl_command_buffer_properties_khr val = key[1];
+          /*
+          #define CL_COMMAND_BUFFER_SIMULTANEOUS_USE_KHR              (1 << 0)
+          #define CL_COMMAND_BUFFER_DEVICE_SIDE_SYNC_KHR              (1 << 2)
+          #define CL_COMMAND_BUFFER_MUTABLE_KHR                       (1 << 1)
+          */
           switch (*key)
             {
             case CL_COMMAND_BUFFER_FLAGS_KHR:
               /* Simultaneous use is always supported, no action needed */
-              tmp &= ~CL_COMMAND_BUFFER_SIMULTANEOUS_USE_KHR;
-
-              /* If any of the devices associated with 'queues' does not
-               * support a requested capability, error out with
-               * CL_INVALID_PROPERTY */
+              val &= ~CL_COMMAND_BUFFER_SIMULTANEOUS_USE_KHR;
+              /* some devices support mutable cmd buffers */
+              property_mutable = (val & CL_COMMAND_BUFFER_MUTABLE_KHR) > 0;
+              val &= ~CL_COMMAND_BUFFER_MUTABLE_KHR;
 
               /* Any flag bits not handled above are invalid */
               POCL_GOTO_ERROR_ON (
-                (tmp != 0), CL_INVALID_VALUE,
+                (val != 0), CL_INVALID_VALUE,
                 "Unknown flags in CL_COMMAND_BUFFER_FLAGS_KHR property\n");
               seen_keys[i] = *key;
               break;
+
+            case CL_COMMAND_BUFFER_MUTABLE_DISPATCH_ASSERTS_KHR:
+              property_assert_no_more_wgs
+                = (val
+                   & CL_MUTABLE_DISPATCH_ASSERT_NO_ADDITIONAL_WORK_GROUPS_KHR)
+                  > 0;
+              break;
+
             default:
-              errcode = CL_INVALID_VALUE;
-              goto ERROR;
+              POCL_GOTO_ERROR_ON (1, CL_INVALID_VALUE, "Unknown property "
+                  "%zu in command-buffer properties", (size_t)key);
             }
         }
+    }
+
+  /* If any of the devices associated with 'queues' does not
+   * support a requested capability, error out with
+   * CL_INVALID_PROPERTY */
+  if (property_mutable)
+    {
+      for (unsigned i = 0; i < num_queues; ++i)
+        {
+          POCL_GOTO_ERROR_ON (
+            (queues[i]->device->cmdbuf_mutable_dispatch_capabilities == 0),
+            CL_INVALID_PROPERTY,
+            "CL_COMMAND_BUFFER_MUTABLE_KHR requested but queue %u / device %s"
+            " does not support it\n",
+            i, queues[i]->device->short_name);
+        }
+    }
+
+  for (unsigned i = 0; i < num_queues; ++i)
+    {
+      if (queues[i]->device->cmdbuf_supported_properties)
+        POCL_GOTO_ERROR_ON (
+          ((queues[i]->device->cmdbuf_supported_properties
+            & queues[i]->properties)
+           != queues[i]->properties),
+          CL_INCOMPATIBLE_COMMAND_QUEUE_KHR,
+          "properties of command-queue"
+          " does contain queue properties not supported by CL_DEVI"
+          "CE_COMMAND_BUFFER_SUPPORTED_QUEUE_PROPERTIES_KHR\n");
+
+      if (queues[i]->device->cmdbuf_required_properties)
+        POCL_GOTO_ERROR_ON (
+          ((queues[i]->device->cmdbuf_required_properties
+            & queues[i]->properties)
+           != queues[i]->device->cmdbuf_required_properties),
+          CL_INCOMPATIBLE_COMMAND_QUEUE_KHR,
+          "properties of command-queue"
+          " does not contain properties required by CL_DEVI"
+          "CE_COMMAND_BUFFER_REQUIRED_QUEUE_PROPERTIES_KHR\n");
     }
 
   cmdbuf = calloc (1, sizeof (struct _cl_command_buffer_khr));
@@ -125,11 +196,14 @@ POname (clCreateCommandBufferKHR) (
 
   cmdbuf->state = CL_COMMAND_BUFFER_STATE_RECORDING_KHR;
   cmdbuf->num_queues = num_queues;
+  cmdbuf->is_mutable = property_mutable;
+  cmdbuf->assert_no_more_wgs = property_assert_no_more_wgs;
   cmdbuf->queues
       = (cl_command_queue *)calloc (num_queues, sizeof (cl_command_queue));
   memcpy (cmdbuf->queues, queues, num_queues * sizeof (cl_command_queue));
   cmdbuf->num_properties = num_properties;
-  POCL_FAST_INIT(cmdbuf->mutex);
+  cmdbuf->data = (void **)calloc (ref_ctx->num_devices, sizeof (void *));
+  POCL_INIT_LOCK (cmdbuf->mutex);
   if (num_properties > 0)
     {
       cmdbuf->properties = (cl_command_buffer_properties_khr *)malloc (
@@ -143,6 +217,8 @@ POname (clCreateCommandBufferKHR) (
   for (unsigned i = 0; i < num_queues; ++i)
     {
       POname (clRetainCommandQueue) (queues[i]);
+      if (queues[i]->device != queues[0]->device)
+        cmdbuf->is_multi_device = 1;
     }
 
   if (errcode_ret != NULL)

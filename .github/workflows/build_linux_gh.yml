@@ -1,0 +1,191 @@
+---
+name: Linux / CPU x86-64 on GH tests
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - 'main'
+      - 'release*'
+  workflow_dispatch:
+  pull_request:
+    paths-ignore:
+      - 'doc/**'
+      - 'CHANGES'
+      - 'COPYING'
+      - 'CREDITS'
+      - 'LICENSE'
+      - 'README.*'
+      - 'tools/docker/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  CCACHE_BASEDIR: "${{ github.workspace }}"
+  CCACHE_DIR: "${{ github.workspace }}/../../../../ccache_storage"
+  EXAMPLES_DIR: "${{ github.workspace }}/../../../../examples"
+
+jobs:
+  # jobs run on Github-hosted runners.
+  # TODO: move more self-hosted to Github-hosted
+  # unfortunately sanitizers don't work on Github-hosted runners,
+  # probably some limitation of Virtual address space
+  # (sanitizer-built binaries require >=20 terabytes of Virt AS)
+  github_test_matrix:
+    name: LLVM ${{ matrix.llvm }} - ${{ matrix.config }}
+    # 24.04 brings in LLVM up to 18 + ocl-icd 2.3.x (OpenCL 3.0 compatible)
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # basic = simplest pthread build with ENABLE_CONFORMANCE
+        # devel = with devel options without ENABLE_CONFORMANCE
+        # install = install PoCL system-wide and run tests
+        # static = statically linked LLVM component libraries
+        # TBB, OpenMP = CPU drivers with TBB/OpenMP support
+        # DBK = ONNX / libjpeg-turbo DBKs enabled
+        llvm: [18, 19, 20]
+        config: [basic, devel]
+        include:
+          - llvm: 14
+            config: static
+          - llvm: 15
+            config: TBB
+          - llvm: 16
+            config: OpenMP
+          - llvm: 17
+            config: TBB
+          - llvm: 18
+            config: OpenMP
+          - llvm: 19
+            config: install
+          - llvm: 18
+            config: DBKs
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Load Env vars
+        id: load-env
+        run: |
+          cat ${{ github.workspace }}/.github/variables.txt >> $GITHUB_ENV
+
+      - name: Install prerequisites and ocl-icd
+        run: >
+          sudo apt update -y &&
+          sudo apt install -y wget gpg python3-dev libpython3-dev build-essential ocl-icd-libopencl1 cmake make git pkg-config ocl-icd-libopencl1 ocl-icd-dev ocl-icd-opencl-dev libhwloc-dev zlib1g-dev libtbb-dev
+
+      - name: Install LLVM <= 16 (+ llvm-spirv)
+        if: ${{ matrix.llvm <= 16 }}
+        run: >
+          export LLVM_VERSION=${{ matrix.llvm }} &&
+          sudo apt install -y libclang-cpp${LLVM_VERSION}-dev llvm-${LLVM_VERSION}-dev libclang-${LLVM_VERSION}-dev clang-${LLVM_VERSION} llvm-${LLVM_VERSION} llvm-spirv-${LLVM_VERSION} libpolly-${LLVM_VERSION}-dev
+
+      - name: Install LLVM 17, 18, 19 (+ libllvmspirvlib)
+        if: ${{ (matrix.llvm >= 17) &&  (matrix.llvm <= 19) }}
+        run: >
+          export LLVM_VERSION=${{ matrix.llvm }} &&
+          sudo apt install -y libclang-cpp${LLVM_VERSION}-dev llvm-${LLVM_VERSION}-dev libclang-${LLVM_VERSION}-dev clang-${LLVM_VERSION} llvm-${LLVM_VERSION} libllvmspirvlib-${LLVM_VERSION}-dev libpolly-${LLVM_VERSION}-dev spirv-tools
+
+      - name: Install LLVM >= 20 (+ SPIRV backend)
+        if: ${{ matrix.llvm >= 20 }}
+        run: >
+          export LLVM_VERSION=${{ matrix.llvm }} &&
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/llvm-snapshot.gpg &&
+          echo "deb [signed-by=/usr/share/keyrings/llvm-snapshot.gpg] http://apt.llvm.org/noble/ llvm-toolchain-noble-${LLVM_VERSION} main" >/tmp/llvm.list &&
+          sudo mv /tmp/llvm.list /etc/apt/sources.list.d/ &&
+          sudo apt update -y &&
+          sudo apt install -y libclang-cpp${LLVM_VERSION}-dev llvm-${LLVM_VERSION}-dev libclang-${LLVM_VERSION}-dev clang-${LLVM_VERSION} llvm-${LLVM_VERSION} mlir-${LLVM_VERSION}-tools libllvmlibc-${LLVM_VERSION}-dev libpolly-${LLVM_VERSION}-dev spirv-tools
+
+      - name: Install XSMM & ONNX & libjpeg-turbo
+        if: ${{ matrix.config == 'DBKs' }}
+        run: >
+           sudo apt install -y libopenblas-dev &&
+           sudo wget -q -O libjpeg-turbo.deb https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.0.4/libjpeg-turbo-official_3.0.4_amd64.deb &&
+           sudo dpkg -i libjpeg-turbo.deb &&
+           sudo wget -q -O /tmp/onnx-runtime.tgz https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-linux-x64-1.19.2.tgz &&
+           sudo mkdir /opt/onnx && sudo tar -xf /tmp/onnx-runtime.tgz -C /opt/onnx --strip-components=1 &&
+           sudo ln -s /opt/libjpeg-turbo/lib64 /opt/libjpeg-turbo/lib &&
+           sudo ln -s /opt/onnx/lib /opt/onnx/lib64 &&
+           sudo mv /opt/onnx/include /opt/onnxruntime && sudo mkdir /opt/onnx/include && sudo mv /opt/onnxruntime /opt/onnx/include/ &&
+           sudo bash -c 'mkdir /opt/source && cd /opt/source && git clone https://github.com/libxsmm/libxsmm.git && cd libxsmm && echo "unstable-1.17.1" > version.txt && make -j3 STATIC=0 FORTRAN=0 AVX=2 install DESTDIR=/opt/xsmm'
+
+      - name: CMake
+        id: cmake
+        run: |
+          if [ "${{ matrix.config }}" == "DBKs" ]; then
+            export "CMAKE_PREFIX_PATH=/opt/libjpeg-turbo/lib/cmake:/opt/onnx/lib/cmake"
+            export "PKG_CONFIG_PATH=/opt/xsmm/lib"
+          fi
+          runCMake() {
+            BUILD_FLAGS="-O1 -march=native -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
+            cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            "-DCMAKE_C_FLAGS_RELWITHDEBINFO=$BUILD_FLAGS" \
+            "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=$BUILD_FLAGS" \
+            -DWITH_LLVM_CONFIG=/usr/bin/llvm-config-${{ matrix.llvm }} \
+            "$@" -B ${{ github.workspace }}/build ${{ github.workspace }}
+          }
+
+          rm -rf ${{ github.workspace }}/build
+          mkdir ${{ github.workspace }}/build
+          if [ "${{ matrix.config }}" == "OpenMP" ]; then
+            runCMake -DENABLE_ICD=1 -DENABLE_HOST_CPU_DEVICES_OPENMP=1
+          elif [ "${{ matrix.config }}" == "TBB" ]; then
+            runCMake -DENABLE_ICD=1 -DENABLE_TBB_DEVICE=1
+          elif [ "${{ matrix.config }}" == "basic" ]; then
+            runCMake -DENABLE_ICD=1 -DENABLE_LLVM_FILECHECKS=1 -DENABLE_CONFORMANCE=ON
+          elif [ "${{ matrix.config }}" == "static" ]; then
+            runCMake -DENABLE_ICD=1 -DSTATIC_LLVM=1 -DDEVELOPER_MODE=ON
+          elif [ "${{ matrix.config }}" == "devel" ]; then
+            runCMake -DENABLE_RELOCATION=0 -DDEVELOPER_MODE=1 -DENABLE_VALGRIND=1 -DENABLE_EXTRA_VALIDITY_CHECKS=1
+          elif [ "${{ matrix.config }}" == "install" ]; then
+            runCMake -DCMAKE_INSTALL_PREFIX=/usr -DENABLE_ICD=1 -DKERNELLIB_HOST_CPU_VARIANTS=distro -DPOCL_ICD_ABSOLUTE_PATH=OFF -DENABLE_POCL_BUILDING=OFF
+          elif [ "${{ matrix.config }}" == "DBKs" ]; then
+            runCMake -DENABLE_ICD=1 -DENABLE_HOST_CPU_DEVICES=1
+          else
+            echo "Unknown configuration" && exit 1
+          fi
+
+      - name: Check XSMM, ONNX & libjpeg-turbo were found & enabled
+        if: ${{ matrix.config == 'DBKs' }}
+        run: >
+           cd ${{ github.workspace }}/build && grep 'define HAVE_ONNXRT' config.h && grep 'define HAVE_LIBJPEG_TURBO' config.h && grep 'define HAVE_LIBXSMM' config.h
+
+      - name: Build PoCL
+        id: build_pocl
+        timeout-minutes: 20
+        run: |
+          cd ${{ github.workspace }}/build && make -j$(nproc)
+
+      - name: Install PoCL
+        id: install_pocl
+        if: ${{ matrix.config == 'install' }}
+        timeout-minutes: 5
+        run: |
+          # remove CTestCustom.cmake - it contains POCL_BUILDING and OCL_ICD_VENDORS incompatible with install config
+          cd ${{ github.workspace }}/build && sudo make install && rm CTestCustom.cmake
+          # remove the built libpocl.so library
+          cd ${{ github.workspace }}/build/lib/CL && make clean
+
+      - name: Run Tests
+        env:
+          POCL_CACHE_DIR: "${{ runner.temp }}/GH_POCL_CACHE"
+        id: ctest
+        timeout-minutes: 120
+        run: |
+          runCTest() {
+            cd ${{ github.workspace }}/build && ctest -j$(nproc) $CTEST_FLAGS "$@"
+          }
+          rm -rf ${{ env.POCL_CACHE_DIR }}
+          mkdir ${{ env.POCL_CACHE_DIR }}
+          # the pocl_test_dlopen tests try to dlopen libraries from the build dir; however, we removed them at install step
+          if [ "${{ matrix.config }}" == "install" ]; then
+            runCTest -L cpu -E pocl_test_dlopen_
+          else
+            runCTest -L cpu
+          fi

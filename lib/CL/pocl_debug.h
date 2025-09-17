@@ -24,23 +24,20 @@
 #ifndef POCL_DEBUG_H
 #define POCL_DEBUG_H
 
+#include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef _WIN32
-#  include <stdint.h>
-#  include <stddef.h> // size_t
-#  define PRIu64 "I64u"
-#  define PRIX64 "I64x"
-#  define PRIXPTR "p"
+#if defined(_MSC_VER)
 #  define PRIuS "Iu"
-#else
-# ifndef __STDC_FORMAT_MACROS
-# define __STDC_FORMAT_MACROS
-# endif
-# include <inttypes.h>
 #endif
+
+#ifndef __STDC_FORMAT_MACROS
+#define __STDC_FORMAT_MACROS
+#endif
+#include <inttypes.h>
 
 #include "config.h"
 
@@ -51,6 +48,9 @@
 // size_t print spec
 #ifndef PRIuS
 # define PRIuS "zu"
+#endif
+#ifndef PRId64
+# define PRId64 PRIu64
 #endif
 
 #if defined(__ANDROID__)
@@ -174,8 +174,8 @@ POCL_EXPORT
  *
  * Currently works only with PoCL contexts.
  *
- * @param context the OpenCL context to dump.
- * @param file_name the target file name.
+ * \param context the OpenCL context to dump.
+ * \param file_name the target file name.
  */
 POCL_EXPORT
 void pocl_dump_dot_task_graph (cl_context context, const char *file_name);
@@ -189,8 +189,8 @@ void pocl_dump_dot_task_graph_signal ();
 /**
  * Converts a command type to a string.
  *
- * @param cmd The command.
- * @param shortened Set to 1 for a shortened string.
+ * \param cmd The command.
+ * \param shortened Set to 1 for a shortened string.
  */
 POCL_EXPORT
 const char *pocl_command_type_to_str (cl_command_type cmd, int shortened);
@@ -494,6 +494,14 @@ POCL_EXPORT
 
 #endif
 
+#define POCL_RETURN_ERROR(err_code, ...)                                      \
+        POCL_MSG_ERR2 (#err_code, __VA_ARGS__);                               \
+        return err_code
+
+#define POCL_GOTO_ERROR(err_code, ...)                                        \
+        POCL_MSG_ERR2 (#err_code, __VA_ARGS__);                               \
+        errcode = err_code;                                                   \
+        goto err_code
 
 #define POCL_GOTO_ERROR_ON(cond, err_code, ...)                             \
   do                                                                        \
@@ -507,16 +515,16 @@ POCL_EXPORT
     }                                                                       \
   while (0)
 
-#define POCL_RETURN_ERROR_ON(cond, err_code, ...)                           \
-  do                                                                        \
-    {                                                                       \
-      if (cond)                                                             \
-        {                                                                   \
-            POCL_MSG_ERR2(#err_code, __VA_ARGS__);                          \
-            return err_code;                                                \
-        }                                                                   \
-    }                                                                       \
-  while (0)
+#define POCL_RETURN_ERROR_ON(cond, err_code, ...)                             \
+        do                                                                    \
+          {                                                                   \
+            if (cond)                                                         \
+              {                                                               \
+                POCL_MSG_ERR2 (#err_code, __VA_ARGS__);                       \
+                return err_code;                                              \
+              }                                                               \
+          }                                                                   \
+        while (0)
 
 #define POCL_RETURN_ERROR_COND(cond, err_code)                              \
   do                                                                        \

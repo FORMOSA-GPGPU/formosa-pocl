@@ -21,8 +21,6 @@
    IN THE SOFTWARE.
 */
 
-#include <CL/cl_ext.h>
-
 #include "pocl_cl.h"
 #include "pocl_mem_management.h"
 #include "pocl_util.h"
@@ -30,31 +28,34 @@
 CL_API_ENTRY cl_int
 POname (clCommandBarrierWithWaitListKHR) (
     cl_command_buffer_khr command_buffer, cl_command_queue command_queue,
+    const cl_command_properties_khr* properties,
     cl_uint num_sync_points_in_wait_list,
     const cl_sync_point_khr *sync_point_wait_list,
     cl_sync_point_khr *sync_point,
     cl_mutable_command_khr *mutable_handle) CL_API_SUFFIX__VERSION_1_2
 {
   cl_int errcode;
-  _cl_command_node *cmd = NULL;
 
   CMDBUF_VALIDATE_COMMON_HANDLES;
+  SETUP_MUTABLE_HANDLE;
 
   errcode = pocl_create_recorded_command (
-    &cmd, command_buffer, command_queue, CL_COMMAND_BARRIER,
+    mutable_handle, command_buffer, command_queue, CL_COMMAND_BARRIER,
     num_sync_points_in_wait_list, sync_point_wait_list, NULL);
   if (errcode != CL_SUCCESS)
     goto ERROR;
 
-  cmd->command.barrier.has_wait_list = num_sync_points_in_wait_list != 0;
-  errcode = pocl_command_record (command_buffer, cmd, sync_point);
+  (*mutable_handle)->command.barrier.has_wait_list
+    = num_sync_points_in_wait_list != 0;
+
+  errcode = pocl_command_record (command_buffer, *mutable_handle, sync_point);
   if (errcode != CL_SUCCESS)
     goto ERROR;
 
   return CL_SUCCESS;
 
 ERROR:
-  pocl_mem_manager_free_command (cmd);
+  pocl_mem_manager_free_command (*mutable_handle);
   return errcode;
 }
 POsym (clCommandBarrierWithWaitListKHR)

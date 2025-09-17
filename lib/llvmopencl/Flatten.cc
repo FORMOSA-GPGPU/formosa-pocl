@@ -74,9 +74,9 @@ static bool flattenAll(Module &M) {
 
   for (llvm::Module::iterator i = M.begin(), e = M.end(); i != e; ++i) {
     llvm::Function *F = &*i;
-    if (F->isDeclaration() || F->getName().starts_with("__pocl_print") ||
-        F->getName() == "__printf_alloc" ||
-        F->getName() == "__printf_flush_buffer" ||
+    if (F->isDeclaration() || F->getName() == "pocl_printf_alloc" ||
+        F->getName() == "pocl_printf_alloc_stub" ||
+        F->getName() == "pocl_flush_printf_buffer" ||
         AuxFuncs.find(F->getName().str()) != AuxFuncs.end())
       continue;
 
@@ -84,19 +84,23 @@ static bool flattenAll(Module &M) {
     changed = true;
     decltype(Attribute::AlwaysInline) replaceThisAttr, replacementAttr;
     decltype(llvm::GlobalValue::ExternalLinkage) linkage;
-    if (pocl::isKernelToProcess(*F)) {
+
+    if (pocl::isKernelToProcess(*F) ||
+        // If the target defines a main for the kernel command, we should keep
+        // it globally accessible.
+        F->getName() == "main") {
       replaceThisAttr = Attribute::AlwaysInline;
       replacementAttr = Attribute::NoInline;
       linkage = llvm::GlobalValue::ExternalLinkage;
 #ifdef DEBUG_FLATTEN
-      std::cerr << "### NoInline for " << f->getName().str() << std::endl;
+      std::cerr << "### NoInline for " << F->getName().str() << std::endl;
 #endif
     } else {
       replaceThisAttr = Attribute::NoInline;
       replacementAttr = Attribute::AlwaysInline;
       linkage = llvm::GlobalValue::InternalLinkage;
 #ifdef DEBUG_FLATTEN
-      std::cerr << "### AlwaysInline for " << f->getName().str() << std::endl;
+      std::cerr << "### AlwaysInline for " << F->getName().str() << std::endl;
 #endif
     }
     F->setAttributes(F->getAttributes()

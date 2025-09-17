@@ -65,7 +65,7 @@ int TestOutputDataDecomposition() {
 
     cl_context_properties cprops[] = {
         CL_CONTEXT_PLATFORM, (cl_context_properties)(PlatformList[0])(), 0};
-    cl::Context Context(CL_DEVICE_TYPE_CPU | CL_DEVICE_TYPE_GPU, cprops);
+    cl::Context Context(CL_DEVICE_TYPE_ALL, cprops);
 
     std::vector<cl::Device> Devices = Context.getInfo<CL_CONTEXT_DEVICES>();
 
@@ -126,15 +126,16 @@ int TestOutputDataDecomposition() {
     std::vector<cl::CommandQueue> Queues;
     std::vector<cl::Event> KernelEvents;
     // Spawn a bunch of kernel commands in their independent command queues
-    // (which could target different devices) to process their piece of the
+    // (which can target different devices) to process their piece of the
     // data.
     for (size_t i = 0; i < NumParallelQueues; ++i) {
 
       cl::CommandQueue Queue(Context, Devices[i % Devices.size()], 0);
       Queues.push_back(Queue);
 
-      cl_buffer_region Region{.origin = i * WorkShare * sizeof(cl_int),
-                              .size = (WorkShare - Uncovered) * sizeof(cl_int)};
+      cl_buffer_region Region;
+      Region.origin = i * WorkShare * sizeof(cl_int);
+      Region.size = (WorkShare - Uncovered) * sizeof(cl_int);
 
       std::cout << "Q" << i << " sub-buffer origin element " << i * WorkShare
                 << " last element "
@@ -218,11 +219,11 @@ int TestOutputDataDecomposition() {
 
     // Check the data after the parallel sub-buffer launches.
     for (size_t i = 0; i < NumData; ++i) {
-      int Share = i / WorkShare;
+      size_t Share = i / WorkShare;
       if (i >= WorkShare * Share &&
           i < WorkShare * Share + WorkShare - Uncovered &&
           i < WorkShare * NumParallelQueues) {
-        if (AfterSubBufCContents[i] != i + 2) {
+        if ((size_t)AfterSubBufCContents[i] != i + 2) {
           std::cerr << "ERROR: after sub-bufs " << i << " was "
                     << AfterSubBufCContents[i] << " expected " << i + 2
                     << std::endl;
@@ -243,11 +244,11 @@ int TestOutputDataDecomposition() {
 
     // Check the data before the last kernel launch.
     for (size_t i = 0; i < NumData; ++i) {
-      int Share = i / WorkShare;
+      size_t Share = i / WorkShare;
       if (i >= WorkShare * Share &&
           i < WorkShare * Share + WorkShare - Uncovered &&
           i < WorkShare * NumParallelQueues) {
-        if (NewBufCContents[i] != i + 2 + 2) {
+        if ((size_t)NewBufCContents[i] != i + 2 + 2) {
           std::cerr << "ERROR: " << i << " was " << NewBufCContents[i]
                     << " expected " << i + 2 + 2 << std::endl;
           AllOK = false;
@@ -267,12 +268,12 @@ int TestOutputDataDecomposition() {
     // In the final state there should be one additional 2 addition in the
     // last manipulated part of the array.
     for (size_t i = 0; i < NumData; ++i) {
-      int Share = i / WorkShare;
+      size_t Share = i / WorkShare;
       if (i >= WorkShare * Share &&
           i < WorkShare * Share + WorkShare - Uncovered &&
           i < WorkShare * NumParallelQueues) {
         if (i < (WorkShare * (NumParallelQueues - 1))) {
-          if (FinalBufCContents[i] != i + 2 + 2) {
+          if ((size_t)FinalBufCContents[i] != i + 2 + 2) {
             std::cerr << "ERROR: final " << i << " was " << FinalBufCContents[i]
                       << " expected " << i + 2 + 2 << std::endl;
             AllOK = false;
@@ -280,7 +281,7 @@ int TestOutputDataDecomposition() {
           }
         } else if (i < (WorkShare * NumParallelQueues)) {
           // The part which was not touched by sub-buffers.
-          if (FinalBufCContents[i] != i + 2 + 2 + 2) {
+          if ((size_t)FinalBufCContents[i] != i + 2 + 2 + 2) {
             std::cerr << "ERROR: final " << i << " was " << FinalBufCContents[i]
                       << " expected " << i + 2 + 2 << std::endl;
             AllOK = false;

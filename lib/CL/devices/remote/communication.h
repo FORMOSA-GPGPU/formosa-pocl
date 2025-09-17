@@ -29,7 +29,12 @@
 
 #include "messages.h"
 #include "pocl.h"
+#include "pocl_networking.h"
+#include "pocl_threads.h"
+#include "pocl_util.h"
 
+#include "pocl_threads.h"
+#include "pocl_util.h"
 #include "utlist_addon.h"
 #include "utlist.h"
 
@@ -43,7 +48,8 @@
 #endif
 
 #define MAX_ADDRESS_SIZE 512
-#define MAX_ADDRESS_PORT_SIZE (MAX_ADDRESS_SIZE + 11) // 11 bytes for the port
+/** 11 bytes for the port */
+#define MAX_ADDRESS_PORT_SIZE (MAX_ADDRESS_SIZE + 11)
 
 #define REMOTE_DEV_DATA                                                       \
   remote_device_data_t *data = (remote_device_data_t *)device->data
@@ -127,7 +133,8 @@ typedef struct rdma_buffer_info_s
   uint32_t mem_id;
   uint32_t remote_rkey;
   uint64_t remote_vaddr;
-  UT_hash_handle hh; // To make this struct usable with uthash
+  /* To make this struct usable with uthash */
+  UT_hash_handle hh;
 } rdma_buffer_info_t;
 #endif
 
@@ -168,10 +175,43 @@ struct network_command
   } data;
 };
 
+/** Wrapper struct that holds everything the communication (read/write)
+ * functions need to function, starting with a tag to indicate what kind of
+ * connection this is */
+typedef struct remote_connection_s
+{
+  transport_domain_t domain;
+  int fd;
+  /* Sync objects for avoiding races in reconnect procedures */
+  sync_t setup_guard;
+  /* Sync objects for avoiding a race condition between a writer picking up
+   * the connection fd, the reader closing it and the writer trying to perform
+   * a write with the now incorrect value of the fd. */
+  sync_t *writer_guard;
+  /* Running counter so threads can detect a connection change even if the new
+   * fd has the same value as the old one. */
+  unsigned reconnect_count;
+  /* Pipe endpoint that the reader should include when polling the connection
+   * fd so the writer can wake it up if a reconnect becomes necessary. */
+  int notify_pipe_r;
+  /* Pipe endpoint that the writer should write a single byte to if it detects
+   * the need for reconnecting. */
+  int notify_pipe_w;
+  /* Flag for determining the socket options to use when (re)connecting */
+  int is_fast;
+  /* Counter to track attempts made for reconnection. Variable is used to be
+   * able to give-up after POCL_REMOTE_RECONNECT_MAX_ATTEMPTS. */
+  int reconnect_attempts;
+  /* Sync object mainly to use the condition to signal the reader threads from
+   * the discovery reconnect function. */
+  sync_t discovery_reconnect_guard;
+} remote_connection_t;
+
 #define INITIAL_ARRAY_CAP 1024
 
-// in nanoseconds
+/* in nanoseconds */
 #define POCL_REMOTE_RECONNECT_TIMEOUT_NS 60 * 1000000000L
+#define POCL_REMOTE_RECONNECT_MAX_ATTEMPTS 0
 
 typedef struct remote_server_data_s
 {
@@ -191,16 +231,22 @@ typedef struct remote_server_data_s
   uint64_t session;
   uint8_t authkey[AUTHKEY_LENGTH];
   uint32_t available;
-  sync_t setup_lock;
   int threads_awaiting_reconnect;
-  int slow_socket_fd;
-  int fast_socket_fd;
+
+  /* PoCL-Remote uses two sockets with parameters tuned for their respective
+   * purposes: */
+  /** Connection optimized for large bulk data transfers, mainly intended for
+   * transferring buffer contents */
+  remote_connection_t slow_connection;
+  /** Connection optimized for low latency with small messages, used for
+   * commands that are not expected to carry large amounts of data */
+  remote_connection_t fast_connection;
 
   uint32_t num_platforms;
   uint32_t num_devices;
   uint32_t *platform_devices;
 
-  // network handling threads / ids
+  /* network handling threads / ids */
   network_queue *slow_read_queue;
   network_queue *fast_read_queue;
   network_queue *inflight_queue;
@@ -210,8 +256,9 @@ typedef struct remote_server_data_s
   network_queue *rdma_read_queue;
   network_queue *rdma_write_queue;
   rdma_data_t rdma_data;
-  rdma_buffer_info_t *rdma_keys; // needs to be initialized to NULL, but we
-                                 // memset(0) the whole struct anyway
+  /* This is assumed to be zero-initialized, but we memset(0) the whole struct
+   * so it's fine by default. */
+  rdma_buffer_info_t *rdma_keys;
   uint8_t use_rdma;
 #endif
   network_queue *traffic_monitor;
@@ -220,9 +267,9 @@ typedef struct remote_server_data_s
   uint64_t tx_bytes_submitted;
   uint64_t tx_bytes_confirmed;
 
-  // ID maps.
-  // TODO locking required ??? prolly not, because all create/release are
-  // called sequentially
+  /* ID maps. */
+  /* TODO locking required ??? prolly not, because all create/release are
+   * called sequentially */
 
   SMALL_VECTOR_DEFINE (uint32_t, buffer_ids, INITIAL_ARRAY_CAP);
 
@@ -294,9 +341,9 @@ typedef struct program_data_s
   size_t refcount;
 } program_data_t;
 
-// ##################################################################################
-// ##################################################################################
-// ##################################################################################
+/*****************************************************************************/
+/*****************************************************************************/
+/*****************************************************************************/
 
 cl_int pocl_network_init_device (cl_device_id device,
                                  remote_device_data_t *ddata, int dev_idx,
@@ -330,13 +377,26 @@ cl_int pocl_network_setup_metadata (char *buffer, size_t total_size,
                                     cl_program program, size_t *num_kernels,
                                     pocl_kernel_metadata_t **kernel_meta);
 
-cl_int pocl_network_build_or_link_program (
-    remote_device_data_t *ddata, const void *payload, size_t payload_size,
-    int is_binary, int is_builtin, int is_spirv, uint32_t prog_id,
-    const char *options, char **kernel_meta_bytes, size_t *kernel_meta_size,
-    uint32_t *devices, uint32_t *platforms, size_t num_devices,
-    char **build_log, char **binaries, size_t *binary_sizes,
-    size_t svm_region_offset, int compile_only, int link_only);
+cl_int pocl_network_build_or_link_program (remote_device_data_t *ddata,
+                                           const void *payload,
+                                           size_t payload_size,
+                                           int is_binary,
+                                           int is_builtin,
+                                           int is_dbk,
+                                           int is_spirv,
+                                           uint32_t prog_id,
+                                           const char *options,
+                                           char **kernel_meta_bytes,
+                                           size_t *kernel_meta_size,
+                                           uint32_t *devices,
+                                           uint32_t *platforms,
+                                           size_t num_devices,
+                                           char **build_log,
+                                           char **binaries,
+                                           size_t *binary_sizes,
+                                           size_t svm_region_offset,
+                                           int compile_only,
+                                           int link_only);
 
 cl_int pocl_network_free_program (remote_device_data_t *ddata,
                                   uint32_t prog_id);
@@ -346,6 +406,18 @@ cl_int pocl_network_create_queue (remote_device_data_t *ddata,
 
 cl_int pocl_network_free_queue (remote_device_data_t *ddata,
                                 uint32_t queue_id);
+
+cl_int pocl_network_create_command_buffer (remote_device_data_t *ddata,
+                                           uint64_t cmdbuf_id,
+                                           uint64_t num_commands,
+                                           uint64_t commands_offset,
+                                           uint64_t commands_size,
+                                           uint64_t num_queues,
+                                           uint64_t queues_offset,
+                                           const char *payload);
+
+cl_int pocl_network_free_command_buffer (remote_device_data_t *ddata,
+                                         uint64_t cmdbuf_id);
 
 cl_int pocl_network_create_sampler (remote_device_data_t *ddata,
                                     cl_bool normalized_coords,
@@ -361,9 +433,9 @@ cl_int pocl_network_create_image (remote_device_data_t *ddata, cl_mem image);
 cl_int pocl_network_free_image (remote_device_data_t *ddata,
                                 uint32_t image_id);
 
-// ##################################################################################
-// ##################################################################################
-// ##################################################################################
+/*****************************************************************************/
+/*****************************************************************************/
+/*****************************************************************************/
 
 cl_int pocl_network_migrate_d2d (
     uint32_t cq_id, uint32_t mem_id, uint32_t size_id, unsigned mem_is_image,
@@ -428,6 +500,11 @@ cl_int pocl_network_run_kernel (uint32_t cq_id, remote_device_data_t *ddata,
                                 network_command_callback cb, void *arg,
                                 _cl_command_node *node);
 
+cl_int pocl_network_run_command_buffer (remote_device_data_t *ddata,
+                                        network_command_callback cb,
+                                        void *arg,
+                                        _cl_command_node *node);
+
 /****************************************************************************/
 
 cl_int pocl_network_copy_image_rect (
@@ -475,6 +552,8 @@ cl_int pocl_network_fill_image (uint32_t cq_id, remote_device_data_t *ddata,
                                 _cl_command_node *node);
 
 void pocl_remote_get_traffic_stats (uint64_t *out_buf, cl_device_id device);
+
+cl_int pocl_remote_reconnect_rediscover (const char *address_with_port);
 
 #ifdef __GNUC__
 #pragma GCC visibility pop

@@ -26,15 +26,31 @@
    \file
 */
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "config.h"
-
-#include "pocl_cl_half_util.h"
 #include "pocl_opencl.h"
+#include "CL/cl_ext.h"
+
+#if defined(_WIN32) && !defined(__MINGW32__)
+#include <io.h> /* import _access */
+#else
+#include <unistd.h>
+#endif
+
+static int
+poclu_file_exists (const char *path)
+{
+#if defined(_WIN32) && !defined(__MINGW32__)
+  return _access (path, 0) == 0;
+#else
+  /* TODO: Does mingw provide access()? */
+  return access (path, F_OK) == 0;
+#endif
+}
 
 cl_context
 poclu_create_any_context2 (cl_platform_id *platform)
@@ -111,10 +127,13 @@ poclu_get_any_device2 (cl_context *context, cl_device_id *device,
 }
 
 cl_int
-poclu_get_multiple_devices (cl_platform_id *platform, cl_context *context,
-                            cl_char include_custom_dev, cl_uint *num_devices,
-                            cl_device_id **devices, cl_command_queue **queues,
-                            int ooo_queues)
+poclu_get_multiple_devices (cl_platform_id *platform,
+                            cl_context *context,
+                            cl_char include_custom_dev,
+                            cl_uint *num_devices,
+                            cl_device_id **devices,
+                            cl_command_queue **queues,
+                            cl_command_queue_properties optional_props)
 {
   cl_int err;
   cl_uint num_dev_all = 0;
@@ -163,6 +182,12 @@ poclu_get_multiple_devices (cl_platform_id *platform, cl_context *context,
 
   devs = (cl_device_id *)calloc (*num_devices, sizeof (cl_device_id));
   ques = (cl_command_queue *)calloc (*num_devices, sizeof (cl_command_queue));
+  if (!devs || !ques)
+    {
+      free (devs);
+      free (ques);
+      return CL_OUT_OF_HOST_MEMORY;
+    }
 
   if (num_dev_all != 0)
     {
@@ -185,11 +210,15 @@ poclu_get_multiple_devices (cl_platform_id *platform, cl_context *context,
   if (err != CL_SUCCESS)
     goto ERROR;
 
-  cl_command_queue_properties props = CL_QUEUE_PROFILING_ENABLE;
-  if (ooo_queues)
-    props |= CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE;
   for (i = 0; i < *num_devices; ++i)
     {
+      cl_command_queue_properties dev_props = 0;
+      cl_int err
+        = clGetDeviceInfo (devs[i], CL_DEVICE_QUEUE_ON_HOST_PROPERTIES,
+                           sizeof (dev_props), &dev_props, NULL);
+      if (err != CL_SUCCESS)
+        goto ERROR;
+      cl_command_queue_properties props = dev_props & optional_props;
       ques[i] = clCreateCommandQueue (*context, devs[i], props, &err);
       if (err != CL_SUCCESS)
         goto ERROR;
@@ -201,6 +230,11 @@ poclu_get_multiple_devices (cl_platform_id *platform, cl_context *context,
 
 ERROR:
   free (devs);
+  for (i = 0; i < *num_devices; ++i)
+    {
+      if (ques && ques[i])
+        clReleaseCommandQueue (ques[i]);
+    }
   free (ques);
   return err;
 }
@@ -211,7 +245,7 @@ poclu_read_binfile (const char *filename, size_t *len)
   FILE *file;
   char *src;
 
-  file = fopen (filename, "r");
+  file = fopen (filename, "rb");
   if (file == NULL)
     return NULL;
 
@@ -242,11 +276,12 @@ poclu_read_file (const char *filename)
 }
 
 int
-poclu_write_file (const char *filename, char *content, size_t size)
+poclu_write_file_in_mode (const char *filename, char *content, size_t size,
+                          const char *mode)
 {
   FILE *file;
 
-  file = fopen (filename, "w");
+  file = fopen (filename, mode);
   if (file == NULL)
     return -1;
 
@@ -260,6 +295,12 @@ poclu_write_file (const char *filename, char *content, size_t size)
     return -1;
 
   return 0;
+}
+
+int
+poclu_write_binfile (const char *file, char *content, size_t size)
+{
+  return poclu_write_file_in_mode (file, content, size, "wb");
 }
 
 int
@@ -362,7 +403,11 @@ fail2:
   free (devices);
 
 fail:
+#ifdef _MSC_VER
+  check_cl_error (err, __LINE__, __func__);
+#else
   check_cl_error (err, __LINE__, __PRETTY_FUNCTION__);
+#endif
   return err;
 }
 
@@ -473,23 +518,23 @@ pocl_getpath (char *path, size_t len, const char *explicit_binary,
     }
 
   snprintf (path, len, "%s%s", basename, ext);
-  if (access (path, F_OK) == 0)
+  if (poclu_file_exists (path))
     return CL_SUCCESS;
 
   snprintf (path, len, "%s/%s%s", BUILDDIR, basename, ext);
-  if (access (path, F_OK) == 0)
+  if (poclu_file_exists (path))
     return CL_SUCCESS;
 
   snprintf (path, len, "%s/%s%s", SRCDIR, basename, ext);
-  if (access (path, F_OK) == 0)
+  if (poclu_file_exists (path))
     return CL_SUCCESS;
 
   snprintf (path, len, "%s/tests/%s%s", SRCDIR, basename, ext);
-  if (access (path, F_OK) == 0)
+  if (poclu_file_exists (path))
     return CL_SUCCESS;
 
   snprintf (path, len, "%s/examples/%s/%s%s", SRCDIR, basename, basename, ext);
-  if (access (path, F_OK) == 0)
+  if (poclu_file_exists (path))
     return CL_SUCCESS;
 
   fprintf (stderr,
@@ -500,11 +545,39 @@ pocl_getpath (char *path, size_t len, const char *explicit_binary,
 }
 
 int
-poclu_load_program_multidev (cl_context context, cl_device_id *devices,
-                             cl_uint num_devices, const char *basename,
-                             int spirv, int poclbin,
+poclu_parse_version_string (const char *string)
+{
+  /* the OpenCL version string follows format of:
+  OpenCL<space><major_version>.<minor_version><space><vendor-specific
+  information>
+ */
+  char *ptr = (char *)string + 6;
+  char *end_ptr;
+  long major = strtol (ptr, &end_ptr, 10);
+  if (*end_ptr != '.' || major > INT_MAX / 100)
+    {
+      return -1;
+    }
+  ptr = end_ptr + 1;
+  long minor = strtol (ptr, &end_ptr, 10);
+  if (*end_ptr != ' ' || minor > 9)
+    {
+      return -1;
+    }
+  return (int)(major * 100 + minor * 10);
+}
+
+int
+poclu_load_program_multidev (cl_platform_id platform,
+                             cl_context context,
+                             cl_device_id *devices,
+                             cl_uint num_devices,
+                             const char *basename,
+                             int spirv,
+                             int poclbin,
                              const char *explicit_binary,
-                             const char *extra_build_opts, cl_program *p)
+                             const char *extra_build_opts,
+                             cl_program *p)
 {
   cl_bool little_endian = 0;
   cl_uint address_bits = 0;
@@ -561,15 +634,6 @@ poclu_load_program_multidev (cl_context context, cl_device_id *devices,
   if (spirv)
     {
       TEST_ASSERT (device != NULL);
-      err = clGetDeviceInfo (device, CL_DEVICE_EXTENSIONS, 1024, extensions,
-                             NULL);
-      CHECK_OPENCL_ERROR_IN ("clGetDeviceInfo extensions");
-
-      if (spirv && strstr (extensions, "cl_khr_il_program") == NULL)
-        {
-          printf ("SPIR-V not supported, cannot run the test\n");
-          return -1;
-        }
 
       err = clGetDeviceInfo (device, CL_DEVICE_ENDIAN_LITTLE, sizeof (cl_bool),
                              &little_endian, NULL);
@@ -624,23 +688,74 @@ poclu_load_program_multidev (cl_context context, cl_device_id *devices,
     }
   else if (spirv)
     {
-#ifdef CL_VERSION_2_1
       TEST_ASSERT (device != NULL);
-      binary = poclu_read_binfile (path, &binary_size);
-      TEST_ASSERT (binary != NULL);
+      err
+        = clGetDeviceInfo (device, CL_DEVICE_VERSION, 1024, extensions, NULL);
+      CHECK_OPENCL_ERROR_IN ("clGetDeviceInfo device version");
+      int device_version = poclu_parse_version_string (extensions);
+      int build_success = 0;
 
-      program = clCreateProgramWithIL (context, (const void *)binary,
-                                       binary_size, &err);
-      CHECK_OPENCL_ERROR_IN ("clCreateProgramWithIL");
-
-      err = clBuildProgram (program, 0, NULL, final_opts, NULL, NULL);
-      if (err != CL_SUCCESS)
-        poclu_show_program_build_log (program);
-      CHECK_OPENCL_ERROR_IN ("clBuildProgram");
-      free (binary);
+      if (device_version >= 210)
+        {
+#ifdef CL_VERSION_2_1
+          binary = poclu_read_binfile (path, &binary_size);
+          TEST_ASSERT (binary != NULL);
+          program = clCreateProgramWithIL (context, (const void *)binary,
+                                           binary_size, &err);
+          free (binary);
+          if (err != CL_SUCCESS)
+            {
+              printf (
+                "clCreateProgramWithIL failed with the following error: %d \n",
+                err);
+              goto IL_ERR;
+            }
+          err = clBuildProgram (program, 0, NULL, final_opts, NULL, NULL);
+          if (err != CL_SUCCESS)
+            {
+              printf ("clBuildProgram failed with error %d and build log: \n",
+                      err);
+              poclu_show_program_build_log (program);
+              goto IL_ERR;
+            }
+          build_success = 1;
 #else
-      TEST_ASSERT (0 && "test compiled without OpenCL 2.1 can't use clCreateProgramWithIL");
+          printf ("Program was not compiled for OpenCL 2.1 or higher, "
+                  "checking for cl_khr_il_program extension.\n");
 #endif
+        }
+    IL_ERR:
+      if (!build_success)
+        {
+          err = clGetDeviceInfo (device, CL_DEVICE_EXTENSIONS, 1024,
+                                 extensions, NULL);
+          CHECK_OPENCL_ERROR_IN ("clGetDeviceInfo extensions");
+
+          if (strstr (extensions, "cl_khr_il_program") == NULL)
+            {
+              printf ("cl_khr_il_program extension not available, cannot run "
+                      "the test\n");
+              return -1;
+            }
+
+          binary = poclu_read_binfile (path, &binary_size);
+          TEST_ASSERT (binary != NULL);
+
+          clCreateProgramWithILKHR_fn create_program_func
+            = clGetExtensionFunctionAddressForPlatform (
+              platform, "clCreateProgramWithILKHR");
+          TEST_ASSERT (create_program_func != NULL);
+
+          program = create_program_func (context, (const void *)binary,
+                                         binary_size, &err);
+          free (binary);
+          CHECK_OPENCL_ERROR_IN ("clCreateProgramWithILKHR");
+
+          err = clBuildProgram (program, 0, NULL, final_opts, NULL, NULL);
+          if (err != CL_SUCCESS)
+            poclu_show_program_build_log (program);
+          CHECK_OPENCL_ERROR_IN ("clBuildProgram");
+        }
     }
   else
     {
@@ -665,24 +780,32 @@ poclu_load_program_multidev (cl_context context, cl_device_id *devices,
 }
 
 int
-poclu_load_program (cl_context context, cl_device_id device,
-                    const char *basename, int spirv, int poclbin,
-                    const char *explicit_binary, const char *extra_build_opts,
+poclu_load_program (cl_platform_id platform,
+                    cl_context context,
+                    cl_device_id device,
+                    const char *basename,
+                    int spirv,
+                    int poclbin,
+                    const char *explicit_binary,
+                    const char *extra_build_opts,
                     cl_program *p)
 {
-  return poclu_load_program_multidev (context, &device, 1, basename,
+  return poclu_load_program_multidev (platform, context, &device, 1, basename,
                                       spirv, poclbin, explicit_binary,
                                       extra_build_opts, p);
 }
 
-cl_half
-poclu_float_to_cl_half (float value)
+int
+poclu_device_supports_il (cl_device_id device, const char *il)
 {
-  return pocl_float_to_half (value);
-}
-
-float
-poclu_cl_half_to_float (cl_half value)
-{
-  return pocl_half_to_float (value);
+  size_t param_size = 0;
+  cl_int err
+    = clGetDeviceInfo (device, CL_DEVICE_IL_VERSION, 0, NULL, &param_size);
+  CHECK_OPENCL_ERROR_IN ("clGetDeviceInfo");
+  char *ils = malloc (param_size);
+  err = clGetDeviceInfo (device, CL_DEVICE_IL_VERSION, param_size, ils, NULL);
+  CHECK_OPENCL_ERROR_IN ("clGetDeviceInfo");
+  int has_il = strstr (ils, il) != NULL;
+  free (ils);
+  return has_il;
 }

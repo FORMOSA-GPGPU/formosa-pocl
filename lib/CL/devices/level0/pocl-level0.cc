@@ -24,11 +24,13 @@
 
 #include "common.h"
 #include "common_driver.h"
+#include "common_utils.h"
 #include "devices.h"
 #include "pocl_cl.h"
 #include "utlist.h"
 
 #include "pocl-level0.h"
+#include "pocl_builtin_kernels.h"
 #include "pocl_cache.h"
 #include "pocl_debug.h"
 #include "pocl_file_util.h"
@@ -37,7 +39,9 @@
 #include "pocl_local_size.h"
 #include "pocl_timing.h"
 #include "pocl_util.h"
+#include "pocl_run_command.h"
 
+#include <loader/ze_loader.h>
 #include <ze_api.h>
 
 #include <algorithm>
@@ -62,6 +66,9 @@ using namespace SPIRVParser;
 
 using namespace pocl;
 
+static std::vector<Level0DriverUPtr> L0DriverInstances;
+static unsigned TotalL0Devices;
+
 struct PoclL0EventData {
   pocl_cond_t Cond;
   bool CanBeBatched;
@@ -85,14 +92,25 @@ private:
   void getSubmitBatchUnlocked(BatchType &SubmitBatch);
 };
 
-static void pocl_level0_local_size_optimizer(cl_device_id Dev, cl_kernel Kernel,
-                                             unsigned DeviceI, size_t GlobalX,
-                                             size_t GlobalY, size_t GlobalZ,
-                                             size_t *LocalX, size_t *LocalY,
-                                             size_t *LocalZ) {
-  assert(Kernel->data[DeviceI] != nullptr);
-  Level0Kernel *L0Kernel = (Level0Kernel *)Kernel->data[DeviceI];
+static void pocl_level0_local_size_optimizer(cl_device_id Dev, cl_kernel Ker,
+                                             unsigned DeviceI,
+                                             size_t MaxGroupSize,
+                                             size_t GlobalX, size_t GlobalY,
+                                             size_t GlobalZ, size_t *LocalX,
+                                             size_t *LocalY, size_t *LocalZ) {
+  // for NPU, return all 1s
+  if (Dev->type != CL_DEVICE_TYPE_GPU) {
+    *LocalX = *LocalY = *LocalZ = 1;
+    return;
+  }
+  assert(Ker->data[DeviceI] != nullptr);
+  Level0Kernel *L0Kernel = (Level0Kernel *)Ker->data[DeviceI];
   ze_kernel_handle_t HKernel = L0Kernel->getAnyCreated();
+
+  if (GlobalX == 1 && GlobalY == 1 && GlobalZ == 1) {
+    *LocalX = *LocalY = *LocalZ = 1;
+    return;
+  }
 
   uint32_t SuggestedX = 0;
   uint32_t SuggestedY = 0;
@@ -116,8 +134,8 @@ static void pocl_level0_local_size_optimizer(cl_device_id Dev, cl_kernel Kernel,
         "pocl_level0_local_size_optimizer : HKernel == nullptr\n");
   }
 
-  pocl_default_local_size_optimizer(Dev, Kernel, DeviceI, GlobalX, GlobalY,
-                                    GlobalZ, LocalX, LocalY, LocalZ);
+  pocl_default_local_size_optimizer(Dev, Ker, DeviceI, MaxGroupSize, GlobalX,
+                                    GlobalY, GlobalZ, LocalX, LocalY, LocalZ);
 }
 
 static int pocl_level0_verify_ndrange_sizes(const size_t *GlobalOffsets,
@@ -136,13 +154,92 @@ static int pocl_level0_verify_ndrange_sizes(const size_t *GlobalOffsets,
   return CL_SUCCESS;
 }
 
+static cl_int pocl_level0_post_init(struct pocl_device_ops *ops) {
+
+#ifdef USE_LLVM_SPIRV_TARGET
+  pocl_llvm_initialize_spirv_ext_option();
+#endif
+
+  // TODO currently only works with two drivers
+  if (L0DriverInstances.size() != 2)
+    return CL_SUCCESS;
+
+  Level0Device *ExportDevice = nullptr;
+  std::vector<Level0Device *> ImportDevices;
+  Level0Driver *D0 = L0DriverInstances[0].get();
+  Level0Driver *D1 = L0DriverInstances[1].get();
+  Level0Driver *ExDrv = nullptr, *ImDrv = nullptr;
+  if (D0->getNumDevices() == 0 || D1->getNumDevices() == 0) {
+    return CL_SUCCESS;
+  }
+
+  if ((ExportDevice = D0->getExportDevice()) &&
+      D0->getImportDevices(ImportDevices, ExportDevice) &&
+      D1->getImportDevices(ImportDevices, nullptr) &&
+      TotalL0Devices == (ImportDevices.size() + 1)) {
+    ExDrv = D0;
+    ImDrv = D1;
+  } else if ((ExportDevice = D1->getExportDevice()) &&
+             D1->getImportDevices(ImportDevices, ExportDevice) &&
+             D0->getImportDevices(ImportDevices, nullptr) &&
+             TotalL0Devices == (ImportDevices.size() + 1)) {
+    ExDrv = D1;
+    ImDrv = D0;
+  } else {
+    return CL_SUCCESS;
+  }
+  POCL_MSG_PRINT_LEVEL0("Found both Import&Export devices, "
+                        "creating shared memory allocator\n");
+
+  assert(ExportDevice != nullptr);
+  assert(!ImportDevices.empty());
+
+  auto ExClDev = ExportDevice->getClDev();
+  auto ImClDev = ImportDevices[0]->getClDev();
+  POCL_MSG_PRINT_LEVEL0("ExportDev: %s\nImportDevs[0]: %s\n",
+                        ExClDev->short_name, ImClDev->short_name);
+  Level0DMABufAllocatorSPtr SharedAlloc{
+      new Level0DMABufAllocator(ExportDevice, ImportDevices)};
+  ExportDevice->assignAllocator(SharedAlloc);
+  for (auto &Dev : ImportDevices) {
+    Dev->assignAllocator(SharedAlloc);
+  }
+  return CL_SUCCESS;
+}
+
+cl_int
+pocl_level0_create_finalized_command_buffer(cl_device_id Dev,
+                                            cl_command_buffer_khr CmdBuf);
+cl_int pocl_level0_free_command_buffer(cl_device_id Dev,
+                                       cl_command_buffer_khr CmdBuf);
+
 void pocl_level0_init_device_ops(struct pocl_device_ops *Ops) {
   Ops->device_name = "level0";
 
   Ops->probe = pocl_level0_probe;
+  Ops->post_init = pocl_level0_post_init;
   Ops->init = pocl_level0_init;
   Ops->uninit = pocl_level0_uninit;
   Ops->reinit = pocl_level0_reinit;
+
+  // used by the NPU device to execute all commands except NDRangeKernel
+  // GPU devices don't use these, they use L0 API zeCmdListAppend...
+  Ops->read = pocl_driver_read;
+  Ops->read_rect = pocl_driver_read_rect;
+  Ops->write = pocl_driver_write;
+  Ops->write_rect = pocl_driver_write_rect;
+  Ops->copy = pocl_driver_copy;
+  Ops->copy_with_size = pocl_driver_copy_with_size;
+  Ops->copy_rect = pocl_driver_copy_rect;
+  Ops->memfill = pocl_driver_memfill;
+  Ops->map_mem = pocl_driver_map_mem;
+  Ops->unmap_mem = pocl_driver_unmap_mem;
+
+  Ops->can_migrate_d2d = nullptr;
+  Ops->migrate_d2d = nullptr;
+
+  Ops->run = nullptr;
+  Ops->run_native = nullptr;
 
   Ops->get_mapping_ptr = pocl_level0_get_mapping_ptr;
   Ops->free_mapping_ptr = pocl_level0_free_mapping_ptr;
@@ -165,7 +262,10 @@ void pocl_level0_init_device_ops(struct pocl_device_ops *Ops) {
   Ops->setup_metadata = pocl_level0_setup_metadata;
   Ops->supports_binary = pocl_level0_supports_binary;
   Ops->build_poclbinary = pocl_level0_build_poclbinary;
-  Ops->compile_kernel = NULL;
+  Ops->build_builtin = pocl_level0_build_builtin;
+  Ops->compile_kernel = nullptr;
+  Ops->supports_dbk = pocl_level0_supports_dbk;
+  Ops->build_defined_builtin = pocl_level0_build_builtin;
   Ops->create_kernel = pocl_level0_create_kernel;
   Ops->free_kernel = pocl_level0_free_kernel;
   Ops->init_build = pocl_level0_init_build;
@@ -197,6 +297,10 @@ void pocl_level0_init_device_ops(struct pocl_device_ops *Ops) {
   Ops->get_subgroup_info_ext = pocl_level0_get_subgroup_info_ext;
   Ops->set_kernel_exec_info_ext = pocl_level0_set_kernel_exec_info_ext;
   Ops->get_synchronized_timestamps = pocl_driver_get_synchronized_timestamps;
+
+  Ops->create_finalized_command_buffer =
+      pocl_level0_create_finalized_command_buffer;
+  Ops->free_command_buffer = pocl_level0_free_command_buffer;
 }
 
 
@@ -219,44 +323,134 @@ static int readProgramSpv(cl_program Program, cl_uint DeviceI,
   return CL_SUCCESS;
 }
 
-static Level0Driver *DriverInstance = nullptr;
-
-void __attribute__ ((destructor)) finish_fn(void) {
-  delete DriverInstance;
+char *pocl_level0_build_hash(cl_device_id ClDevice) {
+  char *Res = (char *)malloc(32);
+  if (ClDevice->type == CL_DEVICE_TYPE_GPU ||
+      ClDevice->type == CL_DEVICE_TYPE_CPU) {
+    snprintf(Res, 32, "pocl-level0-spirv");
+    // Intel FPGA Emulation uses device type Accelerator
+  } else if (ClDevice->type == CL_DEVICE_TYPE_ACCELERATOR) {
+    snprintf(Res, 32, "pocl-level0-fpga");
+  } else if (ClDevice->type == CL_DEVICE_TYPE_CUSTOM) {
+    snprintf(Res, 32, "pocl-level0-vpu");
+  } else {
+    snprintf(Res, 32, "pocl-level0-unknown");
+  }
+  return Res;
 }
 
-char *pocl_level0_build_hash(cl_device_id Device) {
-  // TODO build hash
-  char *Res = (char *)malloc(32);
-  snprintf(Res, 32, "pocl-level0-spirv");
-  return Res;
+/// Return level zero loader version. On an error, return object with
+/// all members set to zero.
+static zel_version_t get_level0_loader_version() {
+  size_t NumComponents = 0;
+  auto Result = zelLoaderGetVersions(&NumComponents, nullptr);
+  if (Result != ZE_RESULT_SUCCESS)
+    return {};
+
+  std::vector<zel_component_version_t> Versions(NumComponents,
+                                                zel_component_version_t());
+
+  Result = zelLoaderGetVersions(&NumComponents, Versions.data());
+  if (Result != ZE_RESULT_SUCCESS)
+    return {};
+
+  for (auto &Version : Versions)
+    if (std::string_view(Version.component_name) == "loader")
+      return Version.component_lib_version;
+
+  return {};
 }
 
 unsigned int pocl_level0_probe(struct pocl_device_ops *Ops) {
   int EnvCount = pocl_device_get_env_count(Ops->device_name);
 
-  if (EnvCount <= 0) {
+  // POCL_DEVICES is set but doesn't contain level0 -> return 0
+  // POCL_DEVICES is unset -> continue
+  if (EnvCount == 0) {
     return 0;
   }
 
-  DriverInstance = new Level0Driver();
+  ze_result_t Res = zeInit(0);
+  if (Res != ZE_RESULT_SUCCESS) {
+    POCL_MSG_ERR("zeInit FAILED\n");
+    return 0;
+  }
 
-  POCL_MSG_PRINT_LEVEL0("Level Zero devices found: %u\n",
-                        DriverInstance->getNumDevices());
+  zel_version_t LoaderVersion = get_level0_loader_version();
+  POCL_MSG_PRINT_LEVEL0("ze_loader version: %d.%d.%d\n", LoaderVersion.major,
+                        LoaderVersion.minor, LoaderVersion.patch);
 
-  /* TODO: clamp device_count to env_count */
+  uint32_t DriverCount = 64;
+  ze_driver_handle_t DrvHandles[64];
 
-  return DriverInstance->getNumDevices();
+#if ZE_API_VERSION_CURRENT_M >= ZE_MAKE_VERSION(1, 10)
+  if (LoaderVersion.major == 1 && LoaderVersion.minor > 18) {
+
+    ze_init_driver_type_desc_t DriverDesc{};
+    DriverDesc.flags =
+        ZE_INIT_DRIVER_TYPE_FLAG_GPU | ZE_INIT_DRIVER_TYPE_FLAG_NPU;
+    Res = zeInitDrivers(&DriverCount, DrvHandles, &DriverDesc);
+    if (Res != ZE_RESULT_SUCCESS) {
+      // TODO: retry with deprecated zeDriverGet()?
+      POCL_MSG_ERR("zeInitDrivers FAILED\n");
+      return 0;
+    }
+  } else {
+#else
+  {
+#endif
+    Res = zeDriverGet(&DriverCount, DrvHandles);
+    if (Res != ZE_RESULT_SUCCESS) {
+      POCL_MSG_ERR("zeDriverGet FAILED\n");
+      return 0;
+    }
+  }
+
+  const unsigned NumRequestedDevices = EnvCount < 0
+                                           ? std::numeric_limits<int>::max()
+                                           : std::max<int>(EnvCount, 1);
+  for (unsigned I = 0; I < DriverCount; ++I) {
+    // workaround for what appears to be a bug
+    if (DrvHandles[I] == nullptr)
+      continue;
+    L0DriverInstances.emplace_back(new Level0Driver(DrvHandles[I]));
+    TotalL0Devices += L0DriverInstances.back()->getNumDevices();
+    if (TotalL0Devices >= NumRequestedDevices) {
+      TotalL0Devices = NumRequestedDevices;
+      POCL_MSG_PRINT_LEVEL0("LevelZero Probe: limiting devices to %u\n",
+                            TotalL0Devices);
+      break;
+    }
+  }
+
+  POCL_MSG_PRINT_LEVEL0("LevelZero Probe: %u devices across %u drivers\n",
+                        TotalL0Devices,
+                        static_cast<unsigned>(L0DriverInstances.size()));
+  return TotalL0Devices;
 }
 
 cl_int pocl_level0_init(unsigned J, cl_device_id ClDevice,
                         const char *Parameters) {
-  assert(J < DriverInstance->getNumDevices());
   POCL_MSG_PRINT_LEVEL0("Initializing device %u\n", J);
+  assert(J < TotalL0Devices);
 
-  Level0Device *Device = DriverInstance->createDevice(J, ClDevice, Parameters);
+  Level0Device *Device = nullptr;
+  unsigned TempJ = J;
+  Level0Driver *Drv = nullptr;
+  for (unsigned I = 0; I < L0DriverInstances.size(); ++I) {
+    unsigned Num = L0DriverInstances[I]->getNumDevices();
+    if (TempJ < Num) {
+      Drv = L0DriverInstances[I].get();
+      break;
+    } else {
+      TempJ -= Num;
+    }
+  }
+  assert(Drv != nullptr);
+  Device = Drv->createDevice(TempJ, ClDevice, Parameters);
 
   if (Device == nullptr) {
+    POCL_MSG_ERR("createdevice failed\n");
     return CL_FAILED;
   }
 
@@ -268,33 +462,35 @@ cl_int pocl_level0_init(unsigned J, cl_device_id ClDevice,
 cl_int pocl_level0_uninit(unsigned J, cl_device_id ClDevice) {
   Level0Device *Device = (Level0Device *)ClDevice->data;
 
-  DriverInstance->releaseDevice(Device);
-  /* TODO should this be done at all ? */
-  if (DriverInstance->empty()) {
-    delete DriverInstance;
-    DriverInstance = nullptr;
-  }
+  // GPUDriverInstance->releaseDevice(Device);
+  // // TODO should this be done at all ?
+  // if (GPUDriverInstance->empty()) {
+  //   delete GPUDriverInstance;
+  //   GPUDriverInstance = nullptr;
+  // }
 
   return CL_SUCCESS;
 }
 
 cl_int pocl_level0_reinit(unsigned J, cl_device_id ClDevice, const char *parameters) {
 
-  if (DriverInstance == nullptr) {
-    DriverInstance = new Level0Driver();
-  }
+  /*
+    if (GPUDriverInstance == nullptr) {
+      GPUDriverInstance = new Level0Driver();
+    }
+    assert(J < GPUDriverInstance->getNumDevices());
+    POCL_MSG_PRINT_LEVEL0("Initializing device %u\n", J);
 
-  assert(J < DriverInstance->getNumDevices());
-  POCL_MSG_PRINT_LEVEL0("Initializing device %u\n", J);
+    // TODO: parameters are not passed (this works ATM because they're ignored)
+    Level0Device *Device = GPUDriverInstance->createDevice(J, ClDevice,
+    nullptr);
 
-  // TODO: parameters are not passed (this works ATM because they're ignored)
-  Level0Device *Device = DriverInstance->createDevice(J, ClDevice, nullptr);
+    if (Device == nullptr) {
+      return CL_FAILED;
+    }
 
-  if (Device == nullptr) {
-    return CL_FAILED;
-  }
-
-  ClDevice->data = (void *)Device;
+    ClDevice->data = (void *)Device;
+  */
 
   return CL_SUCCESS;
 }
@@ -302,11 +498,13 @@ cl_int pocl_level0_reinit(unsigned J, cl_device_id ClDevice, const char *paramet
 static void convertProgramBcPathToSpv(char *ProgramBcPath,
                                       char *ProgramSpvPath) {
   strncpy(ProgramSpvPath, ProgramBcPath, POCL_MAX_PATHNAME_LENGTH);
+  ProgramSpvPath[POCL_MAX_PATHNAME_LENGTH - 1] = 0;
   size_t Len = strlen(ProgramBcPath);
   assert(Len > 3);
   Len -= 2;
   ProgramSpvPath[Len] = 0;
-  strncat(ProgramSpvPath, "spv", POCL_MAX_PATHNAME_LENGTH);
+  strncat(ProgramSpvPath, "spv", (POCL_MAX_PATHNAME_LENGTH - Len - 1));
+  ProgramSpvPath[POCL_MAX_PATHNAME_LENGTH - 1] = 0;
 }
 
 static constexpr unsigned DefaultCaptureSize = 128 * 1024;
@@ -344,6 +542,7 @@ static int runAndAppendOutputToBuildLog(cl_program Program, unsigned DeviceI,
     CaptureCapacity -= LaunchMsg.size();
   }
 
+#ifdef HAVE_FORK
   Errcode =
       pocl_run_command_capture_output(CapturedOutput, &CaptureCapacity, Args);
   if (CaptureCapacity > 0) {
@@ -352,12 +551,19 @@ static int runAndAppendOutputToBuildLog(cl_program Program, unsigned DeviceI,
 
   pocl_append_to_buildlog(Program, DeviceI, SavedCapturedOutput,
                           strlen(SavedCapturedOutput));
-
+#else
+  POCL_MSG_WARN("Running a command with output capture is requested which"
+                " is not implemented on this platform. Will run the command"
+                " without capture.");
+  Errcode = pocl_run_command(Args);
+  char Msg[] = "UNIMPLEMENTED: pocl_run_command_capture_output for this"
+               " platform.";
+  pocl_append_to_buildlog(Program, DeviceI, Msg, strlen(Msg));
+#endif
   return Errcode;
 }
 
-// disabled for now, need to solve the problem of linking different version
-#if 0
+#ifdef HAVE_SPIRV_LINK
 static int linkWithSpirvLink(cl_program Program, cl_uint DeviceI,
                              char ProgramSpvPathTemp[POCL_MAX_PATHNAME_LENGTH],
                              std::vector<std::string> &SpvBinaryPaths,
@@ -369,12 +575,16 @@ static int linkWithSpirvLink(cl_program Program, cl_uint DeviceI,
   if (CreateLibrary != 0) {
     CompilationArgs.push_back("--create-library");
   }
+  // allow linking of SPIR-V modules with different version
+#ifdef SPIRV_LINK_HAS_USE_HIGHEST_VERSION
+  CompilationArgs.push_back("--use-highest-version");
+#endif
   CompilationArgs.push_back("-o");
   CompilationArgs.push_back(ProgramSpvPathTemp);
   for (auto &Path : SpvBinaryPaths) {
     CompilationArgs.push_back(Path);
   }
-  CompilationArgs2.reserve(CompilationArgs.size() + 1);
+  CompilationArgs2.resize(CompilationArgs.size() + 1);
   for (unsigned i = 0; i < CompilationArgs.size(); ++i)
     CompilationArgs2[i] = (char *)CompilationArgs[i].data();
   CompilationArgs2[CompilationArgs.size()] = nullptr;
@@ -384,14 +594,15 @@ static int linkWithSpirvLink(cl_program Program, cl_uint DeviceI,
   POCL_RETURN_ERROR_ON((Err != 0), CL_BUILD_PROGRAM_FAILURE,
                        "spirv-link exited with nonzero code\n");
   POCL_RETURN_ERROR_ON(!pocl_exists(ProgramSpvPathTemp),
-                       CL_LINK_PROGRAM_FAILURE, "spirv-link failed\n");
+                       CL_LINK_PROGRAM_FAILURE,
+                       "spirv-link failed (output file does not exist)\n");
   return CL_SUCCESS;
 }
 #endif
 
 static int runLLVMOpt(cl_program Program, cl_uint DeviceI,
                       char ProgramBcPathTemp[POCL_MAX_PATHNAME_LENGTH]) {
-
+#ifdef HAVE_LLVM_OPT
   const char *L0passes =
       pocl_get_string_option("POCL_LEVEL0_LINK_OPT", nullptr);
   if (L0passes == nullptr)
@@ -404,13 +615,16 @@ static int runLLVMOpt(cl_program Program, cl_uint DeviceI,
 
   CompilationArgs.push_back(pocl_get_path("LLVM_OPT", LLVM_OPT));
   CompilationArgs.push_back(L0passes);
+  size_t Len = strlen(ProgramBcPathTemp);
   strcpy(ProgramBcOldPathTemp, ProgramBcPathTemp);
-  strncat(ProgramBcPathTemp, ".opt.bc", POCL_MAX_PATHNAME_LENGTH);
+  ProgramBcOldPathTemp[POCL_MAX_PATHNAME_LENGTH - 1] = 0;
+  strncat(ProgramBcPathTemp, ".opt.bc", (POCL_MAX_PATHNAME_LENGTH - Len - 1));
+  ProgramBcPathTemp[POCL_MAX_PATHNAME_LENGTH - 1] = 0;
   CompilationArgs.push_back("-o");
   CompilationArgs.push_back(ProgramBcPathTemp);
   CompilationArgs.push_back(ProgramBcOldPathTemp);
 
-  CompilationArgs2.reserve(CompilationArgs.size() + 1);
+  CompilationArgs2.resize(CompilationArgs.size() + 1);
   for (unsigned i = 0; i < CompilationArgs.size(); ++i)
     CompilationArgs2[i] = (char *)CompilationArgs[i].data();
   CompilationArgs2[CompilationArgs.size()] = nullptr;
@@ -422,52 +636,42 @@ static int runLLVMOpt(cl_program Program, cl_uint DeviceI,
   POCL_RETURN_ERROR_ON(!pocl_exists(ProgramBcPathTemp),
                        CL_BUILD_PROGRAM_FAILURE,
                        "llvm-opt failed to produce output file\n");
+#endif
   return CL_SUCCESS;
 }
 
 static int linkWithLLVMLink(cl_program Program, cl_uint DeviceI,
                             char ProgramBcPathTemp[POCL_MAX_PATHNAME_LENGTH],
                             char ProgramSpvPathTemp[POCL_MAX_PATHNAME_LENGTH],
-                            std::vector<std::string> &BcBinaryPaths,
+                            std::vector<void *> &LLVMIRBinaries,
                             int CreateLibrary) {
-  std::vector<std::string> CompilationArgs;
-  std::vector<const char *> CompilationArgs2;
 
-  CompilationArgs.push_back(pocl_get_path("LLVM_LINK", LLVM_LINK));
-//  if (CreateLibrary != 0) {
-//    CompilationArgs.push_back("--create-library");
-//  }
-  CompilationArgs.push_back("-o");
-  CompilationArgs.push_back(ProgramBcPathTemp);
-  for (auto &Path : BcBinaryPaths) {
-    CompilationArgs.push_back(Path);
-  }
-  CompilationArgs2.reserve(CompilationArgs.size() + 1);
-  for (unsigned i = 0; i < CompilationArgs.size(); ++i)
-    CompilationArgs2[i] = (char *)CompilationArgs[i].data();
-  CompilationArgs2[CompilationArgs.size()] = nullptr;
+  cl_device_id Dev = Program->devices[DeviceI];
+  Level0Device *Device = static_cast<Level0Device *>(Dev->data);
 
-  int Err =
-      runAndAppendOutputToBuildLog(Program, DeviceI, CompilationArgs2.data());
-  POCL_RETURN_ERROR_ON((Err != 0), CL_BUILD_PROGRAM_FAILURE,
-                       "llvm-link exited with nonzero code\n");
-  POCL_RETURN_ERROR_ON(!pocl_exists(ProgramBcPathTemp),
-                       CL_LINK_PROGRAM_FAILURE, "llvm-link failed to "
-                                                "produce output file\n");
+  void *DestLLVMIR = nullptr;
+  int Err = pocl_llvm_link_multiple_modules(Program, DeviceI, ProgramBcPathTemp,
+                                            LLVMIRBinaries.data(),
+                                            LLVMIRBinaries.size());
+
+  POCL_RETURN_ERROR_ON((Err != CL_SUCCESS), CL_LINK_PROGRAM_FAILURE,
+                       "llvm::link failed to link all modules\n");
+  POCL_RETURN_ERROR_ON(!pocl_exists(ProgramBcPathTemp), CL_LINK_PROGRAM_FAILURE,
+                       "llvm::link failed to "
+                       "produce output file\n");
 
   Err = runLLVMOpt(Program, DeviceI, ProgramBcPathTemp);
   if (Err != CL_SUCCESS)
     return Err;
 
-  Err = pocl_convert_bitcode_to_spirv(ProgramBcPathTemp,
-                                      nullptr, 0,
-                                      Program, DeviceI,
-                                      1, // useIntelExt
-                                      ProgramSpvPathTemp,
-                                      nullptr, nullptr);
+  Err = pocl_convert_bitcode_to_spirv(ProgramBcPathTemp, nullptr, 0, Program,
+                                      DeviceI, Dev->supported_spirv_extensions,
+                                      ProgramSpvPathTemp, nullptr, nullptr,
+                                      Device->getSupportedSpvVersion());
 
-  POCL_RETURN_ERROR_ON((Err != 0), CL_BUILD_PROGRAM_FAILURE,
-                       "llvm-spirv exited with nonzero code\n");
+  POCL_RETURN_ERROR_ON((Err != 0), CL_LINK_PROGRAM_FAILURE,
+                       "llvm IR -> SPIRV conversion failed\n");
+
   return CL_SUCCESS;
 }
 
@@ -475,6 +679,15 @@ int pocl_level0_build_source(cl_program Program, cl_uint DeviceI,
                              cl_uint NumInputHeaders,
                              const cl_program *InputHeaders,
                              const char **HeaderIncludeNames, int LinkProgram) {
+  cl_device_id Dev = Program->devices[DeviceI];
+  Level0Device *Device = (Level0Device *)Dev->data;
+
+  if (Dev->compiler_available == CL_FALSE ||
+      Dev->linker_available == CL_FALSE) {
+    POCL_RETURN_ERROR_ON(1, CL_BUILD_PROGRAM_FAILURE,
+                         "This device cannot build from sources\n");
+  }
+
 #ifdef ENABLE_LLVM
   int Err = CL_SUCCESS;
   POCL_MSG_PRINT_LLVM("building from sources for device %d\n", DeviceI);
@@ -485,9 +698,6 @@ int pocl_level0_build_source(cl_program Program, cl_uint DeviceI,
                                         InputHeaders, HeaderIncludeNames, 0);
   POCL_RETURN_ERROR_ON((Errcode != CL_SUCCESS), CL_BUILD_PROGRAM_FAILURE,
                        "Failed to build program from source\n");
-
-  cl_device_id Dev = Program->devices[DeviceI];
-  Level0Device *Device = (Level0Device *)Dev->data;
 
   char ProgramSpvPathTemp[POCL_MAX_PATHNAME_LENGTH] = {0};
   char ProgramBcPath[POCL_MAX_PATHNAME_LENGTH];
@@ -511,22 +721,17 @@ int pocl_level0_build_source(cl_program Program, cl_uint DeviceI,
     Err = runLLVMOpt(Program, DeviceI, ProgramBcPath);
     if (Err != CL_SUCCESS)
       return Err;
-
-    Err = pocl_convert_bitcode_to_spirv(nullptr,
-                                        (char*)Program->binaries[DeviceI],
-                                        Program->binary_sizes[DeviceI],
-                                        Program, DeviceI,
-                                        1, // useIntelExt
-                                        ProgramSpvPathTemp,
-                                        &OutputBinary,
-                                        &OutputBinarySize);
+    Err = pocl_convert_bitcode_to_spirv(
+        nullptr, (char *)Program->binaries[DeviceI],
+        Program->binary_sizes[DeviceI], Program, DeviceI,
+        Dev->supported_spirv_extensions, ProgramSpvPathTemp, &OutputBinary,
+        &OutputBinarySize, Device->getSupportedSpvVersion());
     POCL_RETURN_ERROR_ON((Err != 0), CL_BUILD_PROGRAM_FAILURE,
                          "llvm-spirv exited with nonzero code\n");
 
     Program->program_il = OutputBinary;
     Program->program_il_size = OutputBinarySize;
     pocl_rename(ProgramSpvPathTemp, ProgramSpvPath);
-    POCL_MSG_WARN("Final SPV written: %s\n", ProgramSpvPath);
   }
 
   assert(Program->program_il != nullptr);
@@ -537,7 +742,7 @@ int pocl_level0_build_source(cl_program Program, cl_uint DeviceI,
 
   if (LinkProgram != 0) {
     pocl_llvm_recalculate_gvar_sizes(Program, DeviceI);
-    return Device->createProgram(Program, DeviceI);
+    return Device->createSpirvProgram(Program, DeviceI);
   } else {
     // only final (linked) programs have  ZE module
     assert(Program->data[DeviceI] == nullptr);
@@ -551,7 +756,11 @@ int pocl_level0_build_source(cl_program Program, cl_uint DeviceI,
 
 int pocl_level0_supports_binary(cl_device_id Device, size_t Length,
                                 const char *Binary) {
-  if (pocl_bitcode_is_spirv_execmodel_kernel(Binary, Length) != 0) {
+
+  if (Device->compiler_available == CL_TRUE &&
+      Device->linker_available == CL_TRUE && Device->num_ils_with_version > 0 &&
+      pocl_bitcode_is_spirv_execmodel_kernel(Binary, Length,
+                                             Device->address_bits)) {
     return 1;
   }
   // TODO : possibly support native ZE binaries
@@ -573,8 +782,16 @@ int pocl_level0_build_binary(cl_program Program, cl_uint DeviceI,
   cl_device_id Dev = Program->devices[DeviceI];
   Level0Device *Device = (Level0Device *)Dev->data;
 
+  if (Dev->compiler_available == CL_FALSE ||
+      Dev->linker_available == CL_FALSE) {
+    POCL_RETURN_ERROR_ON(1, CL_BUILD_PROGRAM_FAILURE,
+                         "This device cannot build binaries\n");
+  }
+
   char ProgramBcPath[POCL_MAX_PATHNAME_LENGTH];
+  ProgramBcPath[0] = 0;
   char ProgramSpvPath[POCL_MAX_PATHNAME_LENGTH];
+  ProgramSpvPath[0] = 0;
   char ProgramSpvPathTemp[POCL_MAX_PATHNAME_LENGTH];
   ProgramSpvPathTemp[0] = 0;
   char ProgramBcPathTemp[POCL_MAX_PATHNAME_LENGTH];
@@ -585,6 +802,7 @@ int pocl_level0_build_binary(cl_program Program, cl_uint DeviceI,
     /* we have pocl_binaries with BOTH SPIRV and IR Bitcode */
 
     pocl_cache_program_spv_path(ProgramSpvPath, Program, DeviceI);
+    pocl_cache_program_bc_path(ProgramBcPath, Program, DeviceI);
 
     POCL_RETURN_ERROR_ON(
         (readProgramSpv(Program, DeviceI, ProgramSpvPath) != CL_SUCCESS),
@@ -607,17 +825,23 @@ int pocl_level0_build_binary(cl_program Program, cl_uint DeviceI,
       /* we have only program_il, which is SPIR-V*/
       assert(Program->program_il != nullptr);
       assert(Program->program_il_size > 0);
-      Err = pocl_convert_spirv_to_bitcode(ProgramSpvPathTemp,
-                                          Program->program_il,
-                                          Program->program_il_size,
-                                          Program, DeviceI,
-                                          1, // useIntelExt
-                                          ProgramBcPathTemp,
-                                          &OutputBinary, &OutputBinarySize);
+
+#ifdef USE_LLVM_SPIRV_TARGET
+      POCL_MSG_WARN("Level0: not converting SPIRV -> LLVM IR "
+                    "with SPIRV backend\n");
+#else
+      Err = pocl_convert_spirv_to_bitcode(
+          ProgramSpvPathTemp, Program->program_il, Program->program_il_size,
+          Program, DeviceI, Dev->supported_spirv_extensions, ProgramBcPathTemp,
+          &OutputBinary, &OutputBinarySize);
       POCL_RETURN_ERROR_ON((Err != 0), CL_BUILD_PROGRAM_FAILURE,
                            "failed to compile SPV -> BC\n");
       Program->binaries[DeviceI] = (unsigned char *)OutputBinary;
       Program->binary_sizes[DeviceI] = OutputBinarySize;
+
+      assert(Program->binaries[DeviceI] != nullptr);
+      assert(Program->binary_sizes[DeviceI] != 0);
+#endif
     } else {
       /* we have program->binaries[] which should be LLVM IR SPIR */
       assert(Program->binaries[DeviceI] != nullptr);
@@ -625,21 +849,18 @@ int pocl_level0_build_binary(cl_program Program, cl_uint DeviceI,
 
       int Triple =
           pocl_bitcode_is_triple((char *)Program->binaries[DeviceI],
-                            Program->binary_sizes[DeviceI], "spir-unknown");
-      Triple +=
-          pocl_bitcode_is_triple((char *)Program->binaries[DeviceI],
                             Program->binary_sizes[DeviceI], "spir64-unknown");
       POCL_RETURN_ERROR_ON((Triple == 0), CL_BUILD_PROGRAM_FAILURE,
                            "the binary supplied to level0 driver is "
                            "not a recognized binary type\n");
 
-      Err = pocl_convert_bitcode_to_spirv(ProgramBcPathTemp,
-                                          (char *)Program->binaries[DeviceI],
-                                          Program->binary_sizes[DeviceI],
-                                          Program, DeviceI,
-                                          1, // useIntelExt
-                                          ProgramSpvPathTemp,
-                                          &OutputBinary, &OutputBinarySize);
+      cl_device_id Dev = Program->devices[DeviceI];
+      Level0Device *Device = static_cast<Level0Device *>(Dev->data);
+      Err = pocl_convert_bitcode_to_spirv(
+          ProgramBcPathTemp, (char *)Program->binaries[DeviceI],
+          Program->binary_sizes[DeviceI], Program, DeviceI,
+          Dev->supported_spirv_extensions, ProgramSpvPathTemp, &OutputBinary,
+          &OutputBinarySize, Device->getSupportedSpvVersion());
       POCL_RETURN_ERROR_ON((Err != 0), CL_BUILD_PROGRAM_FAILURE,
                            "failed to compile BC -> SPV\n");
       Program->program_il = OutputBinary;
@@ -651,21 +872,20 @@ int pocl_level0_build_binary(cl_program Program, cl_uint DeviceI,
     convertProgramBcPathToSpv(ProgramBcPath, ProgramSpvPath);
     pocl_rename(ProgramSpvPathTemp, ProgramSpvPath);
     pocl_rename(ProgramBcPathTemp, ProgramBcPath);
-  }
 
-  assert(Program->program_il != nullptr);
-  assert(Program->program_il_size > 0);
-  // TODO is this really LLVM IR
-  assert(Program->binaries[DeviceI] != nullptr);
-  assert(Program->binary_sizes[DeviceI] != 0);
+    assert(Program->program_il != nullptr);
+    assert(Program->program_il_size > 0);
+    assert(Program->binaries[DeviceI] != nullptr);
+    assert(Program->binary_sizes[DeviceI] != 0);
+  }
 
   if (LinkProgram != 0) {
     // for Metadata, read the Bitcode into LLVM::Module
     pocl_llvm_read_program_llvm_irs(Program, DeviceI, ProgramBcPath);
     pocl_llvm_recalculate_gvar_sizes(Program, DeviceI);
-    return Device->createProgram(Program, DeviceI);
+    return Device->createSpirvProgram(Program, DeviceI);
   } else {
-    // only final (linked) programs have  ZE module
+    // only final (linked) programs have ZE module
     assert(Program->data[DeviceI] == nullptr);
     return CL_SUCCESS;
   }
@@ -677,6 +897,12 @@ int pocl_level0_link_program(cl_program Program, cl_uint DeviceI,
                              int CreateLibrary) {
   cl_device_id Dev = Program->devices[DeviceI];
   Level0Device *Device = (Level0Device *)Dev->data;
+
+  if (!Dev->compiler_available || !Dev->linker_available) {
+    POCL_RETURN_ERROR_ON(1, CL_BUILD_PROGRAM_FAILURE,
+                         "This device cannot link binaries\n");
+  }
+
   char ProgramBcPath[POCL_MAX_PATHNAME_LENGTH];
   char ProgramSpvPath[POCL_MAX_PATHNAME_LENGTH];
 
@@ -686,11 +912,11 @@ int pocl_level0_link_program(cl_program Program, cl_uint DeviceI,
   assert(Program->binary_sizes[DeviceI] == 0);
 
   std::vector<std::string> SpvBinaryPaths;
-  std::vector<std::string> BcBinaryPaths;
+  std::vector<void *> LLVMIRBinaries;
   std::vector<char> SpvConcatBinary;
 
   cl_uint I;
-  cl_uint ProgsHaveProgramBC = 0;
+  cl_uint ProgsHaveProgramLLVMIR = 0;
   for (I = 0; I < NumInputPrograms; I++) {
     assert(Dev == InputPrograms[I]->devices[DeviceI]);
     POCL_LOCK_OBJ(InputPrograms[I]);
@@ -708,16 +934,24 @@ int pocl_level0_link_program(cl_program Program, cl_uint DeviceI,
     size_t Size = InputPrograms[I]->program_il_size;
     assert(Size);
     SpvConcatBinary.insert(SpvConcatBinary.end(), Spv, Spv + Size);
+
     if (InputPrograms[I]->binary_sizes[DeviceI] > 0) {
-      ++ProgsHaveProgramBC;
       pocl_cache_program_bc_path(ProgramBcPath, InputPrograms[I], DeviceI);
       assert(pocl_exists(ProgramBcPath));
-      BcBinaryPaths.push_back(ProgramBcPath);
+      if (InputPrograms[I]->llvm_irs[DeviceI] == nullptr) {
+        pocl_llvm_read_program_llvm_irs(InputPrograms[I], DeviceI, nullptr);
+      }
+    }
+
+    if (InputPrograms[I]->llvm_irs[DeviceI] != nullptr) {
+      ++ProgsHaveProgramLLVMIR;
+      LLVMIRBinaries.push_back(InputPrograms[I]->llvm_irs[DeviceI]);
     }
 
     POCL_UNLOCK_OBJ(InputPrograms[I]);
   }
-  if (ProgsHaveProgramBC != NumInputPrograms) {
+
+  if (ProgsHaveProgramLLVMIR != NumInputPrograms) {
     POCL_MSG_ERR("LevelZero: not all programs have program.bc\n");
     return CL_LINK_PROGRAM_FAILURE;
   }
@@ -735,19 +969,21 @@ int pocl_level0_link_program(cl_program Program, cl_uint DeviceI,
     char ProgramBcPathTemp[POCL_MAX_PATHNAME_LENGTH];
     pocl_cache_tempname(ProgramBcPathTemp, ".bc", NULL);
 
-//  if (linkWithSpirvLink(Program, DeviceI, ProgramSpvPathTemp,
-//              SpvBinaryPaths, CreateLibrary) != CL_SUCCESS) {
-
-//    POCL_MSG_WARN("LevelZero : failed to link using spirv-link, trying"
-//                  "with llvm-link\n");
+#if 0
+    // this can be re-enabled when we get rid of dependency on LLVM IR
+    // in the compilation chain
+    if (linkWithSpirvLink(Program, DeviceI, ProgramSpvPathTemp, SpvBinaryPaths,
+                          CreateLibrary) != CL_SUCCESS) {
+      POCL_MSG_WARN("LevelZero : failed to link using spirv-link,"
+                    "retrying with llvm-link\n");
+    }
+#endif
     if (linkWithLLVMLink(Program, DeviceI, ProgramBcPathTemp,
-                         ProgramSpvPathTemp, BcBinaryPaths, 0) != CL_SUCCESS) {
+                         ProgramSpvPathTemp, LLVMIRBinaries, 0) != CL_SUCCESS) {
       POCL_MSG_ERR("LevelZero: failed to link "
                    "with both spirv-link and llvm-link\n");
       return CL_LINK_PROGRAM_FAILURE;
     }
-//  }
-
     pocl_rename(ProgramSpvPathTemp, ProgramSpvPath);
     pocl_rename(ProgramBcPathTemp, ProgramBcPath);
   }
@@ -771,7 +1007,7 @@ int pocl_level0_link_program(cl_program Program, cl_uint DeviceI,
     // for Metadata, read the Bitcode into LLVM::Module
     pocl_llvm_read_program_llvm_irs(Program, DeviceI, ProgramBcPath);
     pocl_llvm_recalculate_gvar_sizes(Program, DeviceI);
-    return Device->createProgram(Program, DeviceI);
+    return Device->createSpirvProgram(Program, DeviceI);
   } else {
     // only final (linked) programs have  ZE module
     assert(Program->data[DeviceI] == nullptr);
@@ -785,21 +1021,14 @@ int pocl_level0_free_program(cl_device_id ClDevice, cl_program Program,
 #ifdef ENABLE_LLVM
   pocl_llvm_free_llvm_irs(Program, ProgramDeviceI);
 #endif
-  /* module can be NULL if compilation fails */
   Device->freeProgram(Program, ProgramDeviceI);
-  return 0;
+  return CL_SUCCESS;
 }
 
-int pocl_level0_setup_metadata(cl_device_id Device, cl_program Program,
-                               unsigned ProgramDeviceI) {
+static int pocl_level0_setup_spirv_metadata(cl_device_id Device,
+                                            cl_program Program,
+                                            unsigned ProgramDeviceI) {
   assert(Program->data[ProgramDeviceI] != nullptr);
-
-  // using the LLVM::Module as source for metadata gets more reliable info
-  // than SPIR-V parsing. TODO make the SPIR-V parsing work, so we don't have
-  // to use LLVM::Module.
-  if (Program->llvm_irs[ProgramDeviceI] != nullptr) {
-    return pocl_driver_setup_metadata(Device, Program, ProgramDeviceI);
-  }
 
   // TODO this is using program_il as source
   int32_t *Stream = (int32_t *)Program->program_il;
@@ -819,34 +1048,15 @@ int pocl_level0_setup_metadata(cl_device_id Device, cl_program Program,
   Program->kernel_meta = (pocl_kernel_metadata_t *)calloc(
       Program->num_kernels, sizeof(pocl_kernel_metadata_t));
 
+// TODO: currently all metadata is gotten from LLVM instead of the SPIR-V parser
+//  and therefore unnecessary. In the future the LLVM dependency could be
+//  dropped in favor of the SPIR-V parser, see comment:
+//  https://github.com/pocl/pocl/pull/1611#discussion_r1810472798
+#if 0
   uint32_t Idx = 0;
   for (auto &I : KernelInfoMap) {
-    std::string Name = I.first;
-    OCLFuncInfo *FI = I.second.get();
 
-    pocl_kernel_metadata_t *Meta = &Program->kernel_meta[Idx];
-    Meta->data = (void **)calloc(Program->num_devices, sizeof(void *));
-    Meta->num_args = FI->ArgTypeInfo.size();
-    Meta->name = strdup(Name.c_str());
-
-    // Level zero driver handles the static locals
-    Meta->num_locals = 0;
-    Meta->local_sizes = nullptr;
-
-    Meta->max_subgroups =
-        (size_t *)calloc(Program->num_devices, sizeof(size_t));
-    Meta->compile_subgroups =
-        (size_t *)calloc(Program->num_devices, sizeof(size_t));
-    Meta->max_workgroup_size =
-        (size_t *)calloc(Program->num_devices, sizeof(size_t));
-    Meta->preferred_wg_multiple =
-        (size_t *)calloc(Program->num_devices, sizeof(size_t));
-    Meta->local_mem_size =
-        (cl_ulong *)calloc(Program->num_devices, sizeof(cl_ulong));
-    Meta->private_mem_size =
-        (cl_ulong *)calloc(Program->num_devices, sizeof(cl_ulong));
-    Meta->spill_mem_size =
-        (cl_ulong *)calloc(Program->num_devices, sizeof(cl_ulong));
+    SPIRVParser::mapToPoCLMetadata(I, Program->num_devices, &Program->kernel_meta[Idx]);
 
     // ZE kernel metadata; TODO with JIT, we don't have the ZE module
     // to extract the metadata - this needs to be extracted from SPIR-V
@@ -908,130 +1118,133 @@ int pocl_level0_setup_metadata(cl_device_id Device, cl_program Program,
     }
 #endif
 
-    // ARGUMENTS
-    if (Meta->num_args != 0u) {
-      Meta->arg_info = (struct pocl_argument_info *)calloc(
-          Meta->num_args, sizeof(struct pocl_argument_info));
-
-      for (uint32_t J = 0; J < Meta->num_args; ++J) {
-        cl_kernel_arg_address_qualifier Addr;
-        cl_kernel_arg_access_qualifier Access;
-        Addr = CL_KERNEL_ARG_ADDRESS_PRIVATE;
-        Access = CL_KERNEL_ARG_ACCESS_NONE;
-        Meta->arg_info[J].name = strdup(FI->ArgTypeInfo[J].Name.c_str());
-        Meta->arg_info[J].type_name = nullptr;
-        switch (FI->ArgTypeInfo[J].Type) {
-        case OCLType::POD: {
-          Meta->arg_info[J].type = POCL_ARG_TYPE_NONE;
-          Meta->arg_info[J].type_size = FI->ArgTypeInfo[J].Size;
-          break;
-        }
-        case OCLType::Pointer: {
-          Meta->arg_info[J].type = POCL_ARG_TYPE_POINTER;
-          Meta->arg_info[J].type_size = sizeof(cl_mem);
-          switch (FI->ArgTypeInfo[J].Space) {
-          case OCLSpace::Private:
-            Addr = CL_KERNEL_ARG_ADDRESS_PRIVATE;
-            break;
-          case OCLSpace::Local:
-            Addr = CL_KERNEL_ARG_ADDRESS_LOCAL;
-            break;
-          case OCLSpace::Global:
-            Addr = CL_KERNEL_ARG_ADDRESS_GLOBAL;
-            break;
-          case OCLSpace::Constant:
-            Addr = CL_KERNEL_ARG_ADDRESS_CONSTANT;
-            break;
-          case OCLSpace::Unknown:
-            Addr = CL_KERNEL_ARG_ADDRESS_PRIVATE;
-            break;
-          }
-          break;
-        }
-        case OCLType::Image: {
-          Meta->arg_info[J].type = POCL_ARG_TYPE_IMAGE;
-          Meta->arg_info[J].type_size = sizeof(cl_mem);
-          Addr = CL_KERNEL_ARG_ADDRESS_GLOBAL;
-          bool Readable = FI->ArgTypeInfo[J].Attrs.ReadableImg;
-          bool Writable = FI->ArgTypeInfo[J].Attrs.WriteableImg;
-          if (Readable && Writable) {
-            Access = CL_KERNEL_ARG_ACCESS_READ_WRITE;
-          }
-          if (Readable && !Writable) {
-            Access = CL_KERNEL_ARG_ACCESS_READ_ONLY;
-          }
-          if (!Readable && Writable) {
-            Access = CL_KERNEL_ARG_ACCESS_WRITE_ONLY;
-          }
-          break;
-        }
-        case OCLType::Sampler: {
-          Meta->arg_info[J].type = POCL_ARG_TYPE_SAMPLER;
-          Meta->arg_info[J].type_size = sizeof(cl_mem);
-          break;
-        }
-        case OCLType::Opaque: {
-          POCL_MSG_ERR("Unknown OCL type OPaque\n");
-          Meta->arg_info[J].type = POCL_ARG_TYPE_NONE;
-          Meta->arg_info[J].type_size = FI->ArgTypeInfo[J].Size;
-          break;
-        }
-        }
-        Meta->arg_info[J].address_qualifier = Addr;
-        Meta->arg_info[J].access_qualifier = Access;
-        Meta->arg_info[J].type_qualifier = CL_KERNEL_ARG_TYPE_NONE;
-        if (FI->ArgTypeInfo[J].Attrs.Constant) {
-          Meta->arg_info[J].type_qualifier |= CL_KERNEL_ARG_TYPE_CONST;
-        }
-        if (FI->ArgTypeInfo[J].Attrs.Restrict) {
-          Meta->arg_info[J].type_qualifier |= CL_KERNEL_ARG_TYPE_RESTRICT;
-        }
-        if (FI->ArgTypeInfo[J].Attrs.Volatile) {
-          Meta->arg_info[J].type_qualifier |= CL_KERNEL_ARG_TYPE_VOLATILE;
-        }
-      }
-
-      // TODO: POCL_HAS_KERNEL_ARG_TYPE_NAME missing
-      Meta->has_arg_metadata = POCL_HAS_KERNEL_ARG_ACCESS_QUALIFIER |
-                               POCL_HAS_KERNEL_ARG_ADDRESS_QUALIFIER |
-                               POCL_HAS_KERNEL_ARG_TYPE_QUALIFIER |
-                               POCL_HAS_KERNEL_ARG_NAME;
-    }
-
     ++Idx;
   }
+#endif
 
   return 1;
 }
 
-int pocl_level0_create_kernel(cl_device_id Device, cl_program Program,
-                              cl_kernel Kernel, unsigned ProgramDeviceI) {
-  assert(Program->data[ProgramDeviceI] != nullptr);
-  Level0Program *L0Program = (Level0Program *)Program->data[ProgramDeviceI];
-  Level0Kernel *Ker =
-      DriverInstance->getJobSched().createKernel(L0Program, Kernel->name);
-  Kernel->data[ProgramDeviceI] = Ker;
-  return Ker ? CL_SUCCESS : CL_OUT_OF_RESOURCES;
+#ifdef ENABLE_NPU
+
+static bool pocl_npu_is_layout_gemm(cl_uint Rank, const void *Layout) {
+  const cl_tensor_layout_ml_exp *Ptr = (cl_tensor_layout_ml_exp *)Layout;
+
+  // supported layouts from openvino compiler plugin /
+  // "rankToLegacyLayoutString": C, NC, CHW, NCHW, NCDHW
+  if (Ptr->ml_type == CL_TENSOR_LAYOUT_ML_NC_EXP && Rank == 2)
+    return true;
+  if (Ptr->ml_type == CL_TENSOR_LAYOUT_ML_CHW_EXP && Rank == 3)
+    return true;
+  return false;
 }
 
-int pocl_level0_free_kernel(cl_device_id Device, cl_program Program,
-                            cl_kernel Kernel, unsigned ProgramDeviceI) {
+int pocl_npu_validate_khr_gemm(cl_bool TransA, cl_bool TransB,
+                               const cl_tensor_desc_exp *TenA,
+                               const cl_tensor_desc_exp *TenB,
+                               const cl_tensor_desc_exp *TenCIOpt,
+                               const cl_tensor_desc_exp *TenCOut,
+                               const cl_tensor_datatype_value_exp *Alpha,
+                               const cl_tensor_datatype_value_exp *Beta) {
 
+  // datatype match between A&B and CIopt&COut already checked in initial
+  // validation (pocl_validate_khr_gemm)
+
+  // currently FP 16-64 and INT 8-64 are supported.
+  POCL_RETURN_ERROR_ON((TenA->dtype == CL_TENSOR_DTYPE_FP8E4M3_EXP ||
+                        TenA->dtype == CL_TENSOR_DTYPE_FP8E5M2_EXP ||
+                        TenA->dtype == CL_TENSOR_DTYPE_INT4_EXP ||
+                        TenCOut->dtype == CL_TENSOR_DTYPE_FP8E4M3_EXP ||
+                        TenCOut->dtype == CL_TENSOR_DTYPE_FP8E5M2_EXP ||
+                        TenCOut->dtype == CL_TENSOR_DTYPE_INT4_EXP),
+                       CL_INVALID_TENSOR_DATATYPE_EXP,
+                       "Datatype support not yet implemented. NPU supports "
+                       "only FP16/32/64 and INT8/16/32/64 currently\n");
+
+  // type mixing check.
+  POCL_RETURN_ERROR_ON((pocl_tensor_type_is_int(TenA->dtype) !=
+                        pocl_tensor_type_is_int(TenCOut->dtype)),
+                       CL_INVALID_TENSOR_DATATYPE_EXP,
+                       "Datatype mixing (INT & FP) not supported\n");
+
+  POCL_RETURN_ERROR_ON((pocl_tensor_type_size(TenA->dtype) >
+                        pocl_tensor_type_size(TenCOut->dtype)),
+                       CL_INVALID_TENSOR_DATATYPE_EXP,
+                       "Datatype of C is smaller than A\n");
+
+  // check validity of data layouts of the tensors.
+  POCL_RETURN_ERROR_ON(
+      (TenA->layout_type != CL_TENSOR_LAYOUT_ML_EXP ||
+       TenB->layout_type != CL_TENSOR_LAYOUT_ML_EXP ||
+       TenCOut->layout_type != CL_TENSOR_LAYOUT_ML_EXP ||
+       (TenCIOpt && TenCIOpt->layout_type != CL_TENSOR_LAYOUT_ML_EXP)),
+      CL_INVALID_TENSOR_LAYOUT_EXP,
+      "GEMM on NPU device only supports ML layouts\n");
+
+  POCL_RETURN_ERROR_ON(
+      (!pocl_npu_is_layout_gemm(TenA->rank, TenA->layout) ||
+       !pocl_npu_is_layout_gemm(TenB->rank, TenB->layout) ||
+       !pocl_npu_is_layout_gemm(TenCOut->rank, TenCOut->layout) ||
+       (TenCIOpt &&
+        !pocl_npu_is_layout_gemm(TenCIOpt->rank, TenCIOpt->layout))),
+      CL_INVALID_TENSOR_LAYOUT_EXP,
+      "GEMM on NPU device only supports C, NC, CHW, NCHW, NCDHW layouts\n");
+
+  return CL_SUCCESS;
+}
+#endif
+
+int pocl_level0_supports_dbk(cl_device_id device, cl_dbk_id_exp kernel_id,
+                             const void *kernel_attributes) {
+#ifdef ENABLE_NPU
+  // check for NPU specific requirements on Tensors.
+  return pocl_validate_dbk_attributes(kernel_id, kernel_attributes,
+                                      pocl_npu_validate_khr_gemm);
+
+#else
+  POCL_RETURN_ERROR_ON(1, CL_DBK_UNSUPPORTED_EXP,
+                       "The LevelZero driver must be compiled with enabled "
+                       "NPU to support tensor DBKs\n");
+#endif
+}
+
+int pocl_level0_setup_metadata(cl_device_id Dev, cl_program Program,
+                               unsigned ProgramDeviceI) {
+  if (Program->num_builtin_kernels) {
+    return pocl_driver_setup_metadata(Dev, Program, ProgramDeviceI);
+  }
+  // using the LLVM::Module as source for metadata gets more reliable info
+  // than SPIR-V parsing. TODO make the SPIR-V parsing work, so we don't have
+  // to use LLVM::Module.
+  if (Program->llvm_irs[ProgramDeviceI] != nullptr) {
+    return pocl_driver_setup_metadata(Dev, Program, ProgramDeviceI);
+  }
+  if (Program->program_il && Program->program_il_size) {
+    return pocl_level0_setup_spirv_metadata(Dev, Program, ProgramDeviceI);
+  }
+  POCL_MSG_ERR("LevelZero: Don't know how to setup metadata\n");
+  return 0;
+}
+
+int pocl_level0_create_kernel(cl_device_id Dev, cl_program Program,
+                              cl_kernel Kernel, unsigned ProgramDeviceI) {
+  assert(Program->data[ProgramDeviceI] != nullptr);
+  Level0Device *Device = (Level0Device *)Dev->data;
+  return Device->createKernel(Program, Kernel, ProgramDeviceI);
+}
+
+int pocl_level0_free_kernel(cl_device_id Dev, cl_program Program,
+                            cl_kernel Kernel, unsigned ProgramDeviceI) {
   assert(Program->data[ProgramDeviceI] != nullptr);
   assert(Kernel->data[ProgramDeviceI] != nullptr);
-
-  Level0Program *L0Program = (Level0Program *)Program->data[ProgramDeviceI];
-  Level0Kernel *L0Kernel = (Level0Kernel *)Kernel->data[ProgramDeviceI];
-
-  bool Res = DriverInstance->getJobSched().releaseKernel(L0Program, L0Kernel);
-  assert(Res == true);
-
-  return 0;
+  Level0Device *Device = (Level0Device *)Dev->data;
+  return Device->freeKernel(Program, Kernel, ProgramDeviceI);
 }
 
 int pocl_level0_build_poclbinary(cl_program Program, cl_uint DeviceI) {
 
   assert(Program->build_status == CL_BUILD_SUCCESS);
+
   if (Program->num_kernels == 0) {
     return CL_SUCCESS;
   }
@@ -1042,9 +1255,14 @@ int pocl_level0_build_poclbinary(cl_program Program, cl_uint DeviceI) {
     return CL_SUCCESS;
   }
 
-  assert(Program->binaries[DeviceI]);
+  return (Program->binaries[DeviceI] ? CL_SUCCESS : CL_BUILD_PROGRAM_FAILURE);
+}
 
-  return CL_SUCCESS;
+int pocl_level0_build_builtin(cl_program Program, cl_uint DeviceI) {
+  cl_device_id Dev = Program->devices[DeviceI];
+  Level0Device *Device = (Level0Device *)Dev->data;
+
+  return Device->createBuiltinProgram(Program, DeviceI);
 }
 
 int pocl_level0_init_queue(cl_device_id Dev, cl_command_queue Queue) {
@@ -1103,7 +1321,7 @@ void pocl_level0_join(cl_device_id Device, cl_command_queue Queue) {
 
 static bool pocl_level0_queue_supports_batching(cl_command_queue CQ,
                                                 Level0Device *Device) {
-  if (!Device->supportsUniversalQueues())
+  if (!Device->supportsCmdQBatching())
     return false;
   if (CQ->properties & CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE)
     return false;
@@ -1139,9 +1357,13 @@ void PoclL0QueueData::getSubmitBatchUnlocked(BatchType &SubmitBatch) {
   // if the first event has null waitlist, it's ready to launch
   SubmitBatch.push_back(FirstEv);
   UnsubmittedEventList.pop_front();
+  if (FirstEv->command_type == CL_COMMAND_COMMAND_BUFFER_KHR)
+    goto FINISH;
 
   while (!UnsubmittedEventList.empty()) {
     cl_event Ev = UnsubmittedEventList.front();
+    if (Ev->command_type == CL_COMMAND_COMMAND_BUFFER_KHR)
+      break;
     assert(Ev->data);
     PoclL0EventData *EvData = (PoclL0EventData *)Ev->data;
     if (EvData->CanBeBatched) {
@@ -1151,6 +1373,8 @@ void PoclL0QueueData::getSubmitBatchUnlocked(BatchType &SubmitBatch) {
       break;
     }
   }
+
+FINISH:
   POCL_MSG_PRINT_LEVEL0("Processing Batch: Submitted %zu || New batch: %zu\n",
                         UnsubmittedEventList.size(), SubmitBatch.size());
 }
@@ -1198,7 +1422,6 @@ void pocl_level0_flush(cl_device_id ClDev, cl_command_queue Queue) {
   } else {
     POCL_MSG_PRINT_LEVEL0("FLUSH: SubmitBatch SIZE %zu\n", SubmitBatch.size());
     Device->pushCommandBatch(std::move(SubmitBatch));
-    assert(SubmitBatch.empty());
   }
 }
 
@@ -1207,7 +1430,7 @@ void pocl_level0_submit(_cl_command_node *Node, cl_command_queue Queue) {
   PoclL0QueueData *QD = (PoclL0QueueData *)Queue->data;
   cl_event Ev = Node->sync.event.event;
 
-  Node->ready = CL_TRUE;
+  Node->state = POCL_COMMAND_READY;
   assert(Ev->data);
   PoclL0EventData *EvData = (PoclL0EventData *)Ev->data;
 
@@ -1236,13 +1459,22 @@ void pocl_level0_notify(cl_device_id ClDev, cl_event Event, cl_event Finished) {
     // remove the Event from unsubmitted list
     PoclL0QueueData *QD = (PoclL0QueueData *)Event->queue->data;
     QD->eraseEvent(Event);
-    pocl_update_event_failed(Event);
+    /* Unlock the finished event in order to prevent a lock order violation
+     * with the command queue that will be locked during
+     * pocl_update_event_failed.
+     */
+    pocl_unlock_events_inorder(Event, Finished);
+    pocl_update_event_failed(CL_FAILED, nullptr, 0, Event, nullptr);
+    /* Lock events in this order to avoid a lock order violation between
+     * the finished/notifier and event/wait events.
+     */
+    pocl_lock_events_inorder(Finished, Event);
     return;
   }
 
   // node is ready to execute
   POCL_MSG_PRINT_LEVEL0("notify on event %zu | READY %i\n", Event->id,
-                        Node->ready);
+                        Node->state);
 
   assert(Event->queue);
   if (pocl_level0_queue_supports_batching(Event->queue, Device)) {
@@ -1252,7 +1484,8 @@ void pocl_level0_notify(cl_device_id ClDev, cl_event Event, cl_event Finished) {
     if (!SubmitBatch.empty())
       Device->pushCommandBatch(std::move(SubmitBatch));
   } else {
-    if (Node->ready == CL_TRUE && pocl_command_is_ready(Event) != 0) {
+    if (Node->state == POCL_COMMAND_READY &&
+        pocl_command_is_ready(Event) != 0) {
       pocl_update_event_submitted(Event);
       Device->pushCommand(Node);
     }
@@ -1303,37 +1536,40 @@ int pocl_level0_alloc_mem_obj(cl_device_id ClDevice, cl_mem Mem, void *HostPtr) 
     return CL_MEM_OBJECT_ALLOCATION_FAILURE;
   }
 
-  // The cl_mems are allocated as shared USM by default to make clEnqueueMap()
-  // implementation simpler. TODO: measure the perf. impact of this on some
-  // relevant platform and use memcopies for map.
-
   void *Allocation = nullptr;
+  bool IsAllocHostAccessible = false;
   // special handling for clCreateBuffer called on SVM or USM pointer
   if (((Mem->flags & CL_MEM_USE_HOST_PTR) != 0u) &&
       (Mem->mem_host_ptr_is_svm != 0)) {
     P->mem_ptr = Mem->mem_host_ptr;
     P->version = Mem->mem_host_ptr_version;
+    IsAllocHostAccessible = true;
   } else {
+    // handle all other cases here.
+    // CL_MEM_USE_HOST_PTR without SVM
+    //   handled by normal memory + memcpy at sync points
+    // CL_MEM_DEVICE_{PRIVATE,SHARED}_ADDRESS_EXT:
+    //   Treat cl_ext_buffer_device_address identically as USM Device.
+    //   If we passed an SVM/USM address, we can use it directly in the
+    //   previous branch. That should be at least a USM Device allocation.
     bool Compress = false;
     if (pocl_get_bool_option("POCL_LEVEL0_COMPRESS", 0)) {
       Compress = (Mem->flags & CL_MEM_READ_ONLY) > 0;
     }
+
     ze_device_mem_alloc_flags_t DevFlags = ZE_DEVICE_MEM_ALLOC_FLAG_BIAS_CACHED;
 
     ze_host_mem_alloc_flags_t HostFlags =
         ZE_HOST_MEM_ALLOC_FLAG_BIAS_CACHED |
         ZE_HOST_MEM_ALLOC_FLAG_BIAS_WRITE_COMBINED;
     if (Mem->flags & (CL_MEM_ALLOC_HOST_PTR | CL_MEM_COPY_HOST_PTR |
-                      CL_MEM_ALLOC_INITIAL_PLACEMENT_DEVICE_INTEL))
+                      CL_MEM_ALLOC_INITIAL_PLACEMENT_HOST_INTEL))
       HostFlags |= ZE_HOST_MEM_ALLOC_FLAG_BIAS_INITIAL_PLACEMENT;
     else
       DevFlags |= ZE_DEVICE_MEM_ALLOC_FLAG_BIAS_INITIAL_PLACEMENT;
 
-    if (ClDevice->host_unified_memory)
-      Allocation =
-          Device->allocSharedMem(Mem->size, Compress, DevFlags, HostFlags);
-    else
-      Allocation = Device->allocDeviceMem(Mem->size);
+    Allocation = Device->allocBuffer((uintptr_t)Mem, DevFlags, HostFlags,
+                                     Mem->size, IsAllocHostAccessible);
     if (Allocation == nullptr) {
       return CL_MEM_OBJECT_ALLOCATION_FAILURE;
     }
@@ -1351,7 +1587,7 @@ int pocl_level0_alloc_mem_obj(cl_device_id ClDevice, cl_mem Mem, void *HostPtr) 
         Mem->image_array_size);
     if (Image == nullptr) {
       if (Allocation != nullptr) {
-        Device->freeMem(Allocation);
+        Device->freeBuffer((uintptr_t)Mem, Allocation);
       }
       P->mem_ptr = nullptr;
       P->version = 0;
@@ -1362,7 +1598,7 @@ int pocl_level0_alloc_mem_obj(cl_device_id ClDevice, cl_mem Mem, void *HostPtr) 
   }
 
   if (Mem->mem_host_ptr == nullptr) {
-    if (ClDevice->host_unified_memory) {
+    if (IsAllocHostAccessible) {
       // since we allocate shared memory, use it for mem_host_ptr
       assert((Mem->flags & CL_MEM_USE_HOST_PTR) == 0);
       Mem->mem_host_ptr = Allocation;
@@ -1400,7 +1636,8 @@ void pocl_level0_free(cl_device_id ClDevice, cl_mem Mem) {
     P->mem_ptr = nullptr;
     P->version = 0;
   } else {
-    Device->freeMem(P->mem_ptr);
+    Device->freeBuffer((uintptr_t)Mem, P->mem_ptr);
+    assert(Mem->mem_host_ptr != nullptr);
   }
 
   if (Mem->mem_host_ptr != nullptr && Mem->mem_host_ptr == P->mem_ptr) {
@@ -1408,8 +1645,6 @@ void pocl_level0_free(cl_device_id ClDevice, cl_mem Mem) {
     Mem->mem_host_ptr = nullptr;
     Mem->mem_host_ptr_version = 0;
     --Mem->mem_host_ptr_refcount;
-    // TODO refcounting
-    // assert(mem->mem_host_ptr_refcount == 0);
   }
 
   P->mem_ptr = nullptr;
@@ -1421,7 +1656,8 @@ void pocl_level0_free(cl_device_id ClDevice, cl_mem Mem) {
 cl_int pocl_level0_get_mapping_ptr(void *Data, pocl_mem_identifier *MemId,
                                    cl_mem Mem, mem_mapping_t *Map) {
   /* assume buffer is allocated */
-  assert(MemId->mem_ptr != NULL);
+  assert(MemId->mem_ptr);
+  assert(Mem->mem_host_ptr);
 
   assert(Mem->mem_host_ptr);
   Map->host_ptr = (char *)Mem->mem_host_ptr + Map->offset;
@@ -1469,12 +1705,12 @@ void *pocl_level0_svm_alloc(cl_device_id Dev, cl_svm_mem_flags Flags,
   if (pocl_get_bool_option("POCL_LEVEL0_COMPRESS", 0)) {
     Compress = (Flags & CL_MEM_READ_ONLY) > 0;
   }
-  return Device->allocSharedMem(Size, Compress);
+  return Device->allocUSMSharedMem(Size, Compress);
 }
 
 void pocl_level0_svm_free(cl_device_id Dev, void *SvmPtr) {
   Level0Device *Device = (Level0Device *)Dev->data;
-  Device->freeMem(SvmPtr);
+  Device->freeUSMMem(SvmPtr);
 }
 
 void *pocl_level0_usm_alloc(cl_device_id Dev, unsigned AllocType,
@@ -1496,17 +1732,17 @@ void *pocl_level0_usm_alloc(cl_device_id Dev, unsigned AllocType,
   case CL_MEM_TYPE_HOST_INTEL:
     POCL_GOTO_ERROR_ON(!Device->supportsHostUSM(), CL_INVALID_OPERATION,
                        "Device does not support Host USM allocations\n");
-    Ptr = Device->allocHostMem(Size, HostZeFlags);
+    Ptr = Device->allocUSMHostMem(Size, HostZeFlags);
     break;
   case CL_MEM_TYPE_DEVICE_INTEL:
     POCL_GOTO_ERROR_ON(!Device->supportsDeviceUSM(), CL_INVALID_OPERATION,
                        "Device does not support Device USM allocations\n");
-    Ptr = Device->allocDeviceMem(Size, DevZeFlags);
+    Ptr = Device->allocUSMDeviceMem(Size, DevZeFlags);
     break;
   case CL_MEM_TYPE_SHARED_INTEL:
     POCL_GOTO_ERROR_ON(!Device->supportsSingleSharedUSM(), CL_INVALID_OPERATION,
                        "Device does not support Shared USM allocations\n");
-    Ptr = Device->allocSharedMem(Size, false, DevZeFlags, HostZeFlags);
+    Ptr = Device->allocUSMSharedMem(Size, false, DevZeFlags, HostZeFlags);
     break;
   default:
     POCL_MSG_ERR("Unknown USM AllocType requested\n");
@@ -1520,12 +1756,12 @@ ERROR:
 
 void pocl_level0_usm_free(cl_device_id Dev, void *SvmPtr) {
   Level0Device *Device = (Level0Device *)Dev->data;
-  Device->freeMem(SvmPtr);
+  Device->freeUSMMem(SvmPtr);
 }
 
 void pocl_level0_usm_free_blocking(cl_device_id Dev, void *SvmPtr) {
   Level0Device *Device = (Level0Device *)Dev->data;
-  Device->freeMemBlocking(SvmPtr);
+  Device->freeUSMMemBlocking(SvmPtr);
 }
 
 cl_int pocl_level0_get_device_info_ext(cl_device_id Dev,
@@ -1761,4 +1997,29 @@ cl_int pocl_level0_set_kernel_exec_info_ext(
   default:
     return CL_INVALID_VALUE;
   }
+}
+
+cl_int
+pocl_level0_create_finalized_command_buffer(cl_device_id Dev,
+                                            cl_command_buffer_khr CmdBuf) {
+  Level0Device *Device = (Level0Device *)Dev->data;
+  CmdBuf->data[Dev->dev_id] = nullptr;
+  void *CmdBufData = Device->createCmdBuf(CmdBuf);
+  POCL_RETURN_ERROR_ON(
+      (CmdBufData == nullptr), CL_OUT_OF_RESOURCES,
+      "Failed to create LevelZero CmdList for command buffer\n");
+  CmdBuf->data[Dev->dev_id] = CmdBufData;
+  return CL_SUCCESS;
+}
+
+cl_int pocl_level0_free_command_buffer(cl_device_id Dev,
+                                       cl_command_buffer_khr CmdBuf) {
+
+  Level0Device *Device = (Level0Device *)Dev->data;
+  void *CmdBufData = CmdBuf->data[Dev->dev_id];
+  if (CmdBufData == nullptr)
+    return CL_SUCCESS;
+  Device->freeCmdBuf(CmdBufData);
+  CmdBuf->data[Dev->dev_id] = nullptr;
+  return CL_SUCCESS;
 }

@@ -29,6 +29,7 @@
 CL_API_ENTRY cl_int CL_API_CALL
 POname (clCommandCopyBufferToImageKHR) (
     cl_command_buffer_khr command_buffer, cl_command_queue command_queue,
+    const cl_command_properties_khr* properties,
     cl_mem src_buffer, cl_mem dst_image, size_t src_offset,
     const size_t *dst_origin, const size_t *region,
     cl_uint num_sync_points_in_wait_list,
@@ -37,21 +38,21 @@ POname (clCommandCopyBufferToImageKHR) (
     cl_mutable_command_khr *mutable_handle) CL_API_SUFFIX__VERSION_1_2
 {
   cl_int errcode;
-  _cl_command_node *cmd = NULL;
-
   CMDBUF_VALIDATE_COMMON_HANDLES;
+  SETUP_MUTABLE_HANDLE;
 
   errcode = pocl_copy_buffer_to_image_common (
-      command_buffer, command_queue, src_buffer, dst_image, src_offset,
-      dst_origin, region, num_sync_points_in_wait_list, NULL, NULL,
-      sync_point_wait_list, sync_point, mutable_handle, &cmd);
+    command_buffer, command_queue, src_buffer, dst_image, src_offset,
+    dst_origin, region, num_sync_points_in_wait_list, NULL, NULL,
+    sync_point_wait_list, sync_point, mutable_handle);
 
   if (errcode != CL_SUCCESS)
     return errcode;
 
-  if (cmd)
+  if (*mutable_handle)
     {
-      errcode = pocl_command_record (command_buffer, cmd, sync_point);
+      errcode
+        = pocl_command_record (command_buffer, *mutable_handle, sync_point);
       if (errcode != CL_SUCCESS)
         goto ERROR;
     }
@@ -59,7 +60,7 @@ POname (clCommandCopyBufferToImageKHR) (
   return CL_SUCCESS;
 
 ERROR:
-  pocl_mem_manager_free_command (cmd);
+  pocl_mem_manager_free_command (*mutable_handle);
   return errcode;
 }
 POsym (clCommandCopyBufferToImageKHR)

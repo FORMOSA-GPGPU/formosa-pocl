@@ -29,7 +29,7 @@
 CL_API_ENTRY cl_int
 POname (clCommandNDRangeKernelKHR) (
     cl_command_buffer_khr command_buffer, cl_command_queue command_queue,
-    const cl_ndrange_kernel_command_properties_khr *properties,
+    const cl_command_properties_khr* properties,
     cl_kernel kernel, cl_uint work_dim, const size_t *global_work_offset,
     const size_t *global_work_size, const size_t *local_work_size,
     cl_uint num_sync_points_in_wait_list,
@@ -38,19 +38,13 @@ POname (clCommandNDRangeKernelKHR) (
     cl_mutable_command_khr *mutable_handle) CL_API_SUFFIX__VERSION_1_2
 {
   cl_int errcode = CL_SUCCESS;
-  _cl_command_node *cmd = NULL;
-
-  if (command_queue != NULL
-      && strstr (command_buffer->queues[0]->device->extensions,
-                 "cl_khr_command_buffer_multi_device")
-           == NULL)
-    return CL_INVALID_COMMAND_QUEUE;
-
   CMDBUF_VALIDATE_COMMON_HANDLES;
+  SETUP_MUTABLE_HANDLE;
 
   return pocl_record_ndrange_kernel (
     command_buffer, command_queue, properties, kernel, kernel->dyn_arguments,
     work_dim, global_work_offset, global_work_size, local_work_size,
-    num_sync_points_in_wait_list, sync_point_wait_list, sync_point);
+    num_sync_points_in_wait_list, sync_point_wait_list, sync_point,
+    mutable_handle);
 }
 POsym (clCommandNDRangeKernelKHR)

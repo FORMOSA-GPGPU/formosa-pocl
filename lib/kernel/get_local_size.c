@@ -25,20 +25,35 @@ extern const size_t _local_size_x;
 extern const size_t _local_size_y;
 extern const size_t _local_size_z;
 
+
+#if _MSC_VER
+size_t _CL_READNONE _CL_OPTNONE
+__identifier ("?get_local_size@@$$J0YAKI@Z") (unsigned int dimindx)
+#else
 size_t _CL_OVERLOADABLE _CL_READNONE _CL_OPTNONE
 get_local_size (unsigned int dimindx)
+#endif
 {
   switch(dimindx)
     {
     case 0: return _local_size_x;
     case 1: return _local_size_y;
     case 2: return _local_size_z;
-    default: return 0;
+    default:
+      return 1;
     }
 }
 
+#if _MSC_VER
+size_t _CL_READNONE _CL_OPTNONE
+__identifier ("?get_enqueued_local_size@@$$J0YAKI@Z") (unsigned int dimindx)
+{
+  return __identifier ("?get_local_size@@$$J0YAKI@Z") (dimindx);
+}
+#else
 size_t _CL_OVERLOADABLE _CL_READNONE _CL_OPTNONE
 get_enqueued_local_size (unsigned int dimindx)
 {
   return get_local_size (dimindx);
 }
+#endif

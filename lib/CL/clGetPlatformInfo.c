@@ -149,7 +149,7 @@ static const cl_name_version pocl_platform_extensions[] = {
   { CL_MAKE_VERSION (1, 0, 0), "cl_khr_throttle_hints" },
   { CL_MAKE_VERSION (1, 0, 0), "cl_khr_create_command_queue" },
   { CL_MAKE_VERSION (1, 0, 0), "cl_pocl_content_size" },
-  { CL_MAKE_VERSION (0, 1, 0), "cl_ext_buffer_device_address" },
+  { CL_MAKE_VERSION (0, 9, 1), "cl_ext_buffer_device_address" },
 };
 static const size_t pocl_platform_extensions_num
     = sizeof (pocl_platform_extensions) / sizeof (cl_name_version);
@@ -222,7 +222,8 @@ POname(clGetPlatformInfo)(cl_platform_id   platform,
       POCL_RETURN_GETINFO (cl_version, pocl_numeric_version);
 
     case CL_PLATFORM_NAME:
-      POCL_RETURN_GETINFO_STR("Portable Computing Language");
+      POCL_RETURN_GETINFO_STR (pocl_get_string_option (
+        "POCL_PLATFORM_NAME_OVERRIDE", "Portable Computing Language"));
 
     case CL_PLATFORM_VENDOR:
       POCL_RETURN_GETINFO_STR("The pocl project");
@@ -247,11 +248,14 @@ POname(clGetPlatformInfo)(cl_platform_id   platform,
 
     /* cl_khr_command_buffer_multi_device */
     case CL_PLATFORM_COMMAND_BUFFER_CAPABILITIES_KHR:
+#ifdef ENABLE_CONFORMANCE
+      POCL_RETURN_GETINFO (cl_platform_command_buffer_capabilities_khr, 0);
+#else
       POCL_RETURN_GETINFO (cl_platform_command_buffer_capabilities_khr,
                            CL_COMMAND_BUFFER_PLATFORM_UNIVERSAL_SYNC_KHR
                              | CL_COMMAND_BUFFER_PLATFORM_REMAP_QUEUES_KHR
                              | CL_COMMAND_BUFFER_PLATFORM_AUTOMATIC_REMAP_KHR);
-
+#endif
     default:
       return CL_INVALID_VALUE;
   }

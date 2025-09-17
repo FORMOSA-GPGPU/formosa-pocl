@@ -1,6 +1,5 @@
 kernel void test_printf()
 {
-
   printf("");
   printf("INTEGERS\n\n");
 
@@ -96,8 +95,13 @@ kernel void test_printf()
 
   printf ("\n%%a conversion\n\n");
 
-  printf("%a\n", 0.0f);
-  printf("%012a\n", 0.0f);
+  /* "... , if the precision is missing, then the precision is sufficient
+   * enough for an exact presentation of the value;".
+   * Avoid %a specifier without the precision modifier due to implementation
+   * differences. gcc/clang prints minimum amount of digits but MSVC prints
+   * more. */
+  printf("%.0a\n", 0.0f);
+  printf("%012.0a\n", 0.0f);
   printf("%0.3a\n", 0.0f);
 
   printf("%16.5A\n", j);
@@ -105,11 +109,11 @@ kernel void test_printf()
 
   printf("%4.0a\n", k);
   printf("%4.1a\n", k);
-  printf("%a\n", k);
-  printf("%a\n", 4.0f);
-  printf("%a\n", 0.0f);
+  printf("%.4a\n", k);
+  printf("%.0a\n", 4.0f);
+  printf("%.0a\n", 0.0f);
   printf("%014.2a\n", k);
-  printf("%10a\n", 10.0f);
+  printf("%10.1a\n", 10.0f);
   printf("%.6a\n",0.1);
 
   printf ("\nMODIFIERS\n\n");
@@ -164,5 +168,7 @@ kernel void test_printf()
 
   printf("|%c|%4c|%-4c|\n", 'a', 'b', 'c');
   printf("|%s|%4s|%-4s|%4s|%.4s|\n", "aa", "bb", "cc", "dddddddddd", "eeeeee");
+  /* Print 32b pointers so they come out the same on 64-bit and 32-bit targets.
+   */
   printf("|%p|%12p|%-12p|\n", (void*)0x2349aacc, (void*)0xdeaddeed, (void*)0x92820384);
 }

@@ -3,6 +3,7 @@
 //
 // Copyright (c) 2011-2012 Carlos Sánchez de La Lama / URJC and
 //               2012-2019 Pekka Jääskeläinen
+//               2023-2024 Pekka Jääskeläinen / Intel Finland Oy
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -103,11 +104,28 @@ void WorkitemHandler::Initialize(Kernel *K_) {
   SizeTWidth = AddressBits;
   ST = pocl::SizeT(M);
 
-  LocalIdZGlobal = M->getOrInsertGlobal(LID_G_NAME(2), ST);
-  LocalIdYGlobal = M->getOrInsertGlobal(LID_G_NAME(1), ST);
-  LocalIdXGlobal = M->getOrInsertGlobal(LID_G_NAME(0), ST);
+  LocalIdGlobals = {M->getOrInsertGlobal(LID_G_NAME(0), ST),
+                    M->getOrInsertGlobal(LID_G_NAME(1), ST),
+                    M->getOrInsertGlobal(LID_G_NAME(2), ST)};
+
+  LocalSizeGlobals = {M->getOrInsertGlobal(LS_G_NAME(0), ST),
+                      M->getOrInsertGlobal(LS_G_NAME(1), ST),
+                      M->getOrInsertGlobal(LS_G_NAME(2), ST)};
+
+  GlobalIdGlobals = {M->getOrInsertGlobal(GID_G_NAME(0), ST),
+                     M->getOrInsertGlobal(GID_G_NAME(1), ST),
+                     M->getOrInsertGlobal(GID_G_NAME(2), ST)};
+
+  GroupIdGlobals = {M->getOrInsertGlobal(GROUP_ID_G_NAME(0), ST),
+                    M->getOrInsertGlobal(GROUP_ID_G_NAME(1), ST),
+                    M->getOrInsertGlobal(GROUP_ID_G_NAME(2), ST)};
+
+  NumGroupsGlobals = {M->getOrInsertGlobal(NGROUPS_G_NAME(0), ST),
+                      M->getOrInsertGlobal(NGROUPS_G_NAME(1), ST),
+                      M->getOrInsertGlobal(NGROUPS_G_NAME(2), ST)};
 
   GlobalIdOrigins = {0, 0, 0};
+  GlobalSizes = {0, 0, 0};
 }
 
 bool WorkitemHandler::dominatesUse(llvm::DominatorTree &DT, Instruction &Inst,
@@ -263,13 +281,36 @@ bool WorkitemHandler::fixUndominatedVariableUses(llvm::DominatorTree &DT,
 void
 WorkitemHandler::movePhiNodes(llvm::BasicBlock* Src, llvm::BasicBlock* Dst) {
   while (PHINode *PN = dyn_cast<PHINode>(Src->begin()))
+#if LLVM_MAJOR < 20
     PN->moveBefore(Dst->getFirstNonPHI());
+#else
+    PN->moveBefore(Dst->getFirstNonPHIIt());
+#endif
 }
 
-/**
- * Returns the instruction in the entry block which computes the "base" for
- * the global id which has all components except the local id offset included.
- */
+/// Returns the instruction in the entry block which computes the global
+/// size for the given \param Dim.
+llvm::Instruction *WorkitemHandler::getGlobalSize(int Dim) {
+  llvm::Instruction *GSize = GlobalSizes[Dim];
+  if (GSize != nullptr)
+    return GSize;
+
+  GlobalVariable *LocalSize = cast<GlobalVariable>(LocalSizeGlobals[Dim]);
+  GlobalVariable *GroupCount = cast<GlobalVariable>(M->getOrInsertGlobal(
+      std::string("_num_groups_") + (char)('x' + Dim), ST));
+
+  CreateBuilder(Builder, K->getEntryBlock());
+
+  GSize = cast<llvm::Instruction>(
+      Builder.CreateBinOp(Instruction::Mul, Builder.CreateLoad(ST, LocalSize),
+                          Builder.CreateLoad(ST, GroupCount),
+                          std::string("_global_size_") + (char)('x' + Dim)));
+  GlobalSizes[Dim] = GSize;
+  return GSize;
+}
+
+/// Returns the instruction in the entry block which computes the "base" for
+/// the global id which has all components except the local id offset included.
 llvm::Instruction *WorkitemHandler::getGlobalIdOrigin(int Dim) {
   llvm::Instruction *Origin = GlobalIdOrigins[Dim];
   if (Origin != nullptr)
@@ -286,7 +327,7 @@ llvm::Instruction *WorkitemHandler::getGlobalIdOrigin(int Dim) {
   assert(GlobalOffset != nullptr);
   assert(GroupId != nullptr);
 
-  IRBuilder<> Builder(K->getEntryBlock().getFirstNonPHI());
+  CreateBuilder(Builder, K->getEntryBlock());
 
   Origin = cast<llvm::Instruction>(
       Builder.CreateBinOp(Instruction::Mul, Builder.CreateLoad(ST, LocalSize),
@@ -483,7 +524,7 @@ llvm::AllocaInst *WorkitemHandler::createAlignedAndPaddedContextAlloca(
     GlobalVariable *LocalSize;
     LoadInst *LocalSizeLoad[3];
     for (int i = 0; i < 3; ++i) {
-      std::string Name = LID_G_NAME(i);
+      std::string Name = LS_G_NAME(i);
       LocalSize = cast<GlobalVariable>(M->getOrInsertGlobal(Name, ST));
       LocalSizeLoad[i] = Builder.CreateLoad(ST, LocalSize);
     }
@@ -540,7 +581,7 @@ llvm::AllocaInst *WorkitemHandler::createAlignedAndPaddedContextAlloca(
 #ifdef DEBUG_WORK_ITEM_LOOPS
     std::cerr << "### VariableDebugMeta :  ";
     VariableDebugMeta->dump();
-    std::cerr << "### sizeBits :  " << sizeBits << "  alignBits: " << alignBits
+    std::cerr << "### sizeBits :  " << SizeBits << "  alignBits: " << AlignBits
               << "\n";
 #endif
 
@@ -619,19 +660,19 @@ WorkitemHandler::createContextArrayGEP(llvm::AllocaInst *CtxArrayAlloca,
 ///
 /// Currently the only known reason to not mark them is to workaround a VPlan
 /// crash that occurs with volatile memory accesses inside the parallel
-/// WI-loops. Thus, we return true only in case of LLVM 19 and if the loop
-/// contains volatile accesses. The PoCL issue:
-/// https://github.com/pocl/pocl/issues/1556
+/// WI-loops. Thus, we return false only in case of using LLVM 17+,
+/// where the issue is producible, and if the loop contains volatile accesses.
+/// The PoCL issue: https://github.com/pocl/pocl/issues/1556
 ///
-/// We could make this Loop-specific, but it seems not worth the effort at
-/// this point as WorkitemLoops doesn't have a loop at hand when it needs it
-/// and luckily volatile usage is not common and ruins the perf anyhow.
+/// We could make this Loop/PRegion-specific, but it seems not worth the effort
+/// at this point as WorkitemLoops doesn't have a ready loop at hand when it
+/// needs to annotate it, and luckily volatile usage is not common and ruins
+/// the perf anyhow.
 ///
-/// \param F the function to check.
 /// \return False in case we should _not_ add the parallel loop metadata,
 /// even though the loop is known to be parallel.
 bool WorkitemHandler::canAnnotateParallelLoops() {
-#if LLVM_MAJOR == 19
+#if LLVM_MAJOR >= 17
   for (auto &BB : *K) {
     for (auto &I : BB) {
       if (I.isVolatile())
@@ -717,12 +758,78 @@ bool WorkitemHandler::handleLocalMemAllocas() {
     }
     AllocaInst *Alloca = new AllocaInst(
         llvm::Type::getInt8Ty(Call->getContext()), 0, Size, Alignment,
-        "__pocl_wg_alloca", K->getEntryBlock().getTerminator());
+        "__pocl_wg_alloca", Inst2InsertPt(K->getEntryBlock().getTerminator()));
     Call->replaceAllUsesWith(Alloca);
     Call->eraseFromParent();
     Changed = true;
   }
   return Changed;
+}
+
+/// Converts some of the work-item function calls to loads from the pseudo
+/// variables or precomputed values from within the kernel function.
+///
+/// Currently handles get_global_size(), get_local_id(), get_global_id() and
+/// get_group_id() calls. Expands the calls next to their users for easier
+/// analysis.
+void WorkitemHandler::handleWorkitemFunctions() {
+  std::set<llvm::Instruction *> InstrsToDelete;
+
+  for (Function::iterator BBI = K->begin(), BBE = K->end(); BBI != BBE; ++BBI) {
+    llvm::BasicBlock &BB = *BBI;
+    for (llvm::BasicBlock::iterator II = BB.begin(); II != BB.end(); ++II) {
+      llvm::Instruction *Instr = &*II;
+      llvm::CallInst *Call = dyn_cast<llvm::CallInst>(Instr);
+      if (Call == nullptr)
+        continue;
+
+      if (isCompilerExpandableWIFunctionCall(*Call)) {
+        auto Callee = Call->getCalledFunction();
+        int Dim =
+            cast<llvm::ConstantInt>(Call->getArgOperand(0))->getZExtValue();
+
+        for (Instruction::use_iterator UI = Call->use_begin(),
+                                       UE = Call->use_end();
+             UI != UE;) {
+          llvm::Instruction *User = cast<Instruction>(UI->getUser());
+          llvm::Instruction *InsertBefore = User;
+          if (isa<PHINode>(InsertBefore))
+            InsertBefore = Call;
+          IRBuilder<> Builder(InsertBefore);
+          llvm::Value *Replacement = nullptr;
+          if (Dim >= 3) {
+            if (Callee->getName() == GID_BUILTIN_NAME ||
+                Callee->getName() == GROUP_ID_BUILTIN_NAME ||
+                Callee->getName() == LID_BUILTIN_NAME ||
+                Callee->getName() == GOFF_BUILTIN_NAME ||
+                Callee->getName() == GLID_BUILTIN_NAME ||
+                Callee->getName() == LLID_BUILTIN_NAME)
+              Replacement = ConstantInt::get(Call->getType(), 0);
+            else
+              Replacement = ConstantInt::get(Call->getType(), 1);
+          } else if (Callee->getName() == GID_BUILTIN_NAME)
+            Replacement = Builder.CreateLoad(ST, GlobalIdGlobals[Dim]);
+          else if (Callee->getName() == GROUP_ID_BUILTIN_NAME)
+            Replacement = Builder.CreateLoad(ST, GroupIdGlobals[Dim]);
+          else if (Callee->getName() == NGROUPS_BUILTIN_NAME)
+            Replacement = Builder.CreateLoad(ST, NumGroupsGlobals[Dim]);
+          else if (Callee->getName() == LS_BUILTIN_NAME)
+            Replacement = Builder.CreateLoad(ST, LocalSizeGlobals[Dim]);
+          else if (Callee->getName() == LID_BUILTIN_NAME)
+            Replacement = getLocalIdInRegion(InsertBefore, Dim);
+          else if (Callee->getName() == GS_BUILTIN_NAME)
+            Replacement = getGlobalSize(Dim);
+          User->replaceUsesOfWith(Call, Replacement);
+          UI = Call->use_begin();
+          UE = Call->use_end();
+        }
+        InstrsToDelete.insert(Call);
+        continue;
+      }
+    }
+  }
+  for (auto I : InstrsToDelete)
+    I->eraseFromParent();
 }
 
 } // namespace pocl
