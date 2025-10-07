@@ -46,6 +46,9 @@ set(KERNEL_CL_FLAGS "-Xclang"
                     "-Xclang"
                     "-cl-ext=-all,+cl_khr_byte_addressable_store,+cl_khr_int64,+cl_khr_fp64"
                     "-D__OPENCL_C_VERSION__=${FORMOSA_DEVICE_CL_VERSION}"
+                    "-Dcl_khr_int64"
+                    "-Dcl_khr_fp64"
+                    "-DPOCL_DEVICE_ADDRESS_BITS=64"
                     ${KERNEL_CL_FLAGS})
 
 set(DEVICE_CL_FLAGS "-D__OPENCL_VERSION__=${FORMOSA_DEVICE_CL_VERSION}")
