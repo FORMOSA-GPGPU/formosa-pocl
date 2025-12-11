@@ -27,11 +27,7 @@
 IGNORE_COMPILER_WARNING("-Wmaybe-uninitialized")
 #include <llvm/ADT/StringRef.h>
 #include <llvm/ADT/StringMap.h>
-#if LLVM_VERSION_MAJOR < 16
-#include <llvm/ADT/Triple.h>
-#else
 #include <llvm/TargetParser/Triple.h>
-#endif
 POP_COMPILER_DIAGS
 IGNORE_COMPILER_WARNING("-Wunused-parameter")
 
@@ -53,17 +49,10 @@ IGNORE_COMPILER_WARNING("-Wunused-parameter")
 #include <llvm/Support/CommandLine.h>
 #include <llvm-c/Core.h>
 
-#if LLVM_VERSION_MAJOR < 16
-#include <llvm/IR/LegacyPassManager.h>
-#include <llvm/PassInfo.h>
-#include <llvm/PassRegistry.h>
-#include <llvm/Support/Host.h>
-#else
 #include <llvm/Analysis/CGSCCPassManager.h>
 #include <llvm/Analysis/LoopAnalysisManager.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/TargetParser/Host.h>
-#endif
 
 #include "config.h"
 #include "pocl_debug.h"
@@ -94,7 +83,8 @@ void parseModuleGVarSize(cl_program program, unsigned device_i,
       assert(program->global_var_total_size[device_i] == TotalGVarBytes);
     else
       program->global_var_total_size[device_i] = TotalGVarBytes;
-    POCL_MSG_PRINT_LLVM("Total Global Variable Bytes: %zu\n", TotalGVarBytes);
+    POCL_MSG_PRINT_LLVM("Total Global Variable Bytes: %zu\n",
+                        (size_t)TotalGVarBytes);
   }
 }
 
@@ -375,6 +365,22 @@ void cpu_setup_vector_widths(cl_device_id dev) {
     if (Features["sve"] || Features["sve2"] || Features["neon"])
       lane_width = 16;
 #endif
+#if defined(__linux__) && defined(__riscv)
+    if (Features["v"]) {
+#ifdef __riscv_zvl128b
+      lane_width = 16;
+#endif
+#ifdef __riscv_zvl256b
+      lane_width = 32;
+#endif
+#ifdef __riscv_zvl512b
+      lane_width = 64;
+#endif
+#ifdef __riscv_zvl1024b
+      lane_width = 128;
+#endif
+    }
+#endif
 #if defined(__i386__) || defined(_M_IX86) || \
     defined(__x86_64__) || defined(_M_X64)
     if (Features["sse"])
@@ -595,13 +601,6 @@ void pocl_llvm_create_context(cl_context ctx) {
 
   data->Context = new llvm::LLVMContext();
   assert(data->Context);
-#if (LLVM_MAJOR == 15) || (LLVM_MAJOR == 16)
-#ifdef LLVM_OPAQUE_POINTERS
-  data->Context->setOpaquePointers(true);
-#else
-  data->Context->setOpaquePointers(false);
-#endif
-#endif
   data->number_of_IRs = 0;
   data->poclDiagString = new std::string;
   data->poclDiagStream = new llvm::raw_string_ostream(*data->poclDiagString);

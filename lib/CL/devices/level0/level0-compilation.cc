@@ -35,7 +35,7 @@
 #include "pocl_util.h"
 
 #ifdef ENABLE_NPU
-#include "npu_dbk.h"
+#include "npu_dbk.hh"
 #endif
 
 #include <algorithm>
@@ -1186,8 +1186,7 @@ static void getArgTypeAndSize(ze_graph_argument_properties_t &graphArgProps,
   assert(TotalSize != 0);
 }
 
-constexpr unsigned NumLevel0GraphModels = 3;
-static const Level0Model Level0GraphModels[NumLevel0GraphModels] = {
+static const Level0Model Level0GraphModels[] = {
     Level0Model{
         /* .Name = */ "pocl.googlenet.v1.fp32",
         /* .DBK_ID = */ 0,
@@ -1196,9 +1195,9 @@ static const Level0Model Level0GraphModels[NumLevel0GraphModels] = {
         /* .NativeShaveBin = */ "",
         /* .NGraphXml = */ "googlenet-v1.xml",
         /* .NGraphBin = */ "googlenet-v1.bin",
-        /* .BuildFlags = */ R"RAW(--inputs_precisions="data:U8" --inputs_layouts="data:NCHW"  --outputs_precisions="dot:FP16" --outputs_layouts="dot:NC" --config NPU_PLATFORM="3720" LOG_LEVEL="LOG_DEBUG")RAW",
-        /* .intantiateModel = */ nullptr
-    },
+        /* .BuildFlags = */
+        R"RAW(--inputs_precisions="data:U8" --inputs_layouts="data:NCHW"  --outputs_precisions="dot:FP16" --outputs_layouts="dot:NC" --config NPU_PLATFORM="3720" LOG_LEVEL="LOG_DEBUG")RAW",
+        /* .intantiateModel = */ nullptr},
     Level0Model{/* .Name = */ "gemm_exp",
                 /* .DBK_ID = */ CL_DBK_GEMM_EXP,
                 /* .Format = */ ZE_GRAPH_FORMAT_NGRAPH_LITE,
@@ -1217,7 +1216,28 @@ static const Level0Model Level0GraphModels[NumLevel0GraphModels] = {
                 /* .NGraphBin = */ "",
                 /* .BuildFlags = */ "",
                 /* .instantiateModel = */ instantiateTemplateMATMUL},
+    Level0Model{/* .Name = */ "convert_exp",
+                /* .DBK_ID = */ CL_DBK_CONVERT_EXP,
+                /* .Format = */ ZE_GRAPH_FORMAT_NGRAPH_LITE,
+                /* .NativeBin = */ "",
+                /* .NativeShaveBin = */ "",
+                /* .NGraphXml = */ "",
+                /* .NGraphBin = */ "",
+                /* .BuildFlags = */ "",
+                /* .instantiateModel = */ instantiateTemplateCONVERT},
+    Level0Model{/* .Name = */ "set_rows_exp",
+                /* .DBK_ID = */ CL_DBK_SET_ROWS_EXP,
+                /* .Format = */ ZE_GRAPH_FORMAT_NGRAPH_LITE,
+                /* .NativeBin = */ "",
+                /* .NativeShaveBin = */ "",
+                /* .NGraphXml = */ "",
+                /* .NGraphBin = */ "",
+                /* .BuildFlags = */ "",
+                /* .instantiateModel = */ instantiateTemplateSET_ROWS},
 };
+
+constexpr unsigned NumLevel0GraphModels =
+    sizeof(Level0GraphModels) / sizeof(Level0GraphModels[0]);
 
 // returns semicolon separated list of recognized models (TODO: excluding DBKs
 // ?)
@@ -1340,29 +1360,60 @@ const char *dtype2elemtype(cl_tensor_datatype_exp dtype) {
   return nullptr;
 }
 
-const char *layout2str(cl_tensor_layout_ml_type_exp l) {
-  switch (l) {
-  case CL_TENSOR_LAYOUT_ML_C_EXP:
-    return "C";
-  case CL_TENSOR_LAYOUT_ML_NC_EXP:
-    return "NC";
-  case CL_TENSOR_LAYOUT_ML_CN_EXP:
-    return "CN";
-  case CL_TENSOR_LAYOUT_ML_HW_EXP:
-    return "HW";
-  case CL_TENSOR_LAYOUT_ML_WH_EXP:
-    return "WH";
-  case CL_TENSOR_LAYOUT_ML_CHW_EXP:
-    return "CHW";
-  case CL_TENSOR_LAYOUT_ML_NCHW_EXP:
-    return "NCHW";
-  case CL_TENSOR_LAYOUT_ML_NHWC_EXP:
-    return "NHWC";
+const char *layout2str(const cl_tensor_desc_exp &Tensor) {
+  switch (Tensor.layout_type) {
   default:
     return "NULL";
+  case CL_TENSOR_LAYOUT_ML_EXP: {
+    const auto *Ptr =
+        static_cast<const cl_tensor_layout_ml_exp *>(Tensor.layout);
+    switch (Ptr->ml_type) {
+    case CL_TENSOR_LAYOUT_ML_C_EXP:
+      return "C";
+    case CL_TENSOR_LAYOUT_ML_NC_EXP:
+      return "NC";
+    case CL_TENSOR_LAYOUT_ML_CN_EXP:
+      return "CN";
+    case CL_TENSOR_LAYOUT_ML_HW_EXP:
+      return "HW";
+    case CL_TENSOR_LAYOUT_ML_WH_EXP:
+      return "WH";
+    case CL_TENSOR_LAYOUT_ML_CHW_EXP:
+      return "CHW";
+    case CL_TENSOR_LAYOUT_ML_NCHW_EXP:
+      return "NCHW";
+    case CL_TENSOR_LAYOUT_ML_NHWC_EXP:
+      return "NHWC";
+    default:
+      return "NULL";
+    }
   }
-}
+  case CL_TENSOR_LAYOUT_BLAS_EXP: {
+    const auto *Ptr =
+        static_cast<const cl_tensor_layout_blas_exp *>(Tensor.layout);
+    for (unsigned I = 0; I < Tensor.rank - 1; I++) {
+      if (Ptr->leading_dims[I] != (Tensor.rank - I - 1)) {
+        return "NULL";
+      }
+    }
+    switch (Tensor.rank) {
+    default:
+      return "NULL";
+    case 1:
+      return "C";
+    case 2:
+      return "NC";
+    case 3:
+      return "CHW";
+    case 4:
+      return "NCHW";
+    }
+  }
+  }
 
+  assert(!"UNREACHABLE");
+  return "NULL";
+}
 
 /// @brief Loads a native model from disk cache, or builds an XML+BIN model,
 /// or builds a DBK template model
@@ -1413,7 +1464,7 @@ bool Level0BuiltinProgramBuild::loadModel(ze_context_handle_t ContextH,
       std::string ModelXMLInstance;
       std::string BuildFlagsInstance;
       assert(M->instantiateModel);
-      if (!M->instantiateModel(KernelAttrs, ModelXMLInstance,
+      if (!M->instantiateModel(KernelAttrs, ModelXMLInstance, ModelBin,
                                BuildFlagsInstance))
         return false;
       BuildLog.append("\n");

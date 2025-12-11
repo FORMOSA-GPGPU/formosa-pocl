@@ -41,6 +41,10 @@ IGNORE_COMPILER_WARNING("-Wstrict-aliasing")
 #include <clang/Frontend/TextDiagnosticBuffer.h>
 #include <clang/Frontend/TextDiagnosticPrinter.h>
 
+#ifdef CPU_USE_LLD_LINK_WIN32
+#include <lld/Common/Driver.h>
+#endif
+
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
@@ -48,13 +52,8 @@ IGNORE_COMPILER_WARNING("-Wstrict-aliasing")
 #include <llvm/Linker/Linker.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/VirtualFileSystem.h>
+#include <llvm/TargetParser/Host.h>
 #include <llvm/Transforms/Utils/Cloning.h>
-
-#if LLVM_VERSION_MAJOR > 15
-#include "llvm/TargetParser/Host.h"
-#elif LLVM_VERSION_MAJOR > 10
-#include "llvm/Support/Host.h"
-#endif
 
 #include <iostream>
 #include <map>
@@ -339,12 +338,17 @@ int pocl_llvm_build_program(cl_program program,
   // command line parsing.
   llvm::IntrusiveRefCntPtr<clang::DiagnosticIDs> diagID =
     new clang::DiagnosticIDs();
-  llvm::IntrusiveRefCntPtr<clang::DiagnosticOptions> diagOpts =
-    new clang::DiagnosticOptions();
   clang::TextDiagnosticBuffer *diagsBuffer =
     new clang::TextDiagnosticBuffer();
 
+#if LLVM_MAJOR < 21
+  llvm::IntrusiveRefCntPtr<clang::DiagnosticOptions> diagOpts =
+      new clang::DiagnosticOptions();
   clang::DiagnosticsEngine diags(diagID, &*diagOpts, diagsBuffer);
+#else
+  clang::DiagnosticOptions diagOpts{};
+  clang::DiagnosticsEngine diags(diagID, diagOpts, diagsBuffer);
+#endif
 
   CompilerInstance CI;
   CompilerInvocation &pocl_build = CI.getInvocation();
@@ -395,14 +399,6 @@ int pocl_llvm_build_program(cl_program program,
   // required for clGetKernelArgInfo()
   ss << "-cl-kernel-arg-info ";
 
-#if (LLVM_MAJOR == 15) || (LLVM_MAJOR == 16)
-#ifdef LLVM_OPAQUE_POINTERS
-  ss << "-opaque-pointers ";
-#else
-  ss << "-no-opaque-pointers ";
-#endif
-#endif
-
   std::string fp_contract;
   if (device->llvm_fp_contract_mode != NULL) {
     fp_contract = std::string(device->llvm_fp_contract_mode);
@@ -413,7 +409,7 @@ int pocl_llvm_build_program(cl_program program,
   size_t fastmath_flag = user_options.find("-cl-fast-relaxed-math");
 
   if (fastmath_flag != std::string::npos) {
-#ifdef ENABLE_CONFORMANCE
+#if defined(ENABLE_CONFORMANCE) && LLVM_MAJOR < 18
     user_options.replace(fastmath_flag, 21,
                          "-cl-finite-math-only -cl-unsafe-math-optimizations");
 #endif
@@ -424,8 +420,9 @@ int pocl_llvm_build_program(cl_program program,
   size_t unsafemath_flag = user_options.find("-cl-unsafe-math-optimizations");
 
   if (unsafemath_flag != std::string::npos) {
-#ifdef ENABLE_CONFORMANCE
-    // this should be almost the same but disables -freciprocal-math.
+#if defined(ENABLE_CONFORMANCE) && LLVM_MAJOR < 18
+    // This should be almost the same but disables -freciprocal-math, that
+    // was not accurate enough in before LLVM v18. Disabling it is
     // required for conformance_math_divide test to pass with OpenCL 3.0
     user_options.replace(unsafemath_flag, 29,
                          "-cl-no-signed-zeros -cl-mad-enable -ffp-contract=fast");
@@ -617,16 +614,8 @@ int pocl_llvm_build_program(cl_program program,
   PreprocessorOptions &po = pocl_build.getPreprocessorOpts();
   llvm::Triple triple (device->llvm_target_triplet);
 
-#if LLVM_MAJOR >= 15
   LangOptions::setLangDefaults(*la, clang::Language::OpenCL, triple,
                                po.Includes, clang::LangStandard::lang_opencl12);
-#else
-  pocl_build.setLangDefaults(*la,
-                             clang::InputKind(clang::Language::OpenCL),
-                             triple,
-                             po.Includes,
-                             clang::LangStandard::lang_opencl12);
-#endif
 
   // LLVM 3.3 and older do not set that char is signed which is
   // defined by the OpenCL C specs (but not by C specs).
@@ -829,6 +818,7 @@ int pocl_llvm_build_program(cl_program program,
   if (mod->getModuleFlag("PIC Level") == nullptr)
     mod->setPICLevel(PICLevel::BigPIC);
 
+  pocl::removeMetadataFromClangStubs(mod);
   // link w kernel lib, but not if we're called from clCompileProgram()
   // Later this should be replaced with indexed linking of source code
   // and/or bitcode for each kernel.
@@ -876,12 +866,22 @@ int pocl_llvm_build_program(cl_program program,
 static int pocl_convert_spir_bitcode_to_target(llvm::Module *p,
                                                llvm::Module *libmodule,
                                                cl_device_id device) {
+
+#if LLVM_MAJOR < 21
   const std::string &ModTriple = p->getTargetTriple();
-  if (ModTriple.find("spir") == 0) {
+  bool isSpir = ModTriple.find("spir") == 0;
+  size_t SpirAddrBits = Triple(ModTriple).isArch64Bit() ? 64 : 32;
+#else
+  llvm::Triple::ArchType AT = p->getTargetTriple().getArch();
+  bool isSpir = (AT == llvm::Triple::ArchType::spir ||
+                 AT == llvm::Triple::ArchType::spir64);
+  size_t SpirAddrBits = p->getTargetTriple().isArch64Bit() ? 64 : 32;
+  const std::string &ModTriple = p->getTargetTriple().str();
+#endif
+  if (isSpir) {
     POCL_RETURN_ERROR_ON((device->endian_little == CL_FALSE),
                          CL_LINK_PROGRAM_FAILURE,
                          "SPIR is only supported on little-endian devices\n");
-    size_t SpirAddrBits = Triple(ModTriple).isArch64Bit() ? 64 : 32;
 
     if (device->address_bits != SpirAddrBits) {
       delete p;
@@ -1113,15 +1113,23 @@ int pocl_invoke_clang(const char* TTriple, const char** Args) {
   // Borrowed from driver.cpp (clang driver). We do not really care about
   // diagnostics, but just want to get the compilation command invoked with
   // the target's toolchain as defined in Clang.
-  IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts = new DiagnosticOptions;
-
+#if LLVM_MAJOR < 21
+  llvm::IntrusiveRefCntPtr<clang::DiagnosticOptions> DiagOpts =
+      new clang::DiagnosticOptions();
   TextDiagnosticPrinter *DiagClient =
     new TextDiagnosticPrinter(llvm::errs(), &*DiagOpts);
-
+#else
+  clang::DiagnosticOptions DiagOpts{};
+  TextDiagnosticPrinter *DiagClient =
+      new TextDiagnosticPrinter(llvm::errs(), DiagOpts);
+#endif
   IntrusiveRefCntPtr<DiagnosticIDs> DiagID(new DiagnosticIDs());
 
+#if LLVM_MAJOR < 21
   DiagnosticsEngine Diags(DiagID, &*DiagOpts, DiagClient);
-
+#else
+  DiagnosticsEngine Diags(DiagID, DiagOpts, DiagClient);
+#endif
   clang::driver::Driver TheDriver(pocl_get_path("CLANG", CLANGCC),
                                   TTriple, Diags);
 
@@ -1150,3 +1158,56 @@ int pocl_invoke_clang(const char* TTriple, const char** Args) {
   }
 
 }
+
+#ifdef CPU_USE_LLD_LINK_WIN32
+
+LLD_HAS_DRIVER(coff)
+
+int pocl_invoke_lld_link_win32(cl_device_id Device, const char *InFile,
+                               const char *OutFile) {
+  std::string OutArg{"/out:"};
+  OutArg.append(OutFile);
+
+  std::string LibraryRootDir;
+#ifdef ENABLE_POCL_BUILDING
+  if (pocl_get_bool_option("POCL_BUILDING", 0)) {
+    LibraryRootDir = BUILDDIR;
+    LibraryRootDir += "/lib/kernel/";
+    LibraryRootDir += Device->kernellib_subdir;
+  } else // POCL_BUILDING == 0, use install dir
+#endif
+  {
+    char Temp[POCL_MAX_PATHNAME_LENGTH];
+    pocl_get_private_datadir(Temp);
+    LibraryRootDir = Temp;
+  }
+
+  std::string ChkstkLibrary = LibraryRootDir + "/libchkstk.obj";
+  std::string StringLibrary = LibraryRootDir + "/libmemory.obj";
+
+  std::vector<const char *> LinkerArgs{
+      "lld-link", "/dll", "/nologo",
+#if HOST_DEVICE_ADDRESS_BITS == 64
+      "/machine:x64",
+#else
+      "/machine:x86",
+#endif
+      // these combinations of /defaultlib:X flags work,
+      // but require the .lib files on the destination machine,
+      // => require VS Build Tools:
+      //
+      // libcmt + ucrt + vcruntime
+      // msvcrt + ucrt + vcruntime
+      //
+      // instead, we avoid linking against C runtime lib completely.
+      // this way we get standalone libpocl
+      "/nodefaultlib", "/noentry", "/noimplib", OutArg.c_str(), InFile,
+      ChkstkLibrary.c_str(), StringLibrary.c_str() };
+
+  std::vector<lld::DriverDef> Drivers = {{lld::WinLink, &lld::coff::link}};
+  lld::Result Res =
+      lld::lldMain(LinkerArgs, llvm::outs(), llvm::errs(), Drivers);
+  return (!Res.retCode && Res.canRunAgain) ? 0 : 1;
+}
+
+#endif

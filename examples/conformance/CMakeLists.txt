@@ -29,6 +29,8 @@ set(TS_BASEDIR "${TESTSUITE_BASEDIR}/${TS_NAME}")
 set(TS_BUILDDIR "${TS_BASEDIR}/src/${TS_NAME}-build")
 set(TS_SRCDIR "${TS_BASEDIR}/src/${TS_NAME}")
 
+get_property(is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+
 if(NOT HAVE_GIT)
   message(STATUS "Disabling testsuite ${TS_NAME}, requires git to checkout sources")
   return()
@@ -40,8 +42,8 @@ if(ENABLE_ICD AND (NOT OPENCL_LIBRARIES))
 endif()
 
 # for SPIR-V tests
-find_program(SPIRV_AS "spirv-as")
-find_program(SPIRV_VAL "spirv-val")
+find_program(SPIRV_AS "spirv-as" HINTS "${LLVM_BINDIR}" "${LLVM_CONFIG_LOCATION}")
+find_program(SPIRV_VAL "spirv-val" HINTS "${LLVM_BINDIR}" "${LLVM_CONFIG_LOCATION}")
 if(SPIRV_AS AND SPIRV_VAL)
   set(HAVE_SPIRV_TOOLS 1)
 endif()
@@ -85,7 +87,7 @@ if(CUSTOM_CTS_GIT_TAG)
   set(CTS_GIT_TAG "${CUSTOM_CTS_GIT_TAG}")
 else()
   # Use PoCL's fork which has pending fixes.
-  set(CTS_GIT_TAG "v2025.03.21.1")
+  set(CTS_GIT_TAG "v2025.07.11")
 endif()
 
 set(TS_BUILDDIR "${TS_BUILDDIR}/test_conformance")
@@ -97,7 +99,10 @@ else()
   message(WARNING "llvm-spirv or spirv-tools not found - disabling SPIRV tests in CTS")
 endif()
 
-set(UPSTREAM_CMAKE_ARGS "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}")
+unset(UPSTREAM_CMAKE_ARGS)
+if(NOT is_multi_config AND CMAKE_BUILD_TYPE)
+  set(UPSTREAM_CMAKE_ARGS "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}")
+endif()
 if(CMAKE_C_COMPILER_LAUNCHER)
   list(APPEND UPSTREAM_CMAKE_ARGS "-DCMAKE_C_COMPILER_LAUNCHER=${CMAKE_C_COMPILER_LAUNCHER}")
 endif()
@@ -200,6 +205,7 @@ set(CTS_CPU_TSAN_BLACKLIST
 
 function(add_cts_full_tests CTS_LABEL TS_SUFFIX)
 set(EXTRA_ARGS ${ARGN})
+
 add_test(NAME "${TS_NAME}${TS_SUFFIX}_allocations"
          COMMAND "${TS_BUILDDIR}/allocations/test_allocations" ${EXTRA_ARGS})
 
@@ -454,6 +460,7 @@ set(CTS_FULL_LIST
     "${TS_NAME}${TS_SUFFIX}_device_partition"
     "${TS_NAME}${TS_SUFFIX}_events"
     "${TS_NAME}${TS_SUFFIX}_geometrics"
+    "${TS_NAME}${TS_SUFFIX}_half"
     "${TS_NAME}${TS_SUFFIX}_images_cl_copy_images"
     "${TS_NAME}${TS_SUFFIX}_images_cl_copy_images_max"
     "${TS_NAME}${TS_SUFFIX}_images_cl_copy_images_min"
@@ -490,10 +497,10 @@ set(CTS_FULL_LIST
 foreach(CTSTEST IN LISTS CTS_FULL_LIST)
   set_property(TEST ${CTSTEST}
     APPEND PROPERTY
-    LABELS "${CTS_LABEL};cpu")
+    LABELS "${CTS_LABEL}")
   set_property(TEST ${CTSTEST}
     PROPERTY
-    ENVIRONMENT "POCL_MEMORY_LIMIT=1")
+    ENVIRONMENT "POCL_MEMORY_LIMIT=1;CL_PLATFORM_NAME=Portable")
   if(ENABLE_LEVEL0)
     if(CTSTEST IN_LIST CTS_LEVEL0_BLACKLIST)
       message(STATUS "disabling test ${CTSTEST} for Level0")
@@ -681,14 +688,21 @@ if(ENABLE_SPIRV AND HAVE_SPIRV_TOOLS)
 endif()
 
 if(HAVE_SPIRV_TOOLS)
+  # add the full testsuite with offline compilation from SPIR-V
   set(CACHE_DIR "${CMAKE_BINARY_DIR}/CTS_FULL_CACHE")
   file(MAKE_DIRECTORY "${CACHE_DIR}")
 
-  # add the full testsuite with offline compilation from SPIR-V
+  if(is_multi_config)
+  add_cts_full_tests("conformance_suite_full_spirv" "_spirv"
+                     "--compilation-mode" "spir-v"
+                     "--compilation-program" "${CMAKE_BINARY_DIR}/cl_offline_compiler.sh.$<CONFIG>"
+                     "--compilation-cache-path" "${CACHE_DIR}")
+  else()
   add_cts_full_tests("conformance_suite_full_spirv" "_spirv"
                      "--compilation-mode" "spir-v"
                      "--compilation-program" "${CMAKE_BINARY_DIR}/cl_offline_compiler.sh"
                      "--compilation-cache-path" "${CACHE_DIR}")
+  endif()
 endif()
 
 #################################################################################
@@ -950,6 +964,7 @@ set(OCL_30_TESTS_MICRO
     "${TS_NAME}${TS_SUFFIX}_c11_atomics_micro_2"
     "${TS_NAME}${TS_SUFFIX}_c11_atomics_micro_3"
     "${TS_NAME}${TS_SUFFIX}_c11_atomics_micro_4"
+    "${TS_NAME}${TS_SUFFIX}_c11_atomics_micro_5"
     "${TS_NAME}${TS_SUFFIX}_device_execution"
     "${TS_NAME}${TS_SUFFIX}_device_timer"
     "${TS_NAME}${TS_SUFFIX}_integer_ops_micro_ocl_30"
@@ -978,6 +993,9 @@ set(CTS_MICRO_LIST
     "${TS_NAME}${TS_SUFFIX}_basic_micro_image"
     "${TS_NAME}${TS_SUFFIX}_buffers_micro_read"
     "${TS_NAME}${TS_SUFFIX}_buffers_micro_write"
+    "${TS_NAME}${TS_SUFFIX}_buffers_micro_read_async"
+    "${TS_NAME}${TS_SUFFIX}_buffers_micro_write_async"
+    "${TS_NAME}${TS_SUFFIX}_buffers_micro_read_array_barrier"
     "${TS_NAME}${TS_SUFFIX}_buffers_micro_fill"
     "${TS_NAME}${TS_SUFFIX}_buffers_micro_var1"
     "${TS_NAME}${TS_SUFFIX}_buffers_micro_var2"
@@ -1054,10 +1072,10 @@ set(CTS_MICRO_LIST
 foreach(CTSTEST IN LISTS CTS_MICRO_LIST)
   set_property(TEST ${CTSTEST}
     APPEND PROPERTY
-    LABELS "${CTS_LABEL};cpu")
+    LABELS "${CTS_LABEL}")
   set_property(TEST ${CTSTEST}
     PROPERTY
-    ENVIRONMENT "POCL_MEMORY_LIMIT=1")
+    ENVIRONMENT "POCL_MEMORY_LIMIT=1;CL_PLATFORM_NAME=Portable")
   if(ENABLE_LEVEL0)
     if(CTSTEST IN_LIST CTS_LEVEL0_BLACKLIST)
       message(STATUS "disabling test ${CTSTEST} for Level0")
@@ -1088,13 +1106,13 @@ endforeach()
 # note that the environment variables must be set for this test
 # this is to workaround a bug: https://github.com/KhronosGroup/OpenCL-CTS/issues/1142
 set_property(TEST "${TS_NAME}${TS_SUFFIX}_non_uniform_work_group"
-             PROPERTY ENVIRONMENT "POCL_MEMORY_LIMIT=4;POCL_MAX_WORK_GROUP_SIZE=1024")
+             PROPERTY ENVIRONMENT "POCL_MEMORY_LIMIT=4;POCL_MAX_WORK_GROUP_SIZE=1024;CL_PLATFORM_NAME=Portable")
 
 # this is required b/c there is a problem with one test in mutable extension:
 # it does not take into account that changing global size (without local size)
 # can result in change of local size (because the runtime calculates optimal size)
 set_property(TEST "${TS_NAME}${TS_SUFFIX}_cl_khr_command_buffer_mutable"
-             PROPERTY ENVIRONMENT "POCL_MEMORY_LIMIT=4;POCL_MAX_WORK_GROUP_SIZE=1024")
+             PROPERTY ENVIRONMENT "POCL_MEMORY_LIMIT=4;POCL_MAX_WORK_GROUP_SIZE=1024;CL_PLATFORM_NAME=Portable")
 
 endfunction()
 
@@ -1126,7 +1144,76 @@ endforeach()
 # version of the test works as expected.
 # See https://github.com/pocl/pocl/issues/1582
 # and https://github.com/KhronosGroup/SPIRV-LLVM-Translator/issues/2468
-if(LLVM_VERSION VERSION_GREATER_EQUAL 19.0)
+if((LLVM_VERSION VERSION_GREATER_EQUAL 19.0) AND (ENABLE_SPIRV AND HAVE_SPIRV_TOOLS))
   set_property(TEST conformance_spirv_basic_micro_progvar
     PROPERTY DISABLED 1)
 endif()
+
+set(OPENCL_CTS_DIR_LIST
+${TS_BUILDDIR}/allocations
+${TS_BUILDDIR}/api
+${TS_BUILDDIR}/atomics
+${TS_BUILDDIR}/basic
+${TS_BUILDDIR}/buffers
+${TS_BUILDDIR}/c11_atomics
+${TS_BUILDDIR}/common
+${TS_BUILDDIR}/commonfns
+${TS_BUILDDIR}/compiler
+${TS_BUILDDIR}/computeinfo
+${TS_BUILDDIR}/contractions
+${TS_BUILDDIR}/conversions
+${TS_BUILDDIR}/d3d10
+${TS_BUILDDIR}/d3d11
+${TS_BUILDDIR}/device_execution
+${TS_BUILDDIR}/device_partition
+${TS_BUILDDIR}/device_timer
+${TS_BUILDDIR}/events
+${TS_BUILDDIR}/extensions
+${TS_BUILDDIR}/generic_address_space
+${TS_BUILDDIR}/geometrics
+${TS_BUILDDIR}/gl
+${TS_BUILDDIR}/gles
+${TS_BUILDDIR}/half
+${TS_BUILDDIR}/images
+${TS_BUILDDIR}/integer_ops
+${TS_BUILDDIR}/math_brute_force
+${TS_BUILDDIR}/mem_host_flags
+${TS_BUILDDIR}/multiple_device_context
+${TS_BUILDDIR}/non_uniform_work_group
+${TS_BUILDDIR}/pipes
+${TS_BUILDDIR}/printf
+${TS_BUILDDIR}/profiling
+${TS_BUILDDIR}/relationals
+${TS_BUILDDIR}/select
+${TS_BUILDDIR}/spir
+${TS_BUILDDIR}/spirv_new
+${TS_BUILDDIR}/subgroups
+${TS_BUILDDIR}/SVM
+${TS_BUILDDIR}/thread_dimensions
+${TS_BUILDDIR}/vectors
+${TS_BUILDDIR}/vulkan
+${TS_BUILDDIR}/workgroups
+${TS_BUILDDIR}/extensions/cl_ext_cxx_for_opencl
+${TS_BUILDDIR}/extensions/cl_khr_command_buffer
+${TS_BUILDDIR}/extensions/cl_khr_command_buffer/cl_khr_command_buffer_mutable_dispatch
+${TS_BUILDDIR}/extensions/cl_khr_dx9_media_sharing
+${TS_BUILDDIR}/extensions/cl_khr_external_memory_dma_buf
+${TS_BUILDDIR}/extensions/cl_khr_external_semaphore
+${TS_BUILDDIR}/extensions/cl_khr_kernel_clock
+${TS_BUILDDIR}/extensions/cl_khr_semaphore
+${TS_BUILDDIR}/gl/GLEW
+${TS_BUILDDIR}/gl/GLEW/GL
+${TS_BUILDDIR}/images/clCopyImage
+${TS_BUILDDIR}/images/clFillImage
+${TS_BUILDDIR}/images/clGetInfo
+${TS_BUILDDIR}/images/clReadWriteImage
+${TS_BUILDDIR}/images/kernel_image_methods
+${TS_BUILDDIR}/images/kernel_read_write
+${TS_BUILDDIR}/images/samplerlessReads)
+
+add_custom_target(create_cts_links ALL DEPENDS ${TS_NAME})
+
+foreach(CTS_DIR IN LISTS OPENCL_CTS_DIR_LIST)
+  #message(STATUS "Adding symlink in DIR: ${CTS_DIR}")
+  add_symlink_to_built_opencl_dynlib_in_dir(${CTS_DIR} create_cts_links)
+endforeach()

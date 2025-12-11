@@ -193,19 +193,11 @@ POname(clReleaseMemObject)(cl_mem memobj) CL_API_SUFFIX__VERSION_1_0
       if (memobj->has_device_address)
         {
           POCL_LOCK_OBJ (context);
-          pocl_raw_ptr *tmp = NULL, *item = NULL;
-          DL_FOREACH_SAFE (context->raw_ptrs, item, tmp)
-          {
-            if (item->shadow_cl_mem == memobj)
-              {
-                DL_DELETE (context->raw_ptrs, item);
-                free (item);
-                break;
-              }
-          }
+          pocl_raw_ptr_set_erase_all_by_shadow_mem (context->raw_ptrs, memobj);
           POCL_UNLOCK_OBJ (context);
         }
 
+      POCL_MEM_FREE (memobj->tensor_layout);
       POCL_DESTROY_OBJECT (memobj);
       POCL_MEM_FREE(memobj);
 
@@ -227,7 +219,7 @@ POname(clReleaseMemObject)(cl_mem memobj) CL_API_SUFFIX__VERSION_1_0
 }
 POsym (clReleaseMemObject)
 
-  static void free_sub_buffer_data (cl_mem memobj)
+static void free_sub_buffer_data (cl_mem memobj)
 {
   /* It's a sub-buffer. Some devices might have resources associated to
    * them. */
@@ -240,9 +232,9 @@ POsym (clReleaseMemObject)
   /* Remove the sub-buffer record from the parent buffer. */
   cl_mem_list_item_t *sub_buf;
 
-  assert (memobj->parent->sub_buffers != NULL);
-
   POCL_LOCK_OBJ_NO_CHECK (memobj->parent);
+
+  assert (memobj->parent->sub_buffers != NULL);
 
   LL_SEARCH_SCALAR (memobj->parent->sub_buffers, sub_buf, mem, memobj)
     ;

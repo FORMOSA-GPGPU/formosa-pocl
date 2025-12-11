@@ -31,7 +31,7 @@ if(ENABLE_LOADABLE_DRIVERS)
     if(OCL_ICD_INCLUDE_DIRS)
       target_include_directories(${name} SYSTEM PUBLIC ${OCL_ICD_INCLUDE_DIRS})
     endif()
-    target_link_libraries(${name} PUBLIC ${POCL_PUBLIC_LINK_LIST} PRIVATE ${POCL_LIBRARY_NAME} ${POCL_PRIVATE_LINK_LIST})
+    target_link_libraries(${name} PUBLIC ${POCL_PUBLIC_LINK_LIBRARIES} PRIVATE ${POCL_LIBRARY_NAME} ${POCL_PRIVATE_LINK_LIBRARIES})
     if(WIN32)
       set_target_properties(${name} PROPERTIES PREFIX "")
     endif()
@@ -203,6 +203,7 @@ set(POCL_DEVICES_SOURCES
   pocl_local_size.h  pocl_local_size.c
   common_driver.h  common_driver.c
   spirv.hh  spirv_parser.hh  spirv_parser.cc
+  spirv_queries.h  spirv_queries.cc
   pocl_spirv_utils.cc pocl_spirv_utils.hh
   printf_base.c printf_base.h printf_buffer.c
   cpuinfo.c  cpuinfo.h)

@@ -74,56 +74,9 @@ using namespace llvm;
 
 namespace pocl {
 
-// this whole class is only necessary for LLVM 14 and LLVM 15 with
-// non-opaque-pointers; with opaque pointers it simply returns the same type
-//
-// The purpose is to remap "opencl.XYZ" opaque types when they're linked in from
-// the builtin library. Without the remapping, the CloneFunctionInto will create
-// a duplicate of the opaque type with the name "opencl.XYZ.number" but will not
-// correct all of the instructions, resulting in broken bitcode.
-// Note that this is mainly a problem with LLVM 14 and disabled optimization of
-// the bitcode library; optimization at build time can almost completely remove
-// the use of offending types, therefore the problem won't manifest.
-// Newer LLVM versions don't use opaque types for OpenCL images/events etc.
-class PoclTypeRemapper : public ValueMapTypeRemapper {
-public:
-  PoclTypeRemapper() {}
-  virtual ~PoclTypeRemapper() {}
-
-  virtual Type *remapType(Type *SrcTy) {
-#ifndef LLVM_OPAQUE_POINTERS
-    PointerType *PT = dyn_cast<PointerType>(SrcTy);
-    if (PT) {
-      auto PointedType = PT->getNonOpaquePointerElementType();
-      Type *RemappedPT = remapType(PointedType);
-      return PointerType::get(RemappedPT, PT->getAddressSpace());
-    }
-    if (!SrcTy->isStructTy())
-      return SrcTy;
-    StructType *ST = dyn_cast<StructType>(SrcTy);
-    if (!ST->isOpaque())
-      return SrcTy;
-    if (!ST->hasName())
-      return SrcTy;
-    StringRef Name = ST->getName();
-    // In theory, there could be >10 aliased names, but meh
-    bool EndsWithDotNum = Name.size() > 2 && Name[Name.size() - 2] == '.' &&
-                          isdigit(Name[Name.size() - 1]);
-    if (Name.starts_with("opencl.") && EndsWithDotNum) {
-      auto NameWithoutSuffix = Name.substr(0, Name.size() - 2);
-      StructType *RetVal =
-          StructType::getTypeByName(SrcTy->getContext(), NameWithoutSuffix);
-      assert(RetVal);
-      StringRef NewName = RetVal->getName();
-      DB_PRINT("REMAPPING TYPE:   %s  TO:   %s\n", Name.data(), NewName.data());
-      return RetVal;
-    }
-#endif
-    return SrcTy;
-  }
-};
-
 using ValueToSizeTMapTy = ValueMap<const Value *, size_t>;
+
+
 
 // A workaround for issue #889. In some cases, functions seem
 // to get multiple DISubprogram nodes attached. This causes
@@ -162,11 +115,20 @@ static bool removeDuplicateDbgInfo(Module *Mod) {
   return Erased;
 }
 
+static bool modIsNvptx(llvm::Module *Mod) {
+#if LLVM_MAJOR > 20
+  return (Mod->getTargetTriple().getArch() == llvm::Triple::ArchType::nvptx ||
+          Mod->getTargetTriple().getArch() == llvm::Triple::ArchType::nvptx64);
+#else
+  return Mod->getTargetTriple().compare(0, 5, "nvptx") == 0;
+#endif
+}
+
 // fix mismatches between calling conv. This should not happen,
 // but sometimes can, esp with SPIR(-V) input
 static void fixCallingConv(llvm::Module *Mod, std::string &Log) {
 #if LLVM_MAJOR > 18
-  if (Mod->getTargetTriple().find("nvptx") != std::string::npos) {
+  if (modIsNvptx(Mod)) {
     for (llvm::Module::iterator MI = Mod->begin(); MI != Mod->end(); ++MI) {
       llvm::Function *F = &*MI;
       if (F->isDeclaration())
@@ -269,14 +231,14 @@ using SmallFunctionSet = llvm::SmallSet<llvm::Function *, 8>;
 // Find all functions in the calltree of F, including declarations.
 // Returns the list of Functions called in CalledFuncList,
 // in depth-first order (to make cloning simpler);
-// returns -1 on error (recursion), 0 on success
-static int
+// returns pointer to recursive function on error, nullptr on success
+static llvm::Function *
 find_called_functions(llvm::Function *F,
                       llvm::SmallVector<llvm::Function *> &CalledFuncList,
                       SmallFunctionSet &CallStack) {
   if (F->isDeclaration()) {
     DB_PRINT("it's a declaration, return\n");
-    return 0;
+    return nullptr;
   }
 
   CallStack.insert(F);
@@ -302,7 +264,7 @@ find_called_functions(llvm::Function *F,
 
     if (CallStack.contains(Callee)) {
       DB_PRINT("Recursion detected: %s\n", CName.c_str());
-      return -1;
+      return Callee;
     }
     DB_PRINT("Function %s calls %s\n", FName.c_str(), CName.c_str());
 
@@ -313,8 +275,8 @@ find_called_functions(llvm::Function *F,
     } else {
       DB_PRINT("function %s not seen before, recursing into it\n",
                CName.c_str());
-      if (find_called_functions(Callee, CalledFuncList, CallStack))
-        return -1;
+      if (auto *R = find_called_functions(Callee, CalledFuncList, CallStack))
+        return R;
       DB_PRINT("inserting %s into CalledList\n", CName.c_str());
       CalledFuncList.push_back(Callee);
     }
@@ -322,14 +284,13 @@ find_called_functions(llvm::Function *F,
 
   CallStack.erase(F);
 
-  return 0;
+  return nullptr;
 }
 
 // Copies one function from one module to another
 // does not inspect it for callgraphs
 static void CopyFunc(const llvm::StringRef Name, const llvm::Module *From,
-                     llvm::Module *To, ValueToValueMapTy &VVMap,
-                     PoclTypeRemapper *TypeMap) {
+                     llvm::Module *To, ValueToValueMapTy &VVMap) {
 
   llvm::Function *SrcFunc = From->getFunction(Name);
   // TODO: is this the linker error "not found", and not an assert?
@@ -364,7 +325,7 @@ static void CopyFunc(const llvm::StringRef Name, const llvm::Module *From,
                          false,     // same module
                          "",        // suffix
                          &CodeInfo, // codeInfo
-                         TypeMap,   // type remapper
+                         nullptr,   // type remapper
                          nullptr);  // materializer
   } else {
     DB_PRINT("  found %s, but its a declaration, do nothing\n", Name.data());
@@ -377,8 +338,7 @@ static void CopyFunc(const llvm::StringRef Name, const llvm::Module *From,
  */
 static int CopyFuncCallgraph(const llvm::StringRef FuncName,
                              const llvm::Module *From, llvm::Module *To,
-                             ValueToValueMapTy &VVMap,
-                             PoclTypeRemapper *TypeMapper) {
+                             ValueToValueMapTy &VVMap) {
   llvm::Function *RootFunc = From->getFunction(FuncName);
   if (RootFunc == NULL) {
     return -1;
@@ -394,23 +354,12 @@ static int CopyFuncCallgraph(const llvm::StringRef FuncName,
 
   // First copy the callees of func, then the function itself.
   for (auto F : Callees) {
-    CopyFunc(F->getName(), From, To, VVMap, TypeMapper);
+    CopyFunc(F->getName(), From, To, VVMap);
   }
-  CopyFunc(FuncName, From, To, VVMap, TypeMapper);
+  CopyFunc(FuncName, From, To, VVMap);
   assert(To->getFunction(FuncName) != nullptr);
 
   return 0;
-}
-
-static int CopyFuncCallgraph(const llvm::StringRef FuncName,
-                             const llvm::Module *From, llvm::Module *To,
-                             ValueToValueMapTy &VVMap) {
-#ifndef LLVM_OPAQUE_POINTERS
-  PoclTypeRemapper TypeMapper;
-  return CopyFuncCallgraph(FuncName, From, To, VVMap, &TypeMapper);
-#else
-  return CopyFuncCallgraph(FuncName, From, To, VVMap, nullptr);
-#endif
 }
 
 /* Estimates the size of stack frame used by a function and all functions
@@ -437,13 +386,8 @@ static size_t estimateFunctionStackSize(llvm::Function *Func,
       if (AI) {
         auto AllocatedType = AI->getAllocatedType();
         const llvm::DataLayout &DL = Mod->getDataLayout();
-#if LLVM_MAJOR > 15
         if (auto AllocaSize = AI->getAllocationSize(DL))
           TotalSelfSize += AllocaSize->getKnownMinValue();
-#else
-        if (auto AllocaSize = AI->getAllocationSizeInBits(DL))
-          TotalSelfSize += AllocaSize->getKnownMinSize();
-#endif
         continue;
       }
 
@@ -725,6 +669,8 @@ int link(llvm::Module *Program, const llvm::Module *Lib, std::string &Log,
   ValueToValueMapTy vvm;
   llvm::StringSet<> DeclaredFunctions;
 
+  pocl::removeClangGeneratedKernelStubs(Program);
+
   // Include auxiliary functions required by the device at hand.
   if (ClDev->device_aux_functions) {
     const char **Func = ClDev->device_aux_functions;
@@ -734,7 +680,6 @@ int link(llvm::Module *Program, const llvm::Module *Lib, std::string &Log,
   }
 
   llvm::Module::iterator FI, FE;
-
   // assign names to all functions
   for (FI = Program->begin(), FE = Program->end(); FI != FE; FI++) {
     // anonymous functions have no name, which breaks the algorithm later
@@ -758,9 +703,14 @@ int link(llvm::Module *Program, const llvm::Module *Lib, std::string &Log,
 
     SmallFunctionSet CallStack;
     llvm::SmallVector<llvm::Function *> Callees;
-    if (find_called_functions(&*FI, Callees, CallStack)) {
+    if (auto *R = find_called_functions(&*FI, Callees, CallStack)) {
       Log.append("Recursion detected in function: '");
-      Log.append(FName.c_str());
+      std::string PrettyName = tryDemangleWithoutAddressSpaces(FName);
+      Log.append(PrettyName.c_str());
+      Log.append("'\n");
+      Log.append("-> Infringing function: '");
+      PrettyName = tryDemangleWithoutAddressSpaces(R->getName().str());
+      Log.append(PrettyName.c_str());
       Log.append("'\n");
       return -1;
     }
@@ -818,7 +768,7 @@ int link(llvm::Module *Program, const llvm::Module *Lib, std::string &Log,
   // this one is a handled with a special pocl LLVM pass
   StringRef pocl_sampler_handler("__translate_sampler_initializer");
 
-  if (Program->getTargetTriple().compare(0, 5, "nvptx") != 0) {
+  if (!modIsNvptx(Program)) {
     for (auto &DeclIter : DeclaredFunctions) {
       llvm::StringRef FName = DeclIter.getKey();
       Function *F = Program->getFunction(FName);
@@ -926,6 +876,23 @@ int copyKernelFromBitcode(const char* Name, llvm::Module *ParallelBC,
     return -1;
   }
 
+#ifdef CPU_USE_LLD_LINK_WIN32
+  // create a global constant "int32 _fltused"
+  // this is necessary if we're not linking against C runtime on Windows
+  auto TT = ParallelBC->getTargetTriple();
+  if ((TT.rfind("x86", 0) == 0) && (TT.find("windows") != std::string::npos)) {
+    IntegerType *Int32Ty = IntegerType::getInt32Ty(ParallelBC->getContext());
+    ConstantInt *Initializer = ConstantInt::get(Int32Ty, 0);
+    GlobalVariable *FltUsed = new GlobalVariable(
+        /*Module=*/*ParallelBC,
+        /*Type=*/Int32Ty,
+        /*isConstant=*/true,
+        /*Linkage=*/GlobalValue::CommonLinkage, // GlobalValue::ExternalLinkage
+        /*Initializer=*/Initializer,
+        /*Name=*/"_fltused");
+  }
+#endif
+
   std::string Log;
   shared_copy(ParallelBC, Program, Log, vvm);
 
@@ -945,6 +912,7 @@ int copyKernelFromBitcode(const char* Name, llvm::Module *ParallelBC,
     Passes.add(createAlwaysInlinerLegacyPass());
     Passes.run(*ParallelBC);
   }
+
   return 0;
 }
 
@@ -1065,5 +1033,5 @@ bool moveProgramScopeVarsOutOfProgramBc(llvm::LLVMContext *Context,
   return true;
 }
 
-/* vim: set expandtab ts=4 : */
+/* vim: set expandtab ts=2 : */
 

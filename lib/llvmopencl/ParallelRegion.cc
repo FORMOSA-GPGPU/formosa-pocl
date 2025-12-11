@@ -207,15 +207,8 @@ ParallelRegion::chainAfter(ParallelRegion *region)
   BasicBlock *successor = t->getSuccessor(0);
   Function *F = successor->getParent();
 
-#if LLVM_MAJOR < 16
-  Function::BasicBlockListType &bb_list =
-    F->getBasicBlockList();
-  for (iterator i = begin(), e = end(); i != e; ++i)
-    bb_list.insertAfter(tail->getIterator(), *i);
-#else
   for (iterator i = begin(), e = end(); i != e; ++i)
     F->insert(tail->getIterator(), *i);
-#endif
 
   t->setSuccessor(0, entryBB());
 
@@ -647,7 +640,9 @@ ParallelRegion::InjectPrintF
 
     AttributeList func_printf_PAL =
         AttributeList()
+#if LLVM_MAJOR < 21
             .addAttributeAtIndex(M->getContext(), 1U, Attribute::NoCapture)
+#endif
             .addAttributeAtIndex(M->getContext(), 4294967295U,
                                  Attribute::NoUnwind);
 
@@ -707,7 +702,8 @@ ParallelRegion::InjectRegionPrintF()
     }
 #endif
 
-  ConstantInt* pRID = ConstantInt::get(M->getContext(), APInt(32, pRegionId, 10));
+  ConstantInt *pRID =
+      ConstantInt::get(M->getContext(), APInt(32, (uint64_t)pRegionId));
   std::vector<Value*> params;
   params.push_back(pRID);
   params.push_back(getOrCreateIDLoad(LID_G_NAME(0)));

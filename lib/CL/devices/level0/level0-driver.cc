@@ -32,6 +32,7 @@
 #include "pocl_spir.h"
 #include "pocl_timing.h"
 #include "pocl_util.h"
+#include "spirv_queries.h"
 
 #include "imagefill.h"
 #include "memfill.h"
@@ -411,23 +412,12 @@ void Level0Queue::appendEventToList(_cl_command_node *Cmd, const char **Msg,
           cmd->svm_free.queue, cmd->svm_free.num_svm_pointers,
           cmd->svm_free.svm_pointers, cmd->svm_free.data);
     } else {
-      for (unsigned i = 0; i < cmd->svm_free.num_svm_pointers; i++) {
-        void *ptr = cmd->svm_free.svm_pointers[i];
-        POCL_LOCK_OBJ(Context);
-        pocl_raw_ptr *tmp = nullptr;
-        pocl_raw_ptr *item = nullptr;
-        DL_FOREACH_SAFE (Context->raw_ptrs, item, tmp) {
-          if (item->vm_ptr == ptr) {
-            DL_DELETE(Context->raw_ptrs, item);
-            break;
-          }
-        }
-        POCL_UNLOCK_OBJ(Context);
-        assert(item);
-        POCL_MEM_FREE(item);
-        POname(clReleaseContext)(Context);
-        dev->ops->svm_free(dev, ptr);
-      }
+       for (unsigned i = 0; i < cmd->svm_free.num_svm_pointers; i++) {
+	 void *Ptr = cmd->svm_free.svm_pointers[i];
+	 /* This updates bookkeeping associated with the 'ptr'
+	    done by the PoCL core. */
+	 POname (clSVMFree) (Context, Ptr);
+       }
     }
     *Msg = "Event SVM Free              ";
     break;
@@ -2968,6 +2958,7 @@ Level0Device::Level0Device(Level0Driver *Drv, ze_device_handle_t DeviceH,
                            " cl_khr_local_int32_extended_atomics"
                            " cl_khr_device_uuid"
                            " cl_khr_il_program"
+                           " cl_khr_spirv_queries"
                            " cl_khr_spirv_no_integer_wrap_decoration"
 #ifdef ENABLE_LEVEL0_EXTRA_FEATURES
                            " cl_intel_split_work_group_barrier"
@@ -3001,9 +2992,9 @@ Level0Device::Level0Device(Level0Driver *Drv, ze_device_handle_t DeviceH,
 
 
                               ",+SPV_INTEL_split_barrier"
-                              ",+SPV_INTEL_tensor_float32_rounding"
                               ",+SPV_INTEL_unstructured_loop_controls"
                               ",+SPV_INTEL_variable_length_array"
+                              ",+SPV_INTEL_memory_access_aliasing"
 
                               // ",+SPV_KHR_cooperative_matrix"
                               // ",+SPV_KHR_subgroup_rotate"
@@ -3012,7 +3003,6 @@ Level0Device::Level0Device(Level0Driver *Drv, ze_device_handle_t DeviceH,
                               //
                               // "SPV_INTEL_arbitrary_precision_fixed_point"
                               // "SPV_INTEL_arbitrary_precision_floating_point"
-                              // "SPV_INTEL_memory_access_aliasing"
                               // "SPV_INTEL_tensor_float32_conversion"
                               // "SPV_EXT_relaxed_printf_string_address_space"
                               // "SPV_INTEL_bindless_images"
@@ -3171,6 +3161,7 @@ Level0Device::Level0Device(Level0Driver *Drv, ze_device_handle_t DeviceH,
     pocl_setup_features_with_version(ClDev);
     pocl_setup_extensions_with_version(ClDev);
     pocl_setup_ils_with_version(ClDev);
+    pocl_setup_spirv_queries(ClDev);
   }
 
   if (ClDev->type == CL_DEVICE_TYPE_CUSTOM ||
@@ -4518,16 +4509,16 @@ void *DMABufAllocation::allocImport(Level0Device *D,
 
 bool DMABufAllocation::free(Level0Device *D) {
   if (D == ExportDev) {
-    if (BufferImportMap.empty()) {
-      D->freeUSMMem(ExportPtr);
-      ExportPtr = nullptr;
-      ExportDev = nullptr;
-      FD = -1;
-    } else {
-      POCL_MSG_PRINT_LEVEL0("Not freeing Export alloc "
-                            "because Import(s) remain\n");
-      return false; // can we release export mem while we have active imports?
-    }
+    // It's not specified whether an export allocation can be freed
+    // before its import allocations. Free it anyway and cross
+    // fingers. The reason for doing this is that the context the
+    // export allocation is bound to may be released and this has lead
+    // to segfault in the level zero driver when the export allocation
+    // gets to be free'd later on.
+    D->freeUSMMem(ExportPtr);
+    ExportPtr = nullptr;
+    ExportDev = nullptr;
+    FD = -1;
   } else {
     auto It = BufferImportMap.find(D);
     if (It == BufferImportMap.end()) {

@@ -5,7 +5,7 @@
 
 #include "CL/opencl.h"
 
-#include "npu_dbk.h"
+#include "npu_dbk.hh"
 
 #ifndef NPU_GEMM_H
 #define NPU_GEMM_H
@@ -79,6 +79,7 @@ const char *GEMM_Flags_Template =
 
 bool instantiateTemplateGEMM(const void *KernelAttrs,
                              std::string &ModelXMLInstance,
+                             std::vector<uint8_t> &ModelBinary,
                              std::string &BuildFlagsInstance) {
   ModelXMLInstance = GEMM_XML_Template;
   BuildFlagsInstance = GEMM_Flags_Template;
@@ -102,15 +103,8 @@ bool instantiateTemplateGEMM(const void *KernelAttrs,
   ReplaceMap["INPUT_ELEM_TYPE"] = dtype2elemtype(Attrs->a.dtype);
   ReplaceMap["INPUT_ELEM_TYPE"] = dtype2elemtype(Attrs->c_out.dtype);
 
-  assert(Attrs->a.layout_type == CL_TENSOR_LAYOUT_ML_EXP);
-  L = (cl_tensor_layout_ml_exp *)Attrs->a.layout;
-  ReplaceMap["INPUT_LAYOUT"] = layout2str(L->ml_type);
-  L = (cl_tensor_layout_ml_exp *)Attrs->b.layout;
-  ReplaceMap["INPUT_LAYOUT"] = layout2str(L->ml_type);
-
-  assert(Attrs->c_out.layout_type == CL_TENSOR_LAYOUT_ML_EXP);
-  L = (cl_tensor_layout_ml_exp *)Attrs->c_out.layout;
-  ReplaceMap["OUTPUT_LAYOUT"] = layout2str(L->ml_type);
+  ReplaceMap["INPUT_LAYOUT"] = layout2str(Attrs->a);
+  ReplaceMap["OUTPUT_LAYOUT"] = layout2str(Attrs->c_out);
 
   ReplaceMap["TRANSPOSE_A"] = Attrs->trans_a ? "true" : "false";
   ReplaceMap["TRANSPOSE_B"] = Attrs->trans_b ? "true" : "false";

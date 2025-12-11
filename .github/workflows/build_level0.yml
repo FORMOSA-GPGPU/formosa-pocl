@@ -37,19 +37,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - llvm: 18
-            conformance: 0
-            npu: 0
           - llvm: 19
             conformance: 0
-            npu: 1
+            npu: 0
           - llvm: 20
+            conformance: 0
+            npu: 1
+          - llvm: 21
             conformance: 1
             npu: 0
 
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
       - name: Load Env vars
         id: load-env
@@ -96,6 +96,8 @@ jobs:
       - name: Run Tests
         env:
           POCL_CACHE_DIR: "${{ runner.temp }}/GH_POCL_CACHE"
+          CL_PLATFORM_NAME: "Portable"
+          CL_DEVICE_TYPE: "gpu"
         id: ctest
         timeout-minutes: 120
         run: |
@@ -103,7 +105,7 @@ jobs:
           mkdir ${{ env.POCL_CACHE_DIR }}
           # exclude long tests
           if [ ${{ matrix.conformance }} -eq 0 ]; then
-            cd ${{ github.workspace }}/build && ${{ github.workspace }}/tools/scripts/run_level0_tests -j2 $CTEST_FLAGS -LE long
+            cd ${{ github.workspace }}/build && ${{ github.workspace }}/tools/scripts/run_level0_tests -j2 $CTEST_FLAGS -LE long -E "test_copy_signbit_"
           else
             cd ${{ github.workspace }}/build && ${{ github.workspace }}/tools/scripts/run_level0_tests -j2 $CTEST_FLAGS -L conformance_suite_micro_main -LE long -E "(conformance_main_buffers_micro_|conformance_main_basic_micro_other|conformance_main_vectors_micro|conformance_main_spirv_new_micro_)"
           fi

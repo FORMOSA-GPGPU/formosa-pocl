@@ -14,11 +14,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref || github.run_id }}
   cancel-in-progress: true
 
-env:
-  CCACHE_BASEDIR: "${{ github.workspace }}"
-  CCACHE_DIR: "${{ github.workspace }}/../../../../ccache_storage"
-  EXAMPLES_DIR: "${{ github.workspace }}/../../../../examples"
-
 jobs:
   cts_san_matrix:
     name: LLVM ${{ matrix.llvm }} - ${{ matrix.config }}
@@ -35,14 +30,14 @@ jobs:
         # cts_asan = CTS build with AddressSanitizer
         # cts_tsan = CTS build with ThreadSanitizer
         include:
-          - llvm: 19
-            config: cts_tsan
           - llvm: 20
+            config: cts_tsan
+          - llvm: 21
             config: cts_asan
 
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
       - name: Load Env vars
         id: load-env
@@ -53,7 +48,7 @@ jobs:
         id: cmake
         run: |
           runCMake() {
-            BUILD_FLAGS="-O1 -ggdb -march=native -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
+            BUILD_FLAGS="-O1 -ggdb -g3 -fno-omit-frame-pointer -march=native"
             cmake -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo "-DCMAKE_C_FLAGS_RELWITHDEBINFO=$BUILD_FLAGS" \
             "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=$BUILD_FLAGS" \
@@ -98,17 +93,19 @@ jobs:
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
         with:
           path: ${{ github.workspace }}/build/Testing/Temporary/CTestCostData.txt
-          key: ctest-cache-${{ steps.cmake_version.outputs.version }}-${{ runner.name }}-${{ matrix.config }}
+          key: ctest-cache-${{ steps.cmake_version.outputs.version }}-${{ runner.name }}-${{ matrix.config }}-${{ github.run_id }}
+          restore-keys: ctest-cache-${{ steps.cmake_version.outputs.version }}-${{ runner.name }}-${{ matrix.config }}
 
       - name: Run Tests
         env:
           POCL_CACHE_DIR: "${{ runner.temp }}/GH_POCL_CACHE"
+          CL_PLATFORM_NAME: "Portable"
+          CL_DEVICE_TYPE: "cpu"
         id: ctest
         timeout-minutes: 120
         run: |
           runCTest() {
-            # limit jobs to 8; ctest seems to have some memleak or something, it eats up 10+ GBytes of memory
-            cd ${{ github.workspace }}/build && ctest -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh) $CTEST_FLAGS "$@"
+            cd ${{ github.workspace }}/build && ${{ github.workspace }}/tools/scripts/run_cpu_tests -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh) $CTEST_FLAGS "$@"
           }
           rm -rf ${{ env.POCL_CACHE_DIR }}
           # hardcoded path in test_compiler / execute_after_included_header_link

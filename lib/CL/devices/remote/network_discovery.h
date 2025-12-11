@@ -38,10 +38,11 @@
 
 #define SERVER_ID_SIZE 32
 
-cl_int init_network_discovery (cl_int (*add_discovered_device) (const char *,
-                                                                unsigned),
-                               cl_int (*reconnect_callback) (const char *),
-                               unsigned pocl_dev_type_idx);
+cl_int init_network_discovery (
+  cl_int (*add_discovered_device) (const char *, unsigned, cl_platform_id),
+  cl_int (*reconnect_callback) (const char *),
+  unsigned pocl_dev_type_idx,
+  cl_platform_id pocl_dev_platform);
 
 #ifdef __GNUC__
 #pragma GCC visibility pop

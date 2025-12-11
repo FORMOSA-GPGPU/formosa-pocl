@@ -539,7 +539,8 @@ FINISH:
  */
 cl_int
 add_discovered_device_callback (const char *dev_parameters,
-                                unsigned pocl_dev_type_idx)
+                                unsigned pocl_dev_type_idx,
+                                cl_platform_id pocl_dev_platform)
 {
   assert (first_init_done);
 
@@ -562,7 +563,7 @@ add_discovered_device_callback (const char *dev_parameters,
   dev->ops = &pocl_device_ops[pocl_dev_type_idx];
   dev->dev_id = dev_index;
   dev->global_mem_id = dev_index;
-  POCL_INIT_OBJECT (dev);
+  POCL_INIT_OBJECT (dev, pocl_dev_platform);
   dev->driver_version = POCL_VERSION_FULL;
   if (dev->version == NULL)
     dev->version = "OpenCL 3.0 pocl";
@@ -591,7 +592,7 @@ ERROR:
  * Initialize discovery in device driver
  */
 cl_int
-pocl_init_device_discovery ()
+pocl_init_device_discovery (cl_platform_id platform)
 {
   assert (first_init_done);
   /* Discovery initialization should happen once and only by one thread. */
@@ -619,7 +620,7 @@ pocl_init_device_discovery ()
         continue;
 
       errcode = pocl_device_ops[i].init_discovery (
-        &add_discovered_device_callback, i);
+        &add_discovered_device_callback, i, platform);
       POCL_GOTO_ERROR_ON ((errcode != CL_SUCCESS), errcode,
                           "Discovery initialization failed for device: %s \n",
                           pocl_device_ops[i].device_name);
@@ -630,7 +631,7 @@ ERROR:
 }
 
 cl_int
-pocl_init_devices ()
+pocl_init_devices (cl_platform_id platform)
 {
   int errcode = CL_SUCCESS;
 
@@ -775,7 +776,7 @@ pocl_init_devices ()
         "No devices found by probing: %s=%s. Trying through discovery. \n",
         POCL_DEVICES_ENV, dev_env);
       first_init_done = 1;
-      errcode = pocl_init_device_discovery ();
+      errcode = pocl_init_device_discovery (platform);
       goto ERROR;
     }
   POCL_GOTO_ERROR_ON ((pocl_num_devices == 0), CL_DEVICE_NOT_FOUND,
@@ -802,7 +803,7 @@ pocl_init_devices ()
              it to point to some other device's global memory id in case of
              a shared global memory. */
           dev->global_mem_id = dev_index;
-          POCL_INIT_OBJECT (dev);
+          POCL_INIT_OBJECT (dev, platform);
           dev->driver_version = pocl_get_string_option (
               "POCL_DRIVER_VERSION_OVERRIDE", POCL_VERSION_FULL);
 
@@ -833,9 +834,19 @@ pocl_init_devices ()
     }
   first_init_done = 1;
   devices_active = 1;
-  errcode = pocl_init_device_discovery ();
+  errcode = pocl_init_device_discovery (platform);
 ERROR:
   init_in_progress = 0;
   POCL_UNLOCK (pocl_init_lock);
   return errcode;
 }
+
+#ifdef BUILD_ICD
+void
+pocl_set_devices_dispatch_data (void *disp_data)
+{
+  cl_device_id device;
+
+  LL_FOREACH_ATOMIC (pocl_devices, device) { device->disp_data = disp_data; }
+}
+#endif

@@ -26,6 +26,7 @@ IGNORE_COMPILER_WARNING("-Wmaybe-uninitialized")
 #include <llvm/ADT/Twine.h>
 POP_COMPILER_DIAGS
 IGNORE_COMPILER_WARNING("-Wunused-parameter")
+#include <llvm/Demangle/Demangle.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DebugInfoMetadata.h>
 #include <llvm/IR/Instructions.h>
@@ -72,6 +73,7 @@ POP_COMPILER_DIAGS
 #include "pocl_spir.h"
 
 #include <iostream>
+#include <regex>
 #include <set>
 
 using namespace llvm;
@@ -110,7 +112,35 @@ static std::vector<Use *> findInstructionUses(GlobalVariable *GVar) {
 }
 
 
+// Remove address space qualifiers like U3AS4, U3AS1, etc. from mangled symbol
+static std::string stripAddressSpaces(const std::string &MangledName) {
+
+    // Pattern: U followed by digits, then AS, then a digit
+    std::regex Pattern(R"(U\d+AS\d)");
+    std::string Result = std::regex_replace(MangledName, Pattern, "");
+
+    return Result;
+}
+
+
 namespace pocl {
+
+std::string tryDemangleWithoutAddressSpaces(const std::string& MangledName) {
+
+    std::string Demangled = llvm::demangle(MangledName);
+    if (Demangled != MangledName) {
+        return Demangled;
+    }
+
+    std::string Stripped = stripAddressSpaces(MangledName);
+
+    Demangled = llvm::demangle(Stripped);
+    if (Demangled != Stripped) {
+        return Demangled;
+    }
+
+    return MangledName; // Failed
+}
 
 /**
  * Regenerates the metadata that points to the original kernel
@@ -124,32 +154,32 @@ void
 regenerate_kernel_metadata(llvm::Module &M, FunctionMapping &kernels)
 {
   // reproduce the opencl.kernel_wg_size_info metadata
-  NamedMDNode *wg_sizes = M.getNamedMetadata("opencl.kernel_wg_size_info");
-  if (wg_sizes != NULL && wg_sizes->getNumOperands() > 0) 
+  NamedMDNode *WGSizes = M.getNamedMetadata("opencl.kernel_wg_size_info");
+  if (WGSizes != NULL && WGSizes->getNumOperands() > 0)
     {
-      for (std::size_t mni = 0; mni < wg_sizes->getNumOperands(); ++mni)
+      for (std::size_t mni = 0; mni < WGSizes->getNumOperands(); ++mni)
         {
-          MDNode *wgsizeMD = dyn_cast<MDNode>(wg_sizes->getOperand(mni));
+          MDNode *wgsizeMD = dyn_cast<MDNode>(WGSizes->getOperand(mni));
           for (FunctionMapping::const_iterator i = kernels.begin(),
-                 e = kernels.end(); i != e; ++i) 
+                 e = kernels.end(); i != e; ++i)
             {
-              Function *old_kernel = (*i).first;
-              Function *new_kernel = (*i).second;
-              Function *func_from_md;
-              func_from_md = dyn_cast<Function>(
+              Function *OldKernel = (*i).first;
+              Function *NewKernel = (*i).second;
+              Function *FuncFromMD;
+              FuncFromMD = dyn_cast<Function>(
                 dyn_cast<ValueAsMetadata>(wgsizeMD->getOperand(0))->getValue());
-              if (old_kernel == new_kernel || wgsizeMD->getNumOperands() == 0 ||
-                  func_from_md != old_kernel) 
+              if (OldKernel == NewKernel || wgsizeMD->getNumOperands() == 0 ||
+                  FuncFromMD != OldKernel)
                 continue;
               // found a wg size metadata that points to the old kernel, copy its
               // operands except the first one to a new MDNode
               SmallVector<Metadata*, 8> operands;
-              operands.push_back(llvm::ValueAsMetadata::get(new_kernel));
+              operands.push_back(llvm::ValueAsMetadata::get(NewKernel));
               for (unsigned opr = 1; opr < wgsizeMD->getNumOperands(); ++opr) {
                   operands.push_back(wgsizeMD->getOperand(opr));
               }
               MDNode *new_wg_md = MDNode::get(M.getContext(), operands);
-              wg_sizes->addOperand(new_wg_md);
+              WGSizes->addOperand(new_wg_md);
             }
         }
     }
@@ -541,12 +571,8 @@ calculateGVarOffsetsSizes(const DataLayout &DL,
     assert(GVar->hasInitializer());
 
     // if the current offset into the buffer is not aligned enough, fix it
-#if LLVM_MAJOR < 15
-    uint64_t GVarAlign = GVar->getAlignment();
-#else
     Align GVarA = GVar->getAlign().valueOrOne();
     uint64_t GVarAlign = GVarA.value();
-#endif
 
     if (GVarAlign > 0 && CurrentOffset % GVarAlign) {
       CurrentOffset |= (GVarAlign - 1);
@@ -700,6 +726,106 @@ bool isCompilerExpandableWIFunctionCall(const llvm::CallInst &Call) {
       Callee->getName() != NGROUPS_BUILTIN_NAME)
     return false;
   return isa<llvm::ConstantInt>(Call.getArgOperand(0));
+}
+
+bool removeClangGeneratedKernelStubs(llvm::Module *Program) {
+#if LLVM_MAJOR > 20
+#ifdef DEBUG_LLVM_UTILS
+  std::cerr << "removeClangGeneratedKernelStubs: Dump of Program BEFORE:\n";
+  Program->dump();
+#endif
+  // For now, inline & remove all Clang-generated kernel wrappers
+  llvm::SmallSet<llvm::Function *, 8> RemoveFunctionList;
+  llvm::Module::iterator FI, FE;
+
+  for (FI = Program->begin(), FE = Program->end(); FI != FE; FI++) {
+    if (FI->hasName() && FI->getName().starts_with("__clang_ocl_kern_imp")) {
+      RemoveFunctionList.insert(&*FI);
+    }
+  }
+  bool retval = true;
+  for (auto F : RemoveFunctionList) {
+#ifdef DEBUG_LLVM_UTILS
+    std::cerr << "Erasing function : " << F->getName().str() << "  "
+              << " Num uses: " << (unsigned)F->getNumUses() << "\n";
+#endif
+    llvm::SmallSet<Value *, 8> FUsers;
+    for (auto U : F->users()) {
+      FUsers.insert(U);
+    }
+    for (auto U : FUsers) {
+      CallInst *CInstr = dyn_cast<CallInst>(U);
+      if (CInstr) {
+#ifdef DEBUG_LLVM_UTILS
+        CInstr->dump();
+        std::cerr << "Use is CallInstr, inlining\n";
+#endif
+        InlineFunctionInfo IFI;
+        InlineResult IR = llvm::InlineFunction(*CInstr, IFI);
+        if (!IR.isSuccess()) {
+#ifdef DEBUG_LLVM_UTILS
+          std::cerr << "Inlining failed with reason: %s \n"
+                    << IR.getFailureReason()) << "\n";
+#endif
+          retval = false;
+        }
+      } else {
+#ifdef DEBUG_LLVM_UTILS
+        std::cerr << "UNKNOWN Use: \n";
+        U->dump();
+#endif
+      }
+    }
+    if (F->getNumUses() == 0) {
+#ifdef DEBUG_LLVM_UTILS
+      std::cerr << "Zero Uses remain, erasing \n";
+#endif
+      F->eraseFromParent();
+    } else {
+#ifdef DEBUG_LLVM_UTILS
+      std::cerr << "NOT DELETING: Uses remain: " << (unsigned)F->getNumUses()
+                << "\n";
+#endif
+      retval = false;
+    }
+  }
+
+#ifdef DEBUG_LLVM_UTILS
+  std::cerr << "removeClangGeneratedKernelStubs: Dump of Program AFTER:\n";
+  Program->dump();
+#endif
+
+  return retval;
+#else
+  return true;
+#endif
+}
+
+bool removeMetadataFromClangStubs(llvm::Module *Program) {
+#if LLVM_MAJOR > 20
+  // For now, remove all Clang-generated kernel wrappers
+  // these have incorrect metadata, which causes an assertion later (in metadata
+  // extraction)
+  llvm::Module::iterator FI, FE;
+
+  for (FI = Program->begin(), FE = Program->end(); FI != FE; FI++) {
+    if (FI->hasName() && FI->getName().starts_with("__clang_ocl_kern_imp")) {
+      // remove the OpenCL kernel argument metadata from the stub function.
+      // the function will not be recognized as a kernel by other code
+      FI->setMetadata("kernel_arg_addr_space", nullptr);
+      FI->setMetadata("kernel_arg_access_qual", nullptr);
+      FI->setMetadata("kernel_arg_type", nullptr);
+      FI->setMetadata("kernel_arg_base_type", nullptr);
+      FI->setMetadata("kernel_arg_type_qual", nullptr);
+      FI->setMetadata("kernel_arg_name", nullptr);
+    }
+  }
+#ifdef DEBUG_LLVM_UTILS
+  std::cerr << "removeMetadataFromClangStubs: Dump of Program AFTER:\n";
+  Program->dump();
+#endif
+#endif
+  return true;
 }
 
 } // namespace pocl

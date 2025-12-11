@@ -33,11 +33,12 @@
 
 #ifndef USE_POCL_MEMMANAGER
 
-cl_event pocl_mem_manager_new_event ()
+cl_event
+pocl_mem_manager_new_event (cl_context ctx)
 {
   cl_event ev = (cl_event) calloc (1, sizeof (struct _cl_event));
   if (ev != NULL)
-    POCL_INIT_OBJECT(ev);
+    POCL_INIT_OBJECT (ev, ctx);
   return ev;
 }
 
@@ -78,7 +79,8 @@ void pocl_init_mem_manager (void)
   POCL_UNLOCK(pocl_init_lock);
 }
 
-cl_event pocl_mem_manager_new_event ()
+cl_event
+pocl_mem_manager_new_event (cl_context ctx)
 {
   cl_event ev = NULL;
   POCL_LOCK (mm->event_lock);
@@ -86,13 +88,13 @@ cl_event pocl_mem_manager_new_event ()
     {
       LL_DELETE (mm->event_list, ev);
       POCL_UNLOCK (mm->event_lock);
-      POCL_INIT_OBJECT (ev); /* reinit the pocl_lock mutex */
+      POCL_INIT_OBJECT (ev, ctx); /* reinit the pocl_lock mutex */
       return ev;
     }
   POCL_UNLOCK (mm->event_lock);
 
   ev = (struct _cl_event*) calloc (1, sizeof (struct _cl_event));
-  POCL_INIT_OBJECT(ev);
+  POCL_INIT_OBJECT (ev, ctx);
   return ev;
 }
 
@@ -449,6 +451,21 @@ append_unaligned_patch_subbuffer_migration (
   return pocl_append_unique_migration_info (patches, sb, read_only);
 }
 
+static int
+have_user_sub_buffers (cl_mem buffer)
+{
+  assert (buffer);
+  assert (buffer->parent == NULL);
+
+  cl_mem_list_item_t *sub_buf;
+  LL_FOREACH (buffer->sub_buffers, sub_buf)
+    {
+      if (!sub_buf->mem->implicit_sub_buffer)
+        return 1;
+    }
+  return 0;
+}
+
 /* Splits migrations of parent buffers to sub-buffer migrations, if the buffer
  * has sub-buffers, otherwise does nothing.
  *
@@ -486,7 +503,7 @@ pocl_convert_to_subbuffer_migrations (pocl_buffer_migration_info *buffer_usage,
             return NULL;
           continue;
         }
-      else if (mi->buffer->sub_buffers == NULL)
+      else if (!have_user_sub_buffers (mi->buffer))
         continue;
 
       /* Generate implicit sub-buffers for migrating the parent buffer from
@@ -569,13 +586,14 @@ pocl_convert_to_subbuffer_migrations (pocl_buffer_migration_info *buffer_usage,
 static void
 update_subbuffer_versioning_data (cl_mem updated_buf)
 {
+  assert(!updated_buf->parent && "Argument must not be a sub-buffer!");
   if (updated_buf->sub_buffers == NULL)
     return;
 
   cl_mem_list_item_t *sub_buf;
   LL_FOREACH (updated_buf->sub_buffers, sub_buf)
     {
-      sub_buf->mem->latest_version = updated_buf->parent->latest_version;
+      sub_buf->mem->latest_version = updated_buf->latest_version;
     }
 }
 
@@ -1066,34 +1084,20 @@ pocl_raw_ptr *
 pocl_find_raw_ptr_with_vm_ptr (cl_context context, const void *host_ptr)
 {
   POCL_LOCK_OBJ (context);
-  pocl_raw_ptr *item = NULL;
-  DL_FOREACH (context->raw_ptrs, item)
-    {
-      if (item->vm_ptr == NULL)
-        continue;
-      if (item->vm_ptr <= host_ptr
-          && (char *)item->vm_ptr + item->size > (const char *)host_ptr)
-        {
-          break;
-        }
-    }
+  pocl_raw_ptr *item
+    = pocl_raw_ptr_set_lookup_with_vm_ptr (context->raw_ptrs, host_ptr);
   POCL_UNLOCK_OBJ (context);
   return item;
 }
 
 pocl_raw_ptr *
-pocl_find_raw_ptr_with_dev_ptr (cl_context context, const void *dev_ptr)
+pocl_find_raw_ptr_with_dev_ptr (cl_context context,
+                                cl_device_id dev,
+                                const void *dev_ptr)
 {
   POCL_LOCK_OBJ (context);
-  pocl_raw_ptr *item = NULL;
-  DL_FOREACH (context->raw_ptrs, item)
-    {
-      if (item->dev_ptr == NULL)
-        continue;
-      if (item->dev_ptr <= dev_ptr
-          && (char *)item->dev_ptr + item->size > (const char *)dev_ptr)
-        break;
-    }
+  pocl_raw_ptr *item
+    = pocl_raw_ptr_set_lookup_with_dev_ptr (context->raw_ptrs, dev, dev_ptr);
   POCL_UNLOCK_OBJ (context);
   return item;
 }

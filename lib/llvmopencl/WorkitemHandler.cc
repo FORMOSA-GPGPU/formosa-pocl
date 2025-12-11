@@ -189,11 +189,7 @@ bool WorkitemHandler::dominatesUse(llvm::DominatorTree &DT, Instruction &Inst,
 bool WorkitemHandler::fixUndominatedVariableUses(llvm::DominatorTree &DT,
                                                  llvm::Function &F) {
   bool changed = false;
-#if LLVM_VERSION_MAJOR < 11
-  DT.releaseMemory();
-#else
   DT.reset();
-#endif
   DT.recalculate(F);
 
   for (Function::iterator i = F.begin(), e = F.end(); i != e; ++i) 
@@ -461,11 +457,7 @@ llvm::AllocaInst *WorkitemHandler::createAlignedAndPaddedContextAlloca(
     ElementType = SrcAlloca->getAllocatedType();
     AllocType = ElementType;
 
-#if LLVM_MAJOR < 15
-    unsigned Alignment = SrcAlloca->getAlignment();
-#else
-    unsigned Alignment = SrcAlloca->getAlign().value();
-#endif
+    uint64_t Alignment = SrcAlloca->getAlign().value();
     uint64_t StoreSize = Layout.getTypeStoreSize(SrcAlloca->getAllocatedType());
 
     if ((Alignment > 1) && (StoreSize & (Alignment - 1))) {
@@ -503,7 +495,7 @@ llvm::AllocaInst *WorkitemHandler::createAlignedAndPaddedContextAlloca(
         ArrayType *StructPadding = ArrayType::get(
             Type::getInt8Ty(M->getContext()), RequiredExtraBytes);
         std::vector<Type *> PaddedStructElements;
-        for (unsigned j = 0; j < OldStruct->getNumElements(); j++)
+        for (size_t j = 0; j < OldStruct->getNumElements(); j++)
           PaddedStructElements.push_back(OldStruct->getElementType(j));
         PaddedStructElements.push_back(StructPadding);
         PaddingAdded = true;
@@ -558,23 +550,14 @@ llvm::AllocaInst *WorkitemHandler::createAlignedAndPaddedContextAlloca(
     size_t SizeBits;
     SizeBits = Alloca
                    ->getAllocationSizeInBits(M->getDataLayout())
-#if LLVM_MAJOR > 14
                    .value_or(TypeSize(0, false))
                    .getFixedValue();
-#else
-                   .getValueOr(TypeSize(0, false))
-                   .getFixedValue();
-#endif
 
     assert(SizeBits != 0);
 
     // if (size == 0) WGLocalSizeX * WGLocalSizeY * WGLocalSizeZ * 8 *
     // Alloca->getAllocatedType()->getScalarSizeInBits();
-#if LLVM_MAJOR < 15
-    size_t AlignBits = Alloca->getAlignment() * 8;
-#else
     size_t AlignBits = Alloca->getAlign().value() * 8;
-#endif
 
     Metadata *VariableDebugMeta =
         cast<MetadataAsValue>(DebugCall->getOperand(1))->getMetadata();
@@ -642,14 +625,8 @@ WorkitemHandler::createContextArrayGEP(llvm::AllocaInst *CtxArrayAlloca,
         ConstantInt::get(Type::getInt32Ty(CtxArrayAlloca->getContext()), 0));
 
   IRBuilder<> Builder(Before);
-#if LLVM_MAJOR < 15
-  llvm::GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(
-      Builder.CreateGEP(CtxArrayAlloca->getType()->getPointerElementType(),
-                        CtxArrayAlloca, GEPArgs));
-#else
   llvm::GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(Builder.CreateGEP(
       CtxArrayAlloca->getAllocatedType(), CtxArrayAlloca, GEPArgs));
-#endif
   assert(GEP != nullptr);
 
   return GEP;
@@ -672,7 +649,6 @@ WorkitemHandler::createContextArrayGEP(llvm::AllocaInst *CtxArrayAlloca,
 /// \return False in case we should _not_ add the parallel loop metadata,
 /// even though the loop is known to be parallel.
 bool WorkitemHandler::canAnnotateParallelLoops() {
-#if LLVM_MAJOR >= 17
   for (auto &BB : *K) {
     for (auto &I : BB) {
       if (I.isVolatile())
@@ -680,9 +656,6 @@ bool WorkitemHandler::canAnnotateParallelLoops() {
     }
   }
   return true;
-#else
-  return true;
-#endif
 }
 
 /// Returns the instruction in the entry block of the currently handled kernel

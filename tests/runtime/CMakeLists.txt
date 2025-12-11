@@ -54,7 +54,8 @@ if(HAVE_ONNXRT)
 endif()
 
 set(CXX_PROGRAMS_TO_BUILD test_device_address test_svm test_large_buf
-  test_subbuffers test_compile_n_link test_dbk_matmul)
+  test_subbuffers test_compile_n_link test_dbk_matmul test_tensor_view
+  test_dbk_convert test_dbk_set_rows)
 
 add_compile_options(${OPENCL_CFLAGS} -I${CMAKE_SOURCE_DIR}/include)
 
@@ -70,6 +71,7 @@ foreach(PROG ${CXX_PROGRAMS_TO_BUILD})
   set_source_files_properties( "${PROG}.cpp" PROPERTIES LANGUAGE CXX )
   add_executable("${PROG}" "${PROG}.cpp")
   target_link_libraries("${PROG}" ${POCLU_LINK_OPTIONS})
+  target_include_directories("${PROG}" PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   add_symlink_to_built_opencl_dynlib("${PROG}")
 endforeach()
 
@@ -164,8 +166,7 @@ if(HAVE_LIBJPEG_TURBO)
     COST 2.0
     PROCESSORS 1
     SKIP_RETURN_CODE 77
-    DEPENDS "pocl_version_check"
-    LABELS "cpu;runtime")
+    DEPENDS "pocl_version_check")
 endif()
 
 add_test(NAME "runtime/test_queue_creation_with_hints" COMMAND "test_queue_creation_with_hints")
@@ -178,9 +179,32 @@ if(HAVE_LIBXSMM)
     COST 2.0
     PROCESSORS 1
     SKIP_RETURN_CODE 77
-    DEPENDS "pocl_version_check"
-    LABELS "cpu;runtime")
+    DEPENDS "pocl_version_check")
 endif()
+
+add_test(NAME "runtime/test_tensor_view" COMMAND test_tensor_view)
+set_tests_properties("runtime/test_tensor_view"
+  PROPERTIES
+  COST 2.0
+  PROCESSORS 1
+  SKIP_RETURN_CODE 77
+  DEPENDS "pocl_version_check")
+
+add_test(NAME "runtime/test_dbk_convert" COMMAND test_dbk_convert)
+set_tests_properties("runtime/test_dbk_convert"
+  PROPERTIES
+  COST 2.0
+  PROCESSORS 1
+  SKIP_RETURN_CODE 77
+  DEPENDS "pocl_version_check")
+
+add_test(NAME "runtime/test_dbk_set_rows" COMMAND test_dbk_set_rows)
+set_tests_properties("runtime/test_dbk_set_rows"
+  PROPERTIES
+  COST 2.0
+  PROCESSORS 1
+  SKIP_RETURN_CODE 77
+  DEPENDS "pocl_version_check")
 
 if(HAVE_ONNXRT)
   add_test(NAME "runtime/test_dbk_onnx_inference" COMMAND "test_dbk_onnx_inference")
@@ -189,18 +213,14 @@ if(HAVE_ONNXRT)
     COST 2.0
     PROCESSORS 1
     SKIP_RETURN_CODE 77
-    DEPENDS "pocl_version_check"
-    LABELS "cpu;runtime")
+    DEPENDS "pocl_version_check")
 endif()
 
-unset(ENABLED_CPU_TESTS)
-if(NOT ENABLE_ANYSAN)
-  list(APPEND ENABLED_CPU_TESTS "runtime/clCreateSubDevices")
+if(ENABLE_ANYSAN)
+  set_property(TEST "runtime/clCreateSubDevices"
+               APPEND PROPERTY LABELS "cpu_fail")
 endif()
 
-if(HAVE_WORKING_IMAGES_WITH_SPIR)
-  list(APPEND ENABLED_CPU_TESTS "runtime/clGetKernelArgInfo")
-endif()
 
 set_tests_properties( "runtime/clGetDeviceInfo" "runtime/clEnqueueNativeKernel"
   "runtime/clGetEventInfo" "runtime/clCreateProgramWithBinary"
@@ -220,12 +240,12 @@ set_tests_properties( "runtime/clGetDeviceInfo" "runtime/clEnqueueNativeKernel"
   "runtime/test_device_address" "runtime/test_svm"
   "runtime/test_compile_n_link" "runtime/test_subbuffers"
   "runtime/test_queue_creation_with_hints"
-  ${ENABLED_CPU_TESTS}
+  "runtime/clGetKernelArgInfo"
+  "runtime/clCreateSubDevices"
   PROPERTIES
     COST 2.0
     PROCESSORS 1
-    DEPENDS "pocl_version_check"
-    LABELS "cpu;runtime")
+    DEPENDS "pocl_version_check")
 
 set_tests_properties(
   "runtime/clCreateSubDevices"
