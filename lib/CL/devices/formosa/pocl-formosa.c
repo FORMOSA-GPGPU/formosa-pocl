@@ -275,8 +275,6 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   uint32_t host_args_offset = 0;
   uint64_t local_mem_offset = 0;
 
-  host_args_offset += word_size;  // preseve space for trampoline address
-
   if (local_mem_size > 0) {
     memcpy(host_kargs_base_ptr + host_args_offset, &local_mem_size,
            word_size);  // total local memory size
@@ -347,6 +345,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   // upload kernel to device
   uintptr_t entry_pc = 0, trampoline_pc = 0;
   uint64_t *completion_signal = malloc(sizeof(uint64_t));
+  *completion_signal = 0;
   if (dd->kernel_buffer == NULL) {
     char sz_program_fsabin[POCL_MAX_PATHNAME_LENGTH];
     err = pocl_fsa_get_elf_name(program, device_i, sz_program_fsabin);
@@ -367,15 +366,13 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
                     dev_kernel_addr;
     POCL_MSG_PRINT_INFO("trampoline_pc: %lx\n", trampoline_pc);
     POCL_MEM_FREE(trampoline_name);
-    memcpy(host_kargs_base_ptr, &trampoline_pc,
-           word_size);  // write trampoline address to kernel args buffer
   }
 
   // launch kernel execution
   err = fsa_cmd_start_kernel(
       pc->work_dim, pc->local_size, pc->num_groups, pc->global_offset, entry_pc,
-      (uintptr_t)device_args_buffer_addr, (uintptr_t)device_kernel_status_addr,
-      completion_signal);
+      (uintptr_t)device_args_buffer_addr, (uintptr_t)trampoline_pc,
+      (uintptr_t)device_kernel_status_addr, completion_signal);
 
   if (err != 0) {
     POCL_ABORT("ERROR (pocl_formosa_run): Kernel launch failed\n");
@@ -393,6 +390,12 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   err = fsa_free((void *)fsa_kargs_buffer.buf_address);
   if (err != 0) {
     POCL_ABORT("ERROR (pocl_formosa_run): Kernel argument free failed\n");
+  }
+
+  // release kernel status device buffer
+  err = fsa_free((void *)device_kernel_status_addr);
+  if (err != 0) {
+    POCL_ABORT("ERROR (pocl_formosa_run): Kernel status free failed\n");
   }
 }
 
@@ -665,20 +668,19 @@ void pocl_formosa_notify(cl_device_id device, cl_event event,
      * with the command queue that will be locked during
      * pocl_update_event_failed.
      */
-    pocl_unlock_events_inorder (event, finished);
-    pocl_update_event_failed (CL_FAILED, NULL, 0, event, NULL);
+    pocl_unlock_events_inorder(event, finished);
+    pocl_update_event_failed(CL_FAILED, NULL, 0, event, NULL);
     /* Lock events in this order to avoid a lock order violation between
      * the finished/notifier and event/wait events.
      */
-    pocl_lock_events_inorder (finished, event);
+    pocl_lock_events_inorder(finished, event);
     return;
   }
 
-
   if (node->state != POCL_COMMAND_READY) {
-    POCL_MSG_PRINT_EVENTS (
-      "formosa: command related to the notified event %lu not ready\n",
-      event->id);
+    POCL_MSG_PRINT_EVENTS(
+        "formosa: command related to the notified event %lu not ready\n",
+        event->id);
     return;
   }
 

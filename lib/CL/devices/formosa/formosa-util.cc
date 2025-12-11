@@ -145,7 +145,9 @@ int pocl_fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
 int pocl_fsa_wait_ack(pocl_formosa_data_t *dd, uint64_t *completion_signal) {
   if (dd == nullptr || completion_signal == nullptr) return -1;
   // polling the completion_signal until it is set to non-zero value
-  fsa_wait_for_completion(completion_signal, 0);  // blocking wait
+  fsa_wait_for_completion(
+      reinterpret_cast<volatile uint64_t *>(completion_signal),
+      0);  // blocking wait
 
   uintptr_t dev_status = *completion_signal;
   uint8_t status_raw[sizeof(uint64_t) * 6];
