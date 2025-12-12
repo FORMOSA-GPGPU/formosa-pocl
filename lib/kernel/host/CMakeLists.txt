@@ -39,6 +39,7 @@ clamp_int.cl
 clz.cl
 ctz.cl
 convert_type.cl
+copysign.cl
 cross.cl
 distance.cl
 dot.cl
@@ -137,7 +138,7 @@ vload_store_half_f16c.c
 vstore.cl
 vstore_half.cl
 wait_group_events.cl
-work_group.c
+work_group.cl
 write_image.cl
 
 ###################################################################
@@ -205,7 +206,6 @@ sleef-pocl/atan2.cl
 sleef-pocl/atan.cl
 sleef-pocl/cbrt.cl
 sleef-pocl/ceil.cl
-sleef-pocl/copysign.cl
 sleef-pocl/erfc.cl
 sleef-pocl/erf.cl
 sleef-pocl/exp10.cl
@@ -246,6 +246,8 @@ if(KERNEL_TRIPLE_TARGETS_MSVC_TOOLCHAIN)
 else()
   list(APPEND SOURCES_WITH_SLEEF barrier.ll)
 endif()
+
+list(APPEND SOURCES_WITH_SLEEF "host/addrspace_operators.ll" "host/addrspace_operators_spir.ll")
 
 # if ENABLE_HOST_CPU_VECTORIZE_BUILTINS is enabled, use Clang/LLVM builtins
 # this makes vectorization of (some) OpenCL builtins possible,
@@ -378,15 +380,6 @@ endif()
 
 
 include("bitcode_rules")
-
-foreach(FILE "host/addrspace_operators.ll" "host/addrspace_operators_spir.ll")
-  if(LLVM_OPAQUE_POINTERS)
-    generate_opaque_ptr_ll("${FILE}" "opaque" OPAQ_PTR_FILE)
-    list(APPEND SOURCES_WITH_SLEEF "${OPAQ_PTR_FILE}")
-  else()
-    list(APPEND SOURCES_WITH_SLEEF "${FILE}")
-  endif()
-endforeach()
 
 set(SLEEF_CL_KERNEL_DEPEND_HEADERS "")
 foreach(HEADER helperadvsimd.h   helperavx2.h     helperavx.h     helperpurec.h  helpersse2.h    misc.h helperavx2_128.h  helperavx512f.h  helperneon32.h  helpers.h      helpervecext.h)
@@ -549,6 +542,7 @@ function(compile_sleef VARIANT SLEEF_CONFIG SLEEF_CONFIG_NEW SLEEF_BC)
   endif()
   # current SLEEF code does not have code for
   # ARM32 NEON double vectors (if they even exist)
+  # TODO check properly!
   if(NOT ARM32)
     set(STR "#define SLEEF_DOUBLE_VEC_AVAILABLE\n")
     file(APPEND "${SLEEF_CONFIG_NEW}" "${STR}")
@@ -570,9 +564,13 @@ function(compile_sleef VARIANT SLEEF_CONFIG SLEEF_CONFIG_NEW SLEEF_BC)
   if(HOST_DEVICE_ADDRESS_BITS EQUAL 32)
     set(SPIR_WRAPPER_FILE "host/spir_wrapper32.ll")
   else()
-    if(X86 OR ARM)
+    if(RISCV)
+      # for RISC-V, always use the generated SPIR wrapper with 128bits,
+      # the CPU vector width does not affect the ABI
+      generate_cpu_spir_wrapper(cpu_riscv ${VARIANT} 128 SPIR_WRAPPER_FILE)
+    elseif(X86 OR ARM)
       # for X86-64 & ARM, use the generated SPIR wrapper,
-      # based on CPU's largest supported vector size
+      # based on CPU's largest supported vector size (foreach loop below)
       set(SPIR_WRAPPER_FILE "")
     else()
       # for other CPUs, use a generic
@@ -636,7 +634,7 @@ function(compile_sleef VARIANT SLEEF_CONFIG SLEEF_CONFIG_NEW SLEEF_BC)
   message(STATUS "${VARIANT} SLEEF bc list: ${BC_FILE_LIST}")
   message(STATUS "${VARIANT} SLEEF bc: ${SLEEF_BC}")
 
-  set(LINK_OPT_COMMAND COMMAND "${LLVM_LINK}" "-o" "${SLEEF_BC}" ${BC_FILE_LIST})
+  set(LINK_OPT_COMMAND COMMAND "${LLVM_LINK}" "--suppress-warnings" "-o" "${SLEEF_BC}" ${BC_FILE_LIST})
 
   add_custom_command( OUTPUT "${SLEEF_BC}"
     DEPENDS ${BC_FILE_LIST}
@@ -658,6 +656,14 @@ endif()
 
 if(X86)
   x86_distro_variant_to_flags("${VARIANT}" LLC_CPUFLAGS CLANG_CPUFLAGS)
+elseif(RISCV)
+  set(CLANG_CPUFLAGS "-mcpu=${VARIANT} -mabi=${HOST_CPU_TARGET_ABI}")
+
+  if(LLVM_MARCH)
+    set(CLANG_CPUFLAGS "${CLANG_CPUFLAGS} -march=${LLVM_MARCH}")
+  endif()
+
+  set(LLC_CPUFLAGS "-mcpu=${VARIANT} -march=${LLVM_MARCH}")
 else()
   set(CLANG_CPUFLAGS "${CLANG_MARCH_FLAG}${VARIANT}")
   set(LLC_CPUFLAGS "-mcpu=${VARIANT}")
@@ -729,3 +735,28 @@ install(FILES "${KERNEL_BC}"
         DESTINATION "${POCL_INSTALL_PRIVATE_DATADIR_REL}" COMPONENT "lib")
 
 endforeach()
+
+
+if(CPU_USE_LLD_LINK_WIN32)
+  set(LIBCHKSTK_OBJ "${CMAKE_CURRENT_BINARY_DIR}/libchkstk.obj")
+  set(LIBCHKSTK_SRC "${CMAKE_CURRENT_SOURCE_DIR}/libchkstk.S")
+  add_custom_command( OUTPUT "${LIBCHKSTK_OBJ}"
+      DEPENDS ${LIBCHKSTK_SRC}
+      COMMAND ${CLANG} -DCHKSTK -o ${LIBCHKSTK_OBJ} -c ${LIBCHKSTK_SRC}
+      COMMENT "Compiling CHKSTK" VERBATIM)
+
+  set(LIBMEMORY_OBJ "${CMAKE_CURRENT_BINARY_DIR}/libmemory.obj")
+  set(LIBMEMORY_SRC "${CMAKE_CURRENT_SOURCE_DIR}/libmemory.c")
+  add_custom_command( OUTPUT "${LIBMEMORY_OBJ}"
+      DEPENDS ${LIBMEMORY_SRC}
+      COMMAND ${CLANG} -DMEMSET -DMEMCPY -DMEMMOVE -DMEMCMP -DSTRLEN -Os -fno-builtin --target=${LLVM_HOST_TARGET} -o ${LIBMEMORY_OBJ} -c ${LIBMEMORY_SRC}
+      COMMENT "Linking STRING library" VERBATIM)
+
+  add_custom_target("kernel_host_freestanding" DEPENDS ${LIBCHKSTK_OBJ} ${LIBMEMORY_OBJ})
+
+  list(APPEND KERNEL_TARGET_LIST "kernel_host_freestanding")
+  set(KERNEL_TARGET_LIST "${KERNEL_TARGET_LIST}" PARENT_SCOPE)
+
+  install(FILES "${LIBCHKSTK_OBJ}" "${LIBMEMORY_OBJ}"
+        DESTINATION "${POCL_INSTALL_PRIVATE_DATADIR_REL}" COMPONENT "lib")
+endif()

@@ -67,9 +67,31 @@ constexpr unsigned NumDIFuncNames = 13;
 extern const char *DIFuncNameArray[];
 extern const std::vector<std::string> DIFuncNameVec;
 
+// Attempt to demangle OpenCL C++ symbol names.
+// Strips address space qualifiers from the mangled name first.
+// This is necessary because
+// (a) as of LLVM 20, the llvm demangler still can't handle these qualifiers
+// (b) we don't want to show them to the user anyway
+std::string tryDemangleWithoutAddressSpaces(const std::string& MangledName);
+
 void regenerate_kernel_metadata(llvm::Module &M, FunctionMapping &kernels);
 
 void breakConstantExpressions(llvm::Value *Val, llvm::Function *Func);
+
+/**
+ * @brief Inlines (when possible) and then removes
+ * Clang-generated stub functions (__clang_ocl_kern_imp_<name>)
+ */
+bool removeClangGeneratedKernelStubs(llvm::Module *Program);
+
+/**
+ * @brief Removes kernel argument metadata (kernel_arg_addr_space etc)
+ * from Clang-generated stub functions (__clang_ocl_kern_imp_<name>)
+ * This is necessary to do for both CPU and other (LevelZero) drivers,
+ * otherwise these functions will show up as extra kernels, and this trips
+ * up certain tests that expect an exact amount of kernels in a program.
+ */
+bool removeMetadataFromClangStubs(llvm::Module *Program);
 
 // Remove a function from a module, along with all callsites.
 POCL_EXPORT
@@ -236,16 +258,6 @@ void CloneFunctionIntoAbs(llvm::Function *NewFunc,
 
 #define REGISTER_OLD_FANALYSIS(PNAME, PCLASS, PDESC)                          \
   static llvm::RegisterPass<PCLASS> X (PNAME, PDESC)
-
-#if LLVM_MAJOR < 15
-// Globals
-#define getValueType getType()->getElementType
-#endif /* LLVM_OPAQUE_POINTERS */
-
-#if LLVM_MAJOR < 16
-// Avoid the deprecation warning with later LLVMs.
-#define starts_with startswith
-#endif
 
 #if LLVM_MAJOR < 20
 #define CreateBuilder(BUILDER, BB) IRBuilder<> BUILDER(BB.getFirstNonPHI())

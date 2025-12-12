@@ -24,11 +24,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref || github.run_id }}
   cancel-in-progress: true
 
-env:
-  CCACHE_BASEDIR: "${{ github.workspace }}"
-  CCACHE_DIR: "${{ github.workspace }}/../../../../ccache_storage"
-  EXAMPLES_DIR: "${{ github.workspace }}/../../../../examples"
-
 jobs:
   main_test_matrix:
     name: LLVM ${{ matrix.llvm }} - ${{ matrix.config }}
@@ -42,20 +37,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        llvm: [19, 20]
+        llvm: [20, 21]
         # cts_spirv = cts with SPIR-V
         # tier1 = includes CTS without SPIR-V
         # chipstar 1.1 only supports LLVM up to 17
         # chipstar 1.2 only supports LLVM up to 19
         # asan, tsan, ubsan = sanitizers
+        # openvx = OpenVX-CTS
         config: [cts_spirv, tier1, asan, tsan, ubsan]
         include:
           - llvm: 19
             config: chipstar
+          - llvm: 20
+            config: openvx
 
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
       - name: Load Env vars
         id: load-env
@@ -65,11 +63,11 @@ jobs:
       - name: CMake
         id: cmake
         run: |
+          export BUILD_FLAGS="-O1 -ggdb -march=native -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
+
           runCMake() {
-            BUILD_FLAGS="-O1 -ggdb -march=native -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
-            cmake -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo "-DCMAKE_C_FLAGS_RELWITHDEBINFO=$BUILD_FLAGS" \
-            "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=$BUILD_FLAGS" \
+            cmake -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            "-DCMAKE_C_FLAGS_RELWITHDEBINFO=${BUILD_FLAGS}"  "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=${BUILD_FLAGS}" \
             -DWITH_LLVM_CONFIG=/usr/bin/llvm-config-${{ matrix.llvm }} -DLLVM_SPIRV=/usr/bin/llvm-spirv-${{ matrix.llvm }} \
             "$@" -B ${{ github.workspace }}/build ${{ github.workspace }}
           }
@@ -81,17 +79,29 @@ jobs:
             mkdir -p ${EXAMPLES_DIR}/source
             runCMake -DENABLE_TESTSUITES=conformance -DENABLE_CONFORMANCE=ON -DTESTSUITE_SOURCE_BASEDIR=${EXAMPLES_DIR}/source -DTESTSUITE_BASEDIR=${EXAMPLES_DIR}/build_cts_spirv
           elif [ "${{ matrix.config }}" == "tier1" ]; then
-            mkdir -p ${EXAMPLES_DIR}/build_tier1
-            runCMake "-DENABLE_TESTSUITES=AMDSDK3.0;piglit;conformance;PyOpenCL;IntelSVM" -DENABLE_CONFORMANCE=ON -DTESTSUITE_SOURCE_BASEDIR=${EXAMPLES_DIR}/source -DTESTSUITE_BASEDIR=${EXAMPLES_DIR}/build_tier1
+            mkdir -p ${EXAMPLES_DIR}/build_tier1_llvm_${{ matrix.llvm }}
+            # disable UnitCL for LLVM 21, it's incompatible with it
+            if [ "${{ matrix.llvm }}" == "21"  ]; then
+              runCMake "-DENABLE_TESTSUITES=AMDSDK3.0;piglit;conformance;PyOpenCL;IntelSVM" -DENABLE_CONFORMANCE=ON -DTESTSUITE_SOURCE_BASEDIR=${EXAMPLES_DIR}/source -DTESTSUITE_BASEDIR=${EXAMPLES_DIR}/build_tier1_llvm_${{ matrix.llvm }}
+            else
+              runCMake "-DENABLE_TESTSUITES=AMDSDK3.0;piglit;conformance;PyOpenCL;IntelSVM;UnitCL" -DENABLE_CONFORMANCE=ON -DTESTSUITE_SOURCE_BASEDIR=${EXAMPLES_DIR}/source -DTESTSUITE_BASEDIR=${EXAMPLES_DIR}/build_tier1_llvm_${{ matrix.llvm }}
+            fi
           elif [ "${{ matrix.config }}" == "chipstar" ]; then
             mkdir -p ${EXAMPLES_DIR}/build_chipstar_${{ matrix.llvm }}
             mkdir -p ${EXAMPLES_DIR}/source
             runCMake -DENABLE_TESTSUITES=chipStar -DTESTSUITE_SOURCE_BASEDIR=${EXAMPLES_DIR}/source -DTESTSUITE_BASEDIR=${EXAMPLES_DIR}/build_chipstar_${{ matrix.llvm }}
+          elif [ "${{ matrix.config }}" == "openvx" ]; then
+            mkdir -p ${EXAMPLES_DIR}/build_openvx
+            mkdir -p ${EXAMPLES_DIR}/source
+            runCMake -DENABLE_TESTSUITES=OpenVX_CTS -DTESTSUITE_SOURCE_BASEDIR=${EXAMPLES_DIR}/source -DTESTSUITE_BASEDIR=${EXAMPLES_DIR}/build_openvx
           elif [ "${{ matrix.config }}" == "asan" ]; then
+            export BUILD_FLAGS="-O1 -ggdb -fno-omit-frame-pointer -march=native -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
             runCMake -DENABLE_ASAN=1 -DENABLE_ICD=0 -DENABLE_LOADABLE_DRIVERS=0 -DDEVELOPER_MODE=ON
           elif [ "${{ matrix.config }}" == "tsan" ]; then
+            export BUILD_FLAGS="-O1 -ggdb -fno-omit-frame-pointer -march=native -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
             runCMake -DENABLE_TSAN=1 -DENABLE_ICD=0 -DENABLE_LOADABLE_DRIVERS=0 -DDEVELOPER_MODE=ON -DENABLE_PRINTF_IMMEDIATE_FLUSH=OFF
           elif [ "${{ matrix.config }}" == "ubsan" ]; then
+            export BUILD_FLAGS="-O1 -ggdb -fno-omit-frame-pointer -march=native -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
             runCMake -DENABLE_UBSAN=1 -DENABLE_LATEST_CXX_STD=ON -DENABLE_ICD=0 -DDEVELOPER_MODE=ON -DENABLE_LOADABLE_DRIVERS=0
           else
             echo "Unknown configuration" && exit 1
@@ -113,7 +123,6 @@ jobs:
 
       - name: Build Tier1 Examples
         id: build_tier1_examples
-        # occasionally git timeouts on git clone of the examples
         timeout-minutes: 90
         if: ${{ matrix.config == 'tier1' }}
         run: |
@@ -122,14 +131,23 @@ jobs:
           # currently broken
           #cd ${{ github.workspace }}/build/examples/PyOpenCL && make -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh) PyOpenCL
           cd ${{ github.workspace }}/build/examples/IntelSVM && make -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh) IntelSVM
+          if [ "${{ matrix.llvm }}" != "21"  ]; then
+            cd ${{ github.workspace }}/build/examples/UnitCL && make -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh) UnitCL
+          fi
 
-      - name: Build chipStar Examples
-        id: build_chipstar_examples
-        # occasionally git timeouts on git clone of the examples
+      - name: Build chipStar
+        id: build_chipstar
         timeout-minutes: 90
         if: ${{ matrix.config == 'chipstar' }}
         run: |
           cd ${{ github.workspace }}/build/examples/chipStar && make -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh) chipStar
+
+      - name: Build OpenVX-CTS
+        id: build_openvx_cts
+        timeout-minutes: 90
+        if: ${{ matrix.config == 'openvx' }}
+        run: |
+          cd ${{ github.workspace }}/build/examples/OpenVX_CTS && make -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh) OpenVX_CTS
 
       - name: Get CMake version
         id: cmake_version
@@ -141,16 +159,19 @@ jobs:
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
         with:
           path: ${{ github.workspace }}/build/Testing/Temporary/CTestCostData.txt
-          key: ctest-cache-${{ steps.cmake_version.outputs.version }}-${{ runner.name }}-${{ matrix.config }}
+          key: ctest-cache-${{ steps.cmake_version.outputs.version }}-${{ runner.name }}-${{ matrix.config }}-${{ github.run_id }}
+          restore-keys: ctest-cache-${{ steps.cmake_version.outputs.version }}-${{ runner.name }}-${{ matrix.config }}
 
       - name: Run Tests
         env:
           POCL_CACHE_DIR: "${{ runner.temp }}/GH_POCL_CACHE"
+          CL_PLATFORM_NAME: "Portable"
+          CL_DEVICE_TYPE: "cpu"
         id: ctest
         timeout-minutes: 120
         run: |
           runCTest() {
-            cd ${{ github.workspace }}/build &&  ctest -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh) $CTEST_FLAGS "$@"
+            cd ${{ github.workspace }}/build && ${{ github.workspace }}/tools/scripts/run_cpu_tests -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh) $CTEST_FLAGS "$@"
           }
           rm -rf ${{ env.POCL_CACHE_DIR }}
           # hardcoded path in test_compiler / execute_after_included_header_link
@@ -159,15 +180,21 @@ jobs:
           if [ "${{ matrix.config }}" == "cts_spirv" ]; then
             runCTest -L conformance_suite_micro_spirv
           elif [ "${{ matrix.config }}" == "tier1" ]; then
-            runCTest -L "amdsdk_30|piglit|PyOpenCL|conformance_suite_micro_main|IntelSVM"
+            runCTest -L "amdsdk_30|piglit|PyOpenCL|conformance_suite_micro_main|IntelSVM|UnitCL"
           elif [ "${{ matrix.config }}" == "chipstar" ]; then
             runCTest -L chipStar
+          elif [ "${{ matrix.config }}" == "openvx" ]; then
+            runCTest -L openvx
           elif [ "${{ matrix.config }}" == "asan" ]; then
-            runCTest -L "runtime|asan"
+          # test_large_buf consumes too much memory for the smaller bots
+            runCTest -R runtime -E test_large_buf
           elif [ "${{ matrix.config }}" == "tsan" ]; then
-            runCTest -L "cpu|tsan"
+          # thread sanitizer does not support C11 <threads.h>
+          # implementation of threading, only pthreads.
+          # issue: https://github.com/google/sanitizers/issues/1603
+            runCTest -E 'test_large_buf|clSetEventCallback'
           elif [ "${{ matrix.config }}" == "ubsan" ]; then
-            runCTest -L "cpu|ubsan"
+            runCTest -E test_large_buf
           else
             echo "Unknown configuration" && exit 1
           fi

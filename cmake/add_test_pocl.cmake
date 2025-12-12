@@ -2,7 +2,7 @@
 #   CMake build system files - add_test_pocl() etc. test wrappers
 #
 #   Copyright (c) 2014-2017 pocl developers
-#                 2024 Pekka Jääskeläinen / Intel Finland Oy
+#                 2024-2025 Pekka Jääskeläinen / Intel Finland Oy
 #
 #   Permission is hereby granted, free of charge, to any person obtaining a copy
 #   of this software and associated documentation files (the "Software"), to deal
@@ -34,13 +34,24 @@ include(CMakeParseArguments)
 #
 # If LLVM_FILECHECK is set to an existing FileCheck file, an additional test
 # will be added that runs the test with the LLVM IR tester script using the
-# loopvec method."
-
+# loopvec method.
+#
+# If ONLY_FILECHECK is set to 1, the test is only added as an LLVM IR filecheck
+# which runs the program and validates the parallel.bc IR. Otherwrise, if LLVM_FILECHECK
+# is given, the execution test is added also separately.
+#
+# LABELS can be used to add labels as a semicolon separated list.
+# By default no labels are added and the test is expected to pass with host CPUs.
+# Use tags such as cpu_fail, mingw_fail, win_fail to mark tests that are expected
+# to fail on targets/platforms where they are expected to pass by default.
+#
+# WORKITEM_HANDLER can be set to a list of WG handlers to test with. Otherwise,
+# "loopvec" and "cbs" are tested.
 function(add_test_pocl)
 
   set(options SORT_OUTPUT)
   set(oneValueArgs EXPECTED_OUTPUT NAME WORKING_DIRECTORY LLVM_FILECHECK ONLY_FILECHECK ENVIRONMENT)
-  set(multiValueArgs COMMAND WORKITEM_HANDLER)
+  set(multiValueArgs COMMAND WORKITEM_HANDLER LABELS)
   cmake_parse_arguments(POCL_TEST "${options}" "${oneValueArgs}"
                         "${multiValueArgs}" ${ARGN})
   if(POCL_TEST_WORKITEM_HANDLER)
@@ -48,6 +59,7 @@ function(add_test_pocl)
   else()
     set(VARIANTS "loopvec" "cbs")
   endif()
+
   list(LENGTH VARIANTS VARIANTS_COUNT)
 
   foreach(VARIANT ${VARIANTS})
@@ -58,13 +70,21 @@ function(add_test_pocl)
     endif()
     unset(RUN_CMD)
 
+    set(POCL_TEST_DIR "${CMAKE_CURRENT_BINARY_DIR}")
+    set(POCLBIN_DIR "${CMAKE_BINARY_DIR}/bin")
+    get_property(is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+    if(is_multi_config)
+      set(POCL_TEST_DIR "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
+      set(POCLBIN_DIR "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")
+    endif()
+
     foreach(LOOPVAR ${POCL_TEST_COMMAND})
       if(NOT RUN_CMD)
         # Special command name expansion.
         if(${LOOPVAR} STREQUAL "poclcc")
-          set(RUN_CMD "${CMAKE_BINARY_DIR}/bin/${LOOPVAR}")
+          set(RUN_CMD "${POCLBIN_DIR}/poclcc")
         else()
-          set(RUN_CMD "${CMAKE_CURRENT_BINARY_DIR}/${LOOPVAR}")
+          set(RUN_CMD "${POCL_TEST_DIR}/${LOOPVAR}")
         endif()
       else()
         set(RUN_CMD "${RUN_CMD}####${LOOPVAR}")
@@ -91,7 +111,7 @@ function(add_test_pocl)
     endif()
     if(POCL_TEST_SORT_OUTPUT)
       list(APPEND POCL_TEST_ARGLIST "-Dsort_output=1")
-      endif()
+    endif()
     list(APPEND POCL_TEST_ARGLIST "-P" "${CMAKE_SOURCE_DIR}/cmake/run_test.cmake")
 
     if(NOT POCL_TEST_ONLY_FILECHECK)
@@ -111,7 +131,11 @@ function(add_test_pocl)
 
       set_tests_properties("${POCL_VARIANT_TEST_NAME}" PROPERTIES
         ENVIRONMENT POCL_WORK_GROUP_METHOD=${VARIANT})
+
+      set_tests_properties("${POCL_VARIANT_TEST_NAME}" PROPERTIES
+        LABELS "${POCL_TEST_LABELS}")
     endif()
+
 
     if(ENABLE_LLVM_FILECHECKS AND POCL_TEST_LLVM_FILECHECK)
       set(RUN_CMD "${CMAKE_SOURCE_DIR}/tools/scripts/run-and-check-llvm-ir####${LLVM_FILECHECK_BIN}####${LLVM_DIS_BIN}####${CMAKE_CURRENT_SOURCE_DIR}/${POCL_TEST_LLVM_FILECHECK}####${RUN_CMD}")
@@ -131,7 +155,7 @@ function(add_test_pocl)
                           PASS_REGULAR_EXPRESSION "OK"
                           FAIL_REGULAR_EXPRESSION "FAIL"
                           ENVIRONMENT "POCL_WORK_GROUP_METHOD=${VARIANT};${POCL_TEST_ENVIRONMENT}"
-                          LABELS "cpu"
+                          LABELS "${POCL_TEST_LABELS}"
                           DEPENDS "pocl_version_check")
 
     endif()

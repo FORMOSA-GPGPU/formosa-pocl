@@ -38,6 +38,7 @@
 #include "pocl_mem_management.h"
 #include "pocl_runtime_config.h"
 #include "pocl_tensor_util.h"
+#include "spirv_queries.h"
 #include "topology/pocl_topology.h"
 #include "utlist.h"
 
@@ -314,15 +315,22 @@ pocl_cpu_init_common (cl_device_id device)
 
 #ifdef HOST_CPU_ENABLE_SPIRV
   device->supported_spirv_extensions = "+SPV_KHR_no_integer_wrap_decoration"
+                                       ",+SPV_KHR_expect_assume"
                                        ",+SPV_INTEL_fp_fast_math_mode"
                                        ",+SPV_EXT_shader_atomic_float_add"
+                                       ",+SPV_EXT_shader_atomic_float_min_max"
+                                       ",+SPV_INTEL_unstructured_loop_controls"
+                                       ",+SPV_INTEL_arbitrary_precision_integers"
                                        ",+SPV_INTEL_memory_access_aliasing"
+#ifndef ENABLE_CONFORMANCE
+                                       ",+SPV_INTEL_subgroups"
+#endif
                                        ",+SPV_INTEL_inline_assembly";
 
 #if LLVM_MAJOR >= 20
   device->supported_spir_v_versions
     = "SPIR-V_1.5 SPIR-V_1.4 SPIR-V_1.3 SPIR-V_1.2 SPIR-V_1.1 SPIR-V_1.0";
-#elif LLVM_MAJOR >= 19
+#elif LLVM_MAJOR >= 18
   device->supported_spir_v_versions
     = "SPIR-V_1.4 SPIR-V_1.3 SPIR-V_1.2 SPIR-V_1.1 SPIR-V_1.0";
 #else
@@ -436,6 +444,7 @@ pocl_cpu_init_common (cl_device_id device)
   pocl_setup_builtin_kernels_with_version (device);
 
   pocl_setup_ils_with_version (device);
+  pocl_setup_spirv_queries (device);
 
   device->on_host_queue_props
       = CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE | CL_QUEUE_PROFILING_ENABLE;
@@ -1000,7 +1009,7 @@ tensor_get_blas_stride_in_elements (const cl_tensor_desc_exp *A, unsigned Dim)
     {
       const cl_tensor_layout_blas_exp *BL = A->layout;
       cl_tensor_stride_exp stride = 1;
-      for (unsigned i = 0; i < Dim; i++)
+      for (unsigned i = 0; i <= Dim; i++)
         {
           assert (A->shape[BL->leading_dims[i]]);
           stride *= A->shape[BL->leading_dims[i]];
@@ -1265,3 +1274,14 @@ pocl_cpu_execute_dbk (cl_program program,
       }
     }
 }
+
+#ifdef CPU_USE_LLD_LINK_WIN32
+int
+pocl_cpu_finalize_binary (cl_device_id dev,
+                          const char *output_binary,
+                          const char *input_binary)
+{
+  POCL_MSG_PRINT_LLVM ("Invoking lld-link through library API\n");
+  return pocl_invoke_lld_link_win32 (dev, input_binary, output_binary);
+}
+#endif

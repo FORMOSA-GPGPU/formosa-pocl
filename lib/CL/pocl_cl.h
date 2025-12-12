@@ -59,6 +59,7 @@
 #  include "pocl_icd.h"
 #endif
 
+#include "pocl_raw_ptr_set.h"
 
 #include <CL/cl_egl.h>
 
@@ -224,14 +225,15 @@ extern pocl_obj_id_t last_object_id;
 
 #ifdef BUILD_ICD
 /* Most (all?) object must also initialize the ICD field */
-#  define POCL_INIT_OBJECT(__OBJ__)                \
-    do {                                           \
-      POCL_INIT_OBJECT_NO_ICD(__OBJ__);            \
-      POCL_INIT_ICD_OBJECT(__OBJ__);               \
-    } while (0)
+#define POCL_INIT_OBJECT(__OBJ__, __PARENT__)                                 \
+  do                                                                          \
+    {                                                                         \
+      POCL_INIT_OBJECT_NO_ICD (__OBJ__);                                      \
+      POCL_INIT_ICD_OBJECT (__OBJ__, __PARENT__);                             \
+    }                                                                         \
+  while (0)
 #else
-#  define POCL_INIT_OBJECT(__OBJ__)                \
-      POCL_INIT_OBJECT_NO_ICD(__OBJ__)
+#define POCL_INIT_OBJECT(__OBJ__, __PARENT__) POCL_INIT_OBJECT_NO_ICD (__OBJ__)
 #endif
 
 #define POCL_DESTROY_OBJECT(__OBJ__)                                          \
@@ -279,8 +281,14 @@ extern pocl_obj_id_t last_object_id;
 
 #  define POname(name) PO##name
 
+#if defined(RENAME_POCL) && !defined(BUILD_ICD)
+#define POdeclsym(name) POCL_EXPORT __typeof__ (name) PO##name;
+#define POdeclsymExport(name) POdeclsym(name)
+#else
 #define POdeclsym(name) __typeof__ (name) PO##name;
 #define POdeclsymExport(name) POCL_EXPORT POdeclsym(name)
+#endif
+
 #  define POCL_ALIAS_OPENCL_SYMBOL(name)                                \
   __typeof__(name) name __attribute__((alias ("PO" #name), visibility("default")));
 
@@ -300,8 +308,39 @@ extern pocl_obj_id_t last_object_id;
 
 /* The ICD compatibility part. This must be first in the objects where
  * it is used (as the ICD loader assumes that)*/
+
+/* This block allows building using outdated headers that do not contain
+ * ICD 2 definitions. */
+#ifndef CL_ICD2_TAG_KHR
+/* Defines a unique tag that signals an implementation is ICD 2 compatible
+ * when set in the clGetPlatformIDs and clUnloadCompiler of the dispatch
+ * table. */
+#if INTPTR_MAX == INT32_MAX
+#define CL_ICD2_TAG_KHR ((intptr_t)0x434C3331)
+#else
+#define CL_ICD2_TAG_KHR ((intptr_t)0x4F50454E434C3331)
+#endif
+
+typedef void *CL_API_CALL clIcdGetFunctionAddressForPlatformKHR_t (
+  cl_platform_id platform, const char *function_name);
+
+typedef clIcdGetFunctionAddressForPlatformKHR_t
+  *clIcdGetFunctionAddressForPlatformKHR_fn;
+
+extern CL_API_ENTRY void *CL_API_CALL clIcdGetFunctionAddressForPlatformKHR (
+  cl_platform_id platform, const char *func_name);
+
+typedef cl_int CL_API_CALL
+clIcdSetPlatformDispatchDataKHR_t (cl_platform_id platform, void *disp_data);
+
+typedef clIcdSetPlatformDispatchDataKHR_t *clIcdSetPlatformDispatchDataKHR_fn;
+
+extern CL_API_ENTRY cl_int CL_API_CALL
+clIcdSetPlatformDispatchDataKHR (cl_platform_id platform, void *dispatch_data);
+#endif /* !defined(CL_ICD2_TAG_KHR) */
+
 #ifdef BUILD_ICD
-#  define POCL_ICD_OBJECT struct _cl_icd_dispatch *dispatch;
+#  define POCL_ICD_OBJECT struct _cl_icd_dispatch *dispatch; void *disp_data;
 #  define POCL_ICD_OBJECT_PLATFORM_ID POCL_ICD_OBJECT
 #  define POsymICD(name) POsym(name)
 #  define POdeclsymICD(name) POdeclsym(name)
@@ -526,8 +565,10 @@ struct pocl_device_ops {
    *                          handle.
    */
   cl_int (*init_discovery) (cl_int (*add_discovered_device) (const char *,
-                                                             unsigned),
-                            unsigned pocl_dev_type_idx);
+                                                             unsigned,
+                                                             cl_platform_id),
+                            unsigned pocl_dev_type_idx,
+                            cl_platform_id pocl_dev_platform);
 
   /****** Memory management APIs. */
 
@@ -785,7 +826,9 @@ struct pocl_device_ops {
    * \param wg_func_obj The binary for the generated work-group function.
    * \return Non-zero on error.
    */
-  int (*finalize_binary) (const char *final_binary, const char *wg_func_obj);
+  int (*finalize_binary) (cl_device_id device,
+                          const char *final_binary,
+                          const char *wg_func_obj);
 
   /** Optional: The driver should free the content of "program->data" here,
    * if it fills it. */
@@ -1348,6 +1391,17 @@ struct _cl_device_id {
   size_t num_opencl_features_with_version;
   const cl_name_version *opencl_features_with_version;
 
+  /* cl_khr_spirv_queries */
+  size_t num_spirv_extended_instruction_sets;
+  const char **spirv_extended_instruction_sets;
+
+  size_t num_spirv_extensions;
+  const char **spirv_extensions;
+
+  size_t num_spirv_capabilities;
+  const cl_uint *spirv_capabilities;
+
+  /* cl_intel_unified_shared_memory */
   cl_device_unified_shared_memory_capabilities_intel host_usm_capabs;
   cl_device_unified_shared_memory_capabilities_intel device_usm_capabs;
   cl_device_unified_shared_memory_capabilities_intel single_shared_usm_capabs;
@@ -1416,46 +1470,6 @@ struct _context_destructor_callback
   context_destructor_callback_t *next;
 };
 
-/**
- * Enumeration for raw buffer/pointer types managed by PoCL.
- */
-typedef enum
-{
-  /* SVM from OpenCL 2.0. */
-  POCL_RAW_PTR_SVM = 0,
-  /* Intel USM extension. */
-  POCL_RAW_PTR_INTEL_USM,
-  /* cl_ext_buffer_device_address. */
-  POCL_RAW_PTR_DEVICE_BUFFER
-} pocl_raw_pointer_kind;
-
-typedef struct _pocl_raw_ptr pocl_raw_ptr;
-struct _pocl_raw_ptr
-{
-  /* The virtual address, if any.  NULL if there's none. */
-  void *vm_ptr;
-  /* The device address, if known. NULL if not. */
-  void *dev_ptr;
-  /* The owner device of the allocation, if any. Should be set to non-null for
-     USM Device. */
-  cl_device_id device;
-
-  size_t size;
-  /* A cl_mem for internal bookkeeping and implicit buffer migration. */
-  cl_mem shadow_cl_mem;
-
-  /* The raw pointer/buffer API used for the allocation. */
-  pocl_raw_pointer_kind kind;
-
-  struct
-  {
-    cl_mem_alloc_flags_intel flags;
-    unsigned alloc_type;
-  } usm_properties;
-
-  struct _pocl_raw_ptr *prev, *next;
-};
-
 struct _cl_context {
   POCL_ICD_OBJECT
   POCL_OBJECT;
@@ -1514,8 +1528,8 @@ struct _cl_context {
   context_destructor_callback_t *destructor_callbacks;
 
   /* List of allocations with raw host-side accessible pointers associated
-     with them (SVM, USM, DEV). */
-  pocl_raw_ptr *raw_ptrs;
+   * with them (SVM, USM, DEV). */
+  pocl_raw_ptr_set *raw_ptrs;
 
   /* list of command queues created for the context.
    * required for clMemBlockingFreeINTEL */

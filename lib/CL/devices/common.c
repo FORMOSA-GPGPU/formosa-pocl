@@ -167,8 +167,8 @@ llvm_codegen (char *output, unsigned device_i, cl_kernel kernel,
     }
   if (error)
     {
-      POCL_MSG_PRINT_GENERAL ("writing parallel.bc failed for kernel %s\n",
-                              kernel->name);
+      POCL_MSG_PRINT_LLVM ("writing parallel.bc failed for kernel %s\n",
+                           kernel->name);
       goto FINISH;
     }
 
@@ -210,10 +210,8 @@ llvm_codegen (char *output, unsigned device_i, cl_kernel kernel,
 
   pocl_cache_kernel_cachedir_path (parallel_bc_dir, program, device_i, kernel,
                                    "", command, specialize);
-
-  size_t dir_len = strlen (parallel_bc_dir);
-  parallel_bc_dir[dir_len] = '/';
-  parallel_bc_dir[dir_len + 1] = 0;
+  strncat (parallel_bc_dir, "/parallel", POCL_MAX_PATHNAME_LENGTH);
+  parallel_bc_dir[POCL_MAX_PATHNAME_LENGTH - 1] = 0;
 
   if (pocl_mk_tempname (tmp_module, parallel_bc_dir, SHARED_LIB_EXT, NULL))
     {
@@ -227,14 +225,15 @@ llvm_codegen (char *output, unsigned device_i, cl_kernel kernel,
                          " for kernel %s is: %s\n",
                          kernel_name, tmp_module);
 
-  POCL_MSG_PRINT_INFO ("Linking final module\n");
+  POCL_MSG_PRINT_LLVM ("Linking final module\n");
 
   /* If the device has a custom linkage/binary generation step, call it
      instead of the default Clang-driven linkage step. It's likely a
      non-host target in that case. */
   if (device->ops->finalize_binary != NULL)
     {
-      error = device->ops->finalize_binary (tmp_module, tmp_objfile);
+      error = device->ops->finalize_binary (program->devices[device_i],
+                                            tmp_module, tmp_objfile);
     }
   else
     {
@@ -700,20 +699,12 @@ pocl_exec_command (_cl_command_node *node)
           {
             void *ptr = cmd->svm_free.svm_pointers[i];
             POCL_LOCK_OBJ (event->context);
-            pocl_raw_ptr *tmp = NULL, *item = NULL;
-            cl_mem shadow_mem = NULL;
-            DL_FOREACH_SAFE (event->context->raw_ptrs, item, tmp)
-            {
-              if (item->vm_ptr == ptr)
-                {
-                  DL_DELETE (event->context->raw_ptrs, item);
-                  break;
-                }
-            }
-            shadow_mem = item->shadow_cl_mem;
-            POCL_UNLOCK_OBJ (event->context);
+            pocl_raw_ptr *item = pocl_raw_ptr_set_lookup_with_vm_ptr (
+              event->context->raw_ptrs, ptr);
+            cl_mem shadow_mem = item->shadow_cl_mem;
             assert (item);
-            POCL_MEM_FREE (item);
+            pocl_raw_ptr_set_erase (event->context->raw_ptrs, item);
+            POCL_UNLOCK_OBJ (event->context);
             POname (clReleaseContext) (event->context);
             if (shadow_mem)
               POname (clReleaseMemObject) (shadow_mem);
@@ -1868,6 +1859,7 @@ static const cl_name_version OPENCL_EXTENSIONS[]
       { CL_MAKE_VERSION (1, 0, 0), "cl_intel_subgroup_local_block_io" },
       { CL_MAKE_VERSION (1, 0, 0), "cl_intel_spirv_subgroups" },
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_spirv_no_integer_wrap_decoration" },
+      { CL_MAKE_VERSION (1, 0, 0), "cl_khr_spirv_queries" },
 
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_byte_addressable_store" },
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_global_int32_base_atomics" },

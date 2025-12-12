@@ -23,7 +23,7 @@
 #
 #=============================================================================
 
-add_compile_options(${OPENCL_CFLAGS} -std=c99)
+add_compile_options(${OPENCL_CFLAGS})
 
 add_executable("matrix1" matrix1.c matrix1.cl)
 target_link_libraries("matrix1" ${POCLU_LINK_OPTIONS})
@@ -39,7 +39,7 @@ set_tests_properties( "examples/matrix1" "examples/matrix1_local" ${SPIREX}
     PASS_REGULAR_EXPRESSION "OK"
     PROCESSORS 1
     SKIP_REGULAR_EXPRESSION "SKIPPED"
-    LABELS "matrix;cpu;level0"
+    LABELS "matrix;level0"
     DEPENDS "pocl_version_check")
 
 # devices which don't support SPIR
@@ -59,6 +59,6 @@ set_tests_properties( "examples/matrix1_poclbin"
     PASS_REGULAR_EXPRESSION "OK"
     SKIP_REGULAR_EXPRESSION "SKIPPED"
     PROCESSORS 1
-    LABELS "poclbin;cpu"
+    LABELS "poclbin"
     DEPENDS "pocl_version_check"
     ENVIRONMENT "POCL_KERNEL_CACHE=0")

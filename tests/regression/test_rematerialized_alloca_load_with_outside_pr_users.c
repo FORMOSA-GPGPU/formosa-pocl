@@ -60,14 +60,14 @@ list_platforms ()
   err = clGetPlatformIDs (num_platforms, platforms, NULL);
   CHECK_ERROR (err);
 
-  printf ("Available platforms:\n");
+  // printf ("Available platforms:\n");
   for (cl_uint i = 0; i < num_platforms; i++)
     {
       char platform_name[128];
       err = clGetPlatformInfo (platforms[i], CL_PLATFORM_NAME,
                                sizeof (platform_name), platform_name, NULL);
       CHECK_ERROR (err);
-      printf ("%d: %s\n", i, platform_name);
+      // printf ("%d: %s\n", i, platform_name);
     }
 
   free (platforms);
@@ -118,18 +118,22 @@ main (int argc, char **argv)
   err = clGetPlatformInfo (platform, CL_PLATFORM_NAME, sizeof (platform_name),
                            platform_name, NULL);
   CHECK_ERROR (err);
-  printf ("Using platform %d: %s\n", platform_index, platform_name);
 
   // Get device
   err = clGetDeviceIDs (platform, CL_DEVICE_TYPE_ALL, 1, &device, NULL);
   CHECK_ERROR (err);
+
+  if (!poclu_device_supports_il (device, "SPIR-V_1.0"))
+    {
+      printf ("SKIP: The test requires support for SPIR-V 1.0\n");
+      exit (77);
+    }
 
   // Get device name
   char device_name[128];
   err = clGetDeviceInfo (device, CL_DEVICE_NAME, sizeof (device_name),
                          device_name, NULL);
   CHECK_ERROR (err);
-  printf ("Device: %s\n", device_name);
 
   // Rest of the code remains the same...
   cl_context context = clCreateContext (NULL, 1, &device, NULL, NULL, &err);
@@ -205,12 +209,10 @@ main (int argc, char **argv)
   size_t global_size = 16;
   size_t local_size = 16;
 
-  printf ("Launching kernel\n");
   err = clEnqueueNDRangeKernel (queue, kernel, 1, NULL, &global_size,
                                 &local_size, 0, NULL, NULL);
   CHECK_ERROR (err);
 
-  printf ("Waiting for completion\n");
   err = clFinish (queue);
   CHECK_ERROR (err);
 
@@ -218,10 +220,10 @@ main (int argc, char **argv)
   err = clEnqueueSVMMap (queue, CL_TRUE, CL_MAP_READ, A.ptr,
                          sizeof (float) * A.maxsize, 0, NULL, NULL);
   CHECK_ERROR (err);
-  printf ("Results:\n");
+
   for (size_t i = 0; i < A.len; i++)
     {
-      printf ("%ld: %ld\n", i, A.ptr[i]);
+      printf ("%zu: %zu\n", i, (size_t)A.ptr[i]);
     }
 
   // Cleanup

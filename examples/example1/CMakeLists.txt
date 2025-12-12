@@ -52,7 +52,7 @@ set_tests_properties( "examples/example1_dot_product" ${SPIREX}
     ${PROPS}
     PROCESSORS 1
     # devices which always support SPIR
-    LABELS "cuda;level0"
+    LABELS "level0"
     DEPENDS "pocl_version_check")
 
 # devices which don't support SPIR
@@ -61,6 +61,10 @@ set_property(TEST "examples/example1_dot_product"
 
 if(SPIREX AND HOST_CPU_ENABLE_SPIRV)
   set_property(TEST ${SPIREX} APPEND PROPERTY LABELS "cpu")
+endif()
+
+if(SPIREX AND NOT HOST_CPU_ENABLE_SPIRV)
+  set_property(TEST ${SPIREX} APPEND PROPERTY LABELS "cpu_fail")
 endif()
 
 if (ENABLE_TCE)
@@ -85,7 +89,7 @@ set_tests_properties( "examples/example1_poclbin"
     ${PROPS}
     PROCESSORS 1
     ENVIRONMENT "POCL_KERNEL_CACHE=0;POCL_WORK_GROUP_SPECIALIZATION=0"
-    LABELS "poclbin;cpu;level0"
+    LABELS "poclbin;level0"
     DEPENDS "pocl_version_check")
 
 if(ENABLE_REMOTE_CLIENT AND ENABLE_REMOTE_SERVER AND ENABLE_HOST_CPU_DEVICES)

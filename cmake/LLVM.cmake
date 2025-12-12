@@ -39,13 +39,11 @@ else()
     NAMES
       "llvmtce-config"
       "llvm-config"
+      "llvm-config-mp-21.0" "llvm-config-mp-21" "llvm-config-21" "llvm-config210"
       "llvm-config-mp-20.0" "llvm-config-mp-20" "llvm-config-20" "llvm-config200"
       "llvm-config-mp-19.0" "llvm-config-mp-19" "llvm-config-19" "llvm-config190"
       "llvm-config-mp-18.0" "llvm-config-mp-18" "llvm-config-18" "llvm-config180"
       "llvm-config-mp-17.0" "llvm-config-mp-17" "llvm-config-17" "llvm-config170"
-      "llvm-config-mp-16.0" "llvm-config-mp-16" "llvm-config-16" "llvm-config160"
-      "llvm-config-mp-15.0" "llvm-config-mp-15" "llvm-config-15" "llvm-config150"
-      "llvm-config-mp-14.0" "llvm-config-mp-14" "llvm-config-14" "llvm-config140"
       "llvm-config"
     DOC "llvm-config executable")
 endif()
@@ -55,9 +53,6 @@ if(NOT LLVM_CONFIG)
   message(FATAL_ERROR "llvm-config not found !")
 else()
   file(TO_CMAKE_PATH "${LLVM_CONFIG}" LLVM_CONFIG)
-  if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.19)
-    file(REAL_PATH "${LLVM_CONFIG}"  LLVM_CONFIG)
-  endif()
   message(STATUS "Using llvm-config: ${LLVM_CONFIG}")
   if(LLVM_CONFIG MATCHES "llvmtce-config${CMAKE_EXECUTABLE_SUFFIX}$")
     set(LLVM_BINARY_SUFFIX "")
@@ -67,6 +62,13 @@ else()
     set(LLVM_BINARY_SUFFIX "${CMAKE_MATCH_1}")
   else()
     message(WARNING "Cannot determine llvm binary suffix from ${LLVM_CONFIG}")
+  endif()
+  if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.19)
+    # Convert to real path only here, otherwise we fail to detect
+    # the binary suffix when symlinked to a non-suffix binary, like
+    # with the LLVM's Debian/Ubuntu packages.
+    # /usr/bin/llvm-config-21 -> ../lib/llvm-21/bin/llvm-config
+    file(REAL_PATH "${LLVM_CONFIG}"  LLVM_CONFIG)
   endif()
   message(STATUS "LLVM binaries suffix : ${LLVM_BINARY_SUFFIX}")
 endif()
@@ -103,8 +105,8 @@ string(REGEX REPLACE "([0-9]+)\\.([0-9]+).*" "\\1.\\2" LLVM_VERSION "${LLVM_VERS
 message(STATUS "LLVM_VERSION: ${LLVM_VERSION}")
 
 # required for sources..
-if((LLVM_VERSION_MAJOR LESS 14) OR (LLVM_VERSION_MAJOR GREATER 20))
-  message(FATAL_ERROR "LLVM version between 14.0 and 20.0 required, found: ${LLVM_VERSION_MAJOR}")
+if((LLVM_VERSION_MAJOR LESS 17) OR (LLVM_VERSION_MAJOR GREATER 21))
+  message(FATAL_ERROR "LLVM version between 17.0 and 21.0 required, found: ${LLVM_VERSION_MAJOR}")
 endif()
 
 string(REPLACE "." ";" LLVM_VERSION_PARSED "${LLVM_VERSION}")
@@ -133,12 +135,6 @@ replace_llvm_prefix_cmake(LLVM_INCLUDE_DIRS)
 run_llvm_config(LLVM_CMAKEDIR --cmakedir)
 replace_llvm_prefix_cmake(LLVM_CMAKEDIR)
 
-if(LLVM_VERSION_MAJOR LESS 16)
-  run_llvm_config(LLVM_SRC_ROOT --src-root)
-  run_llvm_config(LLVM_OBJ_ROOT --obj-root)
-endif()
-
-replace_llvm_prefix_cmake(LLVM_OBJ_ROOT)
 run_llvm_config(LLVM_ALL_TARGETS --targets-built)
 if (NOT DEFINED LLVM_HOST_TARGET)
   run_llvm_config(LLVM_HOST_TARGET --host-target)
@@ -168,6 +164,13 @@ endif()
 # - pocl doesn't compile with '-pedantic'
 #LLVM_CXX_FLAGS=$($LLVM_CONFIG --cxxflags | sed -e 's/ -pedantic / /g')
 string(REPLACE " -pedantic" "" LLVM_CXXFLAGS "${LLVM_CXXFLAGS}")
+
+# Convert the LLVM's include path to -idirafter so the headers are
+# treated as system headers and GCC won't emit warnings caused by them.
+# note that using -isystem here breaks the compilation if the LLVM headers
+# are located in a system directory (/usr/include), for details:
+# https://stackoverflow.com/questions/37218953/isystem-on-a-system-include-directory-causes-errors
+string(REPLACE "-I" "-idirafter" LLVM_CXXFLAGS "${LLVM_CXXFLAGS}")
 
 #llvm-config clutters CXXFLAGS with a lot of -W<whatever> flags.
 #(They are not needed - we want to use -Wall anyways)
@@ -225,19 +228,43 @@ foreach(LIBFLAG ${LLVM_LIBS})
   list(APPEND LLVM_LIBNAMES "${LIB_NAME}")
 endforeach()
 
+set(LLVM_LINK_FILES)
+set(LLVM_LINK_DIRS)
 foreach(LIBNAME ${LLVM_LIBNAMES})
   if(EXISTS ${LIBNAME})
-    list(APPEND LLVM_LIBFILES "${LIBNAME}")
+    set(L_LIBFILE_${LIBNAME} ${LIBNAME})
   else()
     find_library(L_LIBFILE_${LIBNAME} NAMES "${LIBNAME}" HINTS "${LLVM_LIBDIR}")
     if(NOT L_LIBFILE_${LIBNAME})
       message(FATAL_ERROR "Could not find LLVM library ${LIBNAME}, perhaps wrong setting of STATIC_LLVM ?")
     endif()
-    list(APPEND LLVM_LIBFILES "${L_LIBFILE_${LIBNAME}}")
+  endif()
+
+  if(APPLE AND STATIC_LLVM AND VISIBILITY_HIDDEN)
+    # -hidden-l doesn't accept paths, so split into name + directory
+    get_filename_component(LIB_NAME ${L_LIBFILE_${LIBNAME}} NAME_WE)
+    string(REPLACE "lib" "" LIB_BASE ${LIB_NAME})
+    list(APPEND LLVM_LINK_LIBRARIES "-Wl,-hidden-l${LIB_BASE}")
+    get_filename_component(LIB_DIR ${L_LIBFILE_${LIBNAME}} DIRECTORY)
+    list(APPEND LLVM_LINK_DIRECTORIES ${LIB_DIR})
+  else()
+    list(APPEND LLVM_LINK_LIBRARIES ${L_LIBFILE_${LIBNAME}})
   endif()
 endforeach()
 
-set(POCL_LLVM_LIBS ${LLVM_LIBFILES})
+# if enabled, CPU driver on Windows will use lld-link (invoked via library API)
+# to link final kernel object files, instead of the default Clang driver linking.
+set(CPU_USE_LLD_LINK_WIN32 OFF)
+# TODO WIN32 or MSVC ? does this work with MINGW ?
+if(ENABLE_HOST_CPU_DEVICES AND MSVC AND ENABLE_LLVM AND STATIC_LLVM AND X86)
+  find_library(LIB_LLD_COFF NAMES "lldCOFF" HINTS "${LLVM_LIBDIR}")
+  find_library(LIB_LLD_COMMON NAMES "lldCommon" HINTS "${LLVM_LIBDIR}")
+  if(LIB_LLD_COFF AND LIB_LLD_COMMON)
+    message(STATUS "Using lld-link via library to link kernels for CPU devices")
+    set(CPU_USE_LLD_LINK_WIN32 ON)
+	list(APPEND LLVM_LINK_LIBRARIES ${LIB_LLD_COFF} ${LIB_LLD_COMMON})
+  endif()
+endif()
 
 ####################################################################
 
@@ -259,10 +286,7 @@ if(STATIC_LLVM)
   set(CLANG_LIBNAMES clangCodeGen clangFrontendTool clangFrontend clangDriver clangSerialization
       clangParse clangSema clangRewrite clangRewriteFrontend
       clangStaticAnalyzerFrontend clangStaticAnalyzerCheckers
-      clangStaticAnalyzerCore clangAnalysis clangEdit clangAST clangASTMatchers clangLex clangBasic)
-  if(LLVM_VERSION_MAJOR GREATER 14)
-     list(APPEND CLANG_LIBNAMES clangSupport)
-  endif()
+      clangStaticAnalyzerCore clangAnalysis clangEdit clangAST clangASTMatchers clangLex clangSupport clangBasic)
   # must come after clangFrontend
   if(LLVM_VERSION_MAJOR GREATER 17)
      list(INSERT CLANG_LIBNAMES 4 clangAPINotes)
@@ -277,12 +301,24 @@ else()
   endif()
 endif()
 
+set(CLANG_LINK_LIBRARIES)
+set(CLANG_LINK_DIRECTORIES)
 foreach(LIBNAME ${CLANG_LIBNAMES})
   find_library(C_LIBFILE_${LIBNAME} NAMES "${LIBNAME}" HINTS "${LLVM_LIBDIR}")
   if(NOT C_LIBFILE_${LIBNAME})
     message(FATAL_ERROR "Could not find Clang library ${LIBNAME}, perhaps wrong setting of STATIC_LLVM ?")
   endif()
-  list(APPEND CLANG_LIBFILES "${C_LIBFILE_${LIBNAME}}")
+
+  if(APPLE AND STATIC_LLVM AND VISIBILITY_HIDDEN)
+    # -hidden-l doesn't accept paths, so split into name + directory
+    get_filename_component(LIB_NAME ${C_LIBFILE_${LIBNAME}} NAME_WE)
+    string(REPLACE "lib" "" LIB_BASE ${LIB_NAME})
+    list(APPEND CLANG_LINK_LIBRARIES "-Wl,-hidden-l${LIB_BASE}")
+    get_filename_component(LIB_DIR ${C_LIBFILE_${LIBNAME}} DIRECTORY)
+    list(APPEND CLANG_LINK_DIRECTORIES ${LIB_DIR})
+  else()
+    list(APPEND CLANG_LINK_LIBRARIES ${C_LIBFILE_${LIBNAME}})
+  endif()
 endforeach()
 
 ####################################################################
@@ -290,6 +326,13 @@ endforeach()
 macro(find_program_or_die OUTPUT_VAR PROG_NAME DOCSTRING)
   find_program(${OUTPUT_VAR}
     NAMES "${PROG_NAME}${LLVM_BINARY_SUFFIX}${CMAKE_EXECUTABLE_SUFFIX}"
+    # At least the LLVM v21 .deb doesn't have a clang++-21 under
+    # /usr/lib/llvm-21/bin, but only 'clang++', 'clang' and
+    # clang-21 symlink. Thus when looking only in the install prefix,
+    # we don't find the clang++-21 symlink that is only in /usr/bin.
+    # So, look also for the non-suffixed ones since we are searching
+    # in the install/config dir.
+    "${PROG_NAME}${CMAKE_EXECUTABLE_SUFFIX}"
     HINTS "${LLVM_BINDIR}" "${LLVM_CONFIG_LOCATION}"
     DOC "${DOCSTRING}"
     NO_DEFAULT_PATH
@@ -303,9 +346,9 @@ macro(find_program_or_die OUTPUT_VAR PROG_NAME DOCSTRING)
   endif()
 endmacro()
 
-find_program_or_die( CLANG "clang" "clang binary")
+find_program_or_die(CLANG "clang" "clang binary")
 execute_process(COMMAND "${CLANG}" "--version" OUTPUT_VARIABLE LLVM_CLANG_VERSION RESULT_VARIABLE CLANG_RES)
-find_program_or_die( CLANGXX "clang++" "clang++ binary")
+find_program_or_die(CLANGXX "clang++" "clang++ binary")
 execute_process(COMMAND "${CLANGXX}" "--version" OUTPUT_VARIABLE LLVM_CLANGXX_VERSION RESULT_VARIABLE CLANGXX_RES)
 if(CLANGXX_RES OR CLANG_RES)
   message(FATAL_ERROR "Failed running clang/clang++ --version")
@@ -320,15 +363,31 @@ find_program_or_die(LLVM_DIS     "llvm-dis"     "LLVM disassembler")
 find_program_or_die(LLVM_OBJDUMP "llvm-objdump" "LLVM object dumper")
 
 if(ENABLE_LLVM_FILECHECKS)
+
   if(IS_ABSOLUTE "${LLVM_FILECHECK_BIN}" AND EXISTS "${LLVM_FILECHECK_BIN}")
     message(STATUS "LLVM IR checks enabled using ${LLVM_FILECHECK_BIN}.")
   else()
-    find_program_or_die(LLVM_FILECHECK_BIN "FileCheck" "LLVM FileCheck (not installed by default)")
+    message(STATUS "Looking for FileCheck${LLVM_BINARY_SUFFIX}${CMAKE_EXECUTABLE_SUFFIX} or FileCheck")
+    find_program(LLVM_FILECHECK_BIN
+      NAMES "FileCheck${LLVM_BINARY_SUFFIX}${CMAKE_EXECUTABLE_SUFFIX}" "FileCheck"
+      DOC "LLVM FileCheck (not installed by default)")
   endif()
+
   if(IS_ABSOLUTE "${LLVM_DIS_BIN}" AND EXISTS "${LLVM_DIS_BIN}")
     message(STATUS "LLVM IR checks disassembled using ${LLVM_DIS_BIN}.")
   else()
-    find_program_or_die(LLVM_DIS_BIN "llvm-dis" "LLVM IR disassemble")
+    find_program(LLVM_DIS_BIN
+      NAMES "llvm-dis${LLVM_BINARY_SUFFIX}${CMAKE_EXECUTABLE_SUFFIX}"
+      "llvm-dis"
+      DOC "LLVM IR disassemble")
+  endif()
+  if(NOT LLVM_FILECHECK_BIN)
+    message(STATUS "LLVM IR checks not enabled, FileCheck not found.")
+    set(ENABLE_LLVM_FILECHECKS OFF)
+  endif()
+  if(NOT LLVM_DIS_BIN)
+    message(STATUS "LLVM IR checks not enabled, llvm-dis not found.")
+    set(ENABLE_LLVM_FILECHECKS OFF)
   endif()
 endif()
 
@@ -357,7 +416,7 @@ endif()
 
 find_program(LLVM_SPIRV NAMES "llvm-spirv${LLVM_BINARY_SUFFIX}${CMAKE_EXECUTABLE_SUFFIX}" "llvm-spirv-${LLVM_VERSION_MAJOR}${CMAKE_EXECUTABLE_SUFFIX}" "llvm-spirv${CMAKE_EXECUTABLE_SUFFIX}" HINTS "${LLVM_BINDIR}" "${LLVM_CONFIG_LOCATION}" "${LLVM_PREFIX}" "${LLVM_PREFIX_BIN}" ${LLVM_SPIRV_VAL_OPT})
 
-if(LLVM_SPIRV AND (NOT LLVM_SPIRV_VAL_OPT))
+if(LLVM_SPIRV)
   execute_process(
       COMMAND "${LLVM_SPIRV}" "--version"
       OUTPUT_VARIABLE LLVM_SPIRV_VERSION_VALUE
@@ -371,6 +430,7 @@ if(LLVM_SPIRV AND (NOT LLVM_SPIRV_VAL_OPT))
       endif()
   else()
     unset(LLVM_SPIRV CACHE)
+    unset(LLVM_SPIRV)
   endif()
 endif()
 
@@ -400,15 +460,16 @@ if(NOT LLVM_SPIRV)
   find_library(LLVM_SPIRV_LIB "LLVMSPIRVLib" PATHS "${LLVM_LIBDIR}")
 endif()
 
-if(LLVM_SPIRV_INCLUDEDIR AND LLVM_SPIRV_LIB)
+if(LLVM_SPIRV_INCLUDEDIR AND LLVM_SPIRV_LIB AND (NOT DEFINED HAVE_LLVM_SPIRV_LIB))
   if(UNIX)
     set(LINK_OPTS LINK_OPTIONS "-Wl,-rpath,${LLVM_LIBDIR}")
   else()
     unset(LINK_OPTS)
   endif()
   message(STATUS "found LLVMSPIRV library: ${LLVM_SPIRV_INCLUDEDIR} | ${LLVM_SPIRV_LIB}")
-  set(LLVMSPIRVLIB_MAXVER_FILE "${CMAKE_SOURCE_DIR}/cmake/MaxSPIRVversion.cc")
-  try_run(LIBLLVMSPIRV_MAXVER_RUN_RESULT LIBLLVMSPIRV_MAXVER_COMPILE_RESULT
+  if(NOT LLVM_SPIRV_LIB_MAXVER)
+    set(LLVMSPIRVLIB_MAXVER_FILE "${CMAKE_SOURCE_DIR}/cmake/MaxSPIRVversion.cc")
+    try_run(LIBLLVMSPIRV_MAXVER_RUN_RESULT LIBLLVMSPIRV_MAXVER_COMPILE_RESULT
           "${CMAKE_BINARY_DIR}" "${LLVMSPIRVLIB_MAXVER_FILE}"
           COMPILE_DEFINITIONS ${LLVM_CXXFLAGS}
           CMAKE_FLAGS "-DINCLUDE_DIRECTORIES:STRING=${LLVM_SPIRV_INCLUDEDIR};${LLVM_INCLUDE_DIRS}"
@@ -416,21 +477,23 @@ if(LLVM_SPIRV_INCLUDEDIR AND LLVM_SPIRV_LIB)
           ${LINK_OPTS}
           RUN_OUTPUT_VARIABLE LIBLLVMSPIRV_MAXVER_RUN_OUTPUT
           COMPILE_OUTPUT_VARIABLE LIBLLVMSPIRV_MAXVER_COMP_OUTPUT)
-  if(LIBLLVMSPIRV_MAXVER_COMPILE_RESULT AND (LIBLLVMSPIRV_MAXVER_RUN_RESULT EQUAL 0))
-    message(STATUS "ran libLLVMSPIRV test, result: ${LIBLLVMSPIRV_MAXVER_RUN_OUTPUT}")
-    set(HAVE_LLVM_SPIRV_LIB 1)
-    set(LLVM_SPIRV_LIB_MAXVER ${LIBLLVMSPIRV_MAXVER_RUN_OUTPUT})
-  else()
-    message(STATUS "failed to compile ${LIBLLVMSPIRV_MAXVER_COMPILE_RESULT} / run ${LIBLLVMSPIRV_MAXVER_RUN_RESULT} libLLVMSPIRV test")
-    message(STATUS "compile output: ${LIBLLVMSPIRV_MAXVER_COMP_OUTPUT}")
-    message(STATUS "run output: ${LIBLLVMSPIRV_MAXVER_RUN_OUTPUT}")
-    set(HAVE_LLVM_SPIRV_LIB 0)
-    set(LLVM_SPIRV_LIB_MAXVER 66048) # SPIR-V 1.2
+
+    if(LIBLLVMSPIRV_MAXVER_COMPILE_RESULT AND (LIBLLVMSPIRV_MAXVER_RUN_RESULT EQUAL 0))
+      message(STATUS "ran libLLVMSPIRV test, result: ${LIBLLVMSPIRV_MAXVER_RUN_OUTPUT}")
+      set(HAVE_LLVM_SPIRV_LIB ON CACHE BOOL "have libLLVMSPIRV")
+      set(LLVM_SPIRV_LIB_MAXVER ${LIBLLVMSPIRV_MAXVER_RUN_OUTPUT} CACHE STRING "maximum SPIR-V version supported by libLLVMSPIRV")
+    else()
+      message(STATUS "failed to compile ${LIBLLVMSPIRV_MAXVER_COMPILE_RESULT} / run ${LIBLLVMSPIRV_MAXVER_RUN_RESULT} libLLVMSPIRV test")
+      message(STATUS "compile output: ${LIBLLVMSPIRV_MAXVER_COMP_OUTPUT}")
+      message(STATUS "run output: ${LIBLLVMSPIRV_MAXVER_RUN_OUTPUT}")
+      set(HAVE_LLVM_SPIRV_LIB 0 CACHE BOOL "have libLLVMSPIRV")
+      set(LLVM_SPIRV_LIB_MAXVER 0 CACHE STRING "maximum SPIR-V version supported by libLLVMSPIRV")
+    endif()
   endif()
 else()
   message(STATUS "LLVMSPIRV library not found: ${LLVM_SPIRV_INCLUDEDIR} | ${LLVM_SPIRV_LIB}")
-  set(HAVE_LLVM_SPIRV_LIB 0)
-  set(LLVM_SPIRV_LIB_MAXVER 66048) # SPIR-V 1.2
+  set(HAVE_LLVM_SPIRV_LIB 0 CACHE BOOL "have libLLVMSPIRV")
+  set(LLVM_SPIRV_LIB_MAXVER 0 CACHE STRING "maximum SPIR-V version supported by libLLVMSPIRV")
 endif()
 
 set_expr(HAVE_SPIRV_LINK SPIRV_LINK)
@@ -804,8 +867,8 @@ if(NOT CLANG_LINK_TEST)
 
   try_compile(CLANG_LINK_TEST ${CMAKE_BINARY_DIR} "${CLANG_LINK_TEST_FILENAME}"
               CMAKE_FLAGS "-DINCLUDE_DIRECTORIES:STRING=${LLVM_INCLUDE_DIRS}"
-              CMAKE_FLAGS "-DLINK_DIRECTORIES:STRING=${LLVM_LIBDIR}"
-              LINK_LIBRARIES ${LLVM_LDFLAGS} ${CLANG_LIBFILES} ${LLVM_LIBS}
+              CMAKE_FLAGS "-DLINK_DIRECTORIES:STRING=${CLANG_LINK_DIRECTORIES};${LLVM_LIBDIR}"
+              LINK_LIBRARIES ${LLVM_LDFLAGS} ${CLANG_LINK_LIBRARIES} ${LLVM_LIBS}
               ${LLVM_SYSLIBS}
               COMPILE_DEFINITIONS ${CMAKE_CXX_FLAGS} ${LLVM_CXXFLAGS}
 	      ${CXX_COMPAT_FLAGS} -DLLVM_MAJOR=${LLVM_VERSION_MAJOR}

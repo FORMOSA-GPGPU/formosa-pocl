@@ -25,7 +25,7 @@
 
 add_definitions("-DSRCDIR=\"${CMAKE_CURRENT_SOURCE_DIR}\"")
 
-add_compile_options(${OPENCL_CFLAGS} -std=c99)
+add_compile_options(${OPENCL_CFLAGS})
 
 add_executable("scalarwave" scalarwave.c scalarwave.cl)
 target_link_libraries("scalarwave" ${POCLU_LINK_OPTIONS})
@@ -39,6 +39,6 @@ set_tests_properties( "examples/scalarwave_${VARIANT}"
   PROPERTIES
     COST 3.0
     PROCESSORS 1
-    LABELS "cpu;cuda;hsa-native;level0"
+    LABELS "cuda;hsa-native;level0"
     DEPENDS "pocl_version_check")
 endforeach()

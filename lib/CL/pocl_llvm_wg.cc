@@ -30,11 +30,7 @@
 IGNORE_COMPILER_WARNING("-Wmaybe-uninitialized")
 #include <llvm/ADT/StringRef.h>
 #include <llvm/ADT/Twine.h>
-#if LLVM_MAJOR < 16
-#include <llvm/ADT/Triple.h>
-#else
 #include <llvm/TargetParser/Triple.h>
-#endif
 POP_COMPILER_DIAGS
 IGNORE_COMPILER_WARNING("-Wunused-parameter")
 #include <llvm/Support/Casting.h>
@@ -190,9 +186,7 @@ llvm::Error PoCLModulePassManager::build(std::string PoclPipeline,
   // TODO: Does this affect the loop unroller of the vectorizer as well? We
   // might want to enable it in the default case.
   PTO.LoopUnrolling = false;
-#if LLVM_MAJOR > 16
   PTO.UnifiedLTO = false;
-#endif
   PTO.SLPVectorization = PTO.LoopVectorization = Vectorize = EnableVectorizers;
   OptimizeLevel = OLevel;
   SizeLevel = SLevel;
@@ -827,13 +821,13 @@ int pocl_llvm_extract_kernel_spirv(
 
 #endif // ENABLE_SPIRV
 
-static int pocl_llvm_run_pocl_passes(llvm::Module *Bitcode,
-                                     _cl_command_run *RunCommand, // optional
-                                     llvm::LLVMContext *LLVMContext,
-                                     PoclLLVMContextData *PoclCtx,
-                                     cl_program Program,
-                                     cl_kernel Kernel, // optional
-                                     cl_device_id Device, int Specialize) {
+static int
+pocl_llvm_run_pocl_passes(llvm::Module *Bitcode,
+                          _cl_command_run *RunCommand, // optional
+                          [[maybe_unused]] llvm::LLVMContext *LLVMContext,
+                          PoclLLVMContextData *PoclCtx, cl_program Program,
+                          cl_kernel Kernel, // optional
+                          cl_device_id Device, int Specialize) {
   // Set to true to generate a global offset 0 specialized WG function.
   bool WGAssumeZeroGlobalOffset;
   // If set to true, the next 3 parameters define the local size to specialize
@@ -1366,16 +1360,15 @@ int pocl_llvm_codegen(cl_device_id Device, cl_program Program,
                             Modp, EmitAsm, EmitObj, Output, OutputSize);
 }
 
-void populateModulePM(void *Passes, void *Module, unsigned OptL, unsigned SizeL,
-                      bool Vectorize, TargetMachine *TM) {
+void populateModulePM([[maybe_unused]] void *Passes, void *Module,
+                      unsigned OptL, unsigned SizeL, bool Vectorize,
+                      TargetMachine *TM) {
 
   PipelineTuningOptions PTO;
 
   // Let the loopvec decide when to unroll.
   PTO.LoopUnrolling = false;
-#if LLVM_MAJOR > 16
   PTO.UnifiedLTO = false;
-#endif
   PTO.LoopInterleaving = Vectorize;
   PTO.SLPVectorization = Vectorize;
   PTO.LoopVectorization = Vectorize;

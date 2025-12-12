@@ -32,20 +32,21 @@ env:
 jobs:
   openasip_matrix:
     env:
-      PATH: "/home/LLVM_${{ matrix.llvm }}0/bin:/home/TCE_${{ matrix.llvm }}0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-      LD_LIBRARY_PATH: "/home/TCE_${{ matrix.llvm }}0/lib"
+      PATH: "/opt/LLVMTCE_${{ matrix.llvm }}/bin:/opt/TCE_${{ matrix.llvm }}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      LD_LIBRARY_PATH: "/opt/TCE_${{ matrix.llvm }}/lib"
     name: LLVM ${{ matrix.llvm }} - ${{ matrix.config }}
     runs-on: [self-hosted, linux, x64, openasip]
     strategy:
       fail-fast: false
       matrix:
         # 15 to 17 should work, however 17 currently fails two tests (fp16)
+        # TODO: update to something newer when OpenASIP is updated
         llvm: [17]
         config: [openasip]
 
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
       - name: Load Env vars
         id: load-env
@@ -59,7 +60,7 @@ jobs:
             BUILD_FLAGS="-O1 -march=native -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
             cmake -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DDEVELOPER_MODE=ON \
             -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_FLAGS_RELEASE=$BUILD_FLAGS" "-DCMAKE_CXX_FLAGS_RELEASE=$BUILD_FLAGS" \
-            -DWITH_LLVM_CONFIG=/home/LLVM_${{ matrix.llvm }}0/bin/llvmtce-config \
+            -DWITH_LLVM_CONFIG=/opt/LLVMTCE_${{ matrix.llvm }}/bin/llvmtce-config \
             "$@" -B ${{ github.workspace }}/build ${{ github.workspace }}
           }
 
@@ -89,7 +90,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
       - name: Load Env vars
         id: load-env
@@ -108,7 +109,7 @@ jobs:
 
           rm -rf ${{ github.workspace }}/build
           mkdir ${{ github.workspace }}/build
-          runCMake -DENABLE_VULKAN=1 -DCLSPV_DIR=/home/CLSPV -DENABLE_HOST_CPU_DEVICES=0 -DENABLE_LLVM=0
+          runCMake -DENABLE_VULKAN=1 -DCLSPV_DIR=/opt/CLSPV -DENABLE_HOST_CPU_DEVICES=0 -DENABLE_LLVM=0
 
       - name: Run Build
         id: build
