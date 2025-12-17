@@ -344,8 +344,6 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
 
   // upload kernel to device
   uintptr_t entry_pc = 0, trampoline_pc = 0;
-  uint64_t *completion_signal = malloc(sizeof(uint64_t));
-  *completion_signal = 0;
   if (dd->kernel_buffer == NULL) {
     char sz_program_fsabin[POCL_MAX_PATHNAME_LENGTH];
     err = pocl_fsa_get_elf_name(program, device_i, sz_program_fsabin);
@@ -369,22 +367,22 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   }
 
   // launch kernel execution
+  uintptr_t completion_signal;
   err = fsa_cmd_start_kernel(
       pc->work_dim, pc->local_size, pc->num_groups, pc->global_offset, entry_pc,
       (uintptr_t)device_args_buffer_addr, (uintptr_t)trampoline_pc,
-      (uintptr_t)device_kernel_status_addr, completion_signal);
+      (uintptr_t)device_kernel_status_addr, &completion_signal);
 
   if (err != 0) {
     POCL_ABORT("ERROR (pocl_formosa_run): Kernel launch failed\n");
   }
 
   // wait for the execution to complete
-  err = pocl_fsa_wait_ack(dd, completion_signal);
+  err = pocl_fsa_wait_ack(dd, completion_signal,
+                          (uintptr_t)device_kernel_status_addr);
   if (err != 0) {
     POCL_ABORT("ERROR (pocl_formosa_run): Kernel execution failed\n");
   }
-
-  POCL_MEM_FREE(completion_signal);
 
   // release arguments device buffer
   err = fsa_free((void *)fsa_kargs_buffer.buf_address);

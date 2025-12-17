@@ -35,11 +35,9 @@ void deserialize_kernel_status(const uint8_t *raw, KernelStatus *status) {
       status->code = kKernelUnknownError;
       break;
   }
-  status->ecid = *reinterpret_cast<const uint64_t *>(raw + 8);
-  status->ewid = *reinterpret_cast<const uint64_t *>(raw + 16);
-  status->mcause = *reinterpret_cast<const uint64_t *>(raw + 24);
-  status->mepc = *reinterpret_cast<const uint64_t *>(raw + 32);
-  status->mtval = *reinterpret_cast<const uint64_t *>(raw + 40);
+  status->mcause = *reinterpret_cast<const uint64_t *>(raw + 8);
+  status->mepc = *reinterpret_cast<const uint64_t *>(raw + 16);
+  status->mtval = *reinterpret_cast<const uint64_t *>(raw + 24);
 }
 }  // namespace
 
@@ -142,16 +140,15 @@ int pocl_fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
   return 0;
 }
 
-int pocl_fsa_wait_ack(pocl_formosa_data_t *dd, uint64_t *completion_signal) {
-  if (dd == nullptr || completion_signal == nullptr) return -1;
+int pocl_fsa_wait_ack(pocl_formosa_data_t *dd, uintptr_t completion_signal, uintptr_t device_kernel_status_addr) {
+  if (dd == nullptr || completion_signal == 0) return -1;
   // polling the completion_signal until it is set to non-zero value
   fsa_wait_for_completion(
-      reinterpret_cast<volatile uint64_t *>(completion_signal),
+      completion_signal,
       0);  // blocking wait
 
-  uintptr_t dev_status = *completion_signal;
-  uint8_t status_raw[sizeof(uint64_t) * 6];
-  int err = fsa_copy_from_dev(dev_status, status_raw, sizeof(status_raw));
+  uint8_t status_raw[sizeof(KernelStatus)];
+  int err = fsa_copy_from_dev(device_kernel_status_addr, status_raw, sizeof(status_raw));
   if (err != 0) {
     POCL_MSG_ERR("Failed to read kernel status from device (%d)\n", err);
     return -1;
@@ -169,24 +166,20 @@ int pocl_fsa_wait_ack(pocl_formosa_data_t *dd, uint64_t *completion_signal) {
     case kKernelException:
       POCL_MSG_ERR(
           "\nException occurs:\n"
-          "\tecid:   0x%08lx\n"
-          "\tewid:   0x%08lx\n"
           "\tmcause: 0x%08lx\n"
           "\tmepc:   0x%08lx\n"
           "\tmtval:  0x%08lx\n",
-          status.ecid, status.ewid, status.mcause, status.mepc, status.mtval);
+          status.mcause, status.mepc, status.mtval);
       break;
     default:
       __attribute__((fallthrough));
     case kKernelUnknownError:
       POCL_MSG_ERR(
           "Unknown error occurred in kernel execution\n"
-          "\tecid:   0x%08lx\n"
-          "\tewid:   0x%08lx\n"
           "\tmcause: 0x%08lx\n"
           "\tmepc:   0x%08lx\n"
           "\tmtval:  0x%08lx\n",
-          status.ecid, status.ewid, status.mcause, status.mepc, status.mtval);
+          status.mcause, status.mepc, status.mtval);
   }
 
   return (status.code == kKernelOkay) ? 0 : -1;
