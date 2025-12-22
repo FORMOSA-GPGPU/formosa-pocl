@@ -50,9 +50,17 @@ if(ENABLE_LOADABLE_DRIVERS)
   target_link_libraries(pocl-devices-formosa PRIVATE ${PTHREAD_LIBRARY})
 endif()
 
-set(FORMOSA_PLATFORM "casvp" CACHE STRING "Platform for Formosa device driver, default to casvp")
+set(FORMOSA_PLATFORM "lv" CACHE STRING "Platform for FORMOSA HAL, default to lv")
 message(STATUS "FORMOSA_PLATFORM: ${FORMOSA_PLATFORM}")
-target_link_libraries(pocl-devices-formosa PUBLIC libcomm formosa-driver.${FORMOSA_PLATFORM})
+
+if(CMAKE_BUILD_TYPE STREQUAL Release)
+  find_package(Formosa REQUIRED)
+else()
+  set(ENABLE_PROJECTS hal)
+  add_subdirectory("$ENV{FORMOSA_SOURCE_DIR}" formosa-build)
+endif()
+
+target_link_libraries(pocl-devices-formosa PUBLIC formosa-hal.${FORMOSA_PLATFORM})
 
 target_include_directories(pocl-devices-formosa PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../llvmopencl)
 target_compile_options(pocl-devices-formosa PRIVATE -I${LLVM_INCLUDE_DIRS})

@@ -151,7 +151,7 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   dd->kernel_buffer = NULL;
   formosa_available = CL_TRUE;
 
-  int err = fsa_driver_init();
+  int err = fsa_hal_init();
   if (err != 0) {
     formosa_available = CL_FALSE;
     POCL_ABORT("ERROR (pocl_formosa_init): Driver initialization failed\n");
@@ -166,7 +166,7 @@ cl_int pocl_formosa_uninit(unsigned j, cl_device_id device) {
 
   POCL_DESTROY_LOCK(dd->compile_lock);
   POCL_DESTROY_LOCK(dd->cq_lock);
-  if (fsa_driver_cleanup() != 0) {
+  if (fsa_hal_cleanup() != 0) {
     POCL_ABORT("ERROR (pocl_formosa_uninit): Driver uninitialization failed\n");
   }
   if (dd->kernel_buffer != NULL) {
