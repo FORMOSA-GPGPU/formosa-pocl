@@ -26,8 +26,9 @@
 if(MSVC)
   set_source_files_properties( pocl-formosa.c pocl-formosa.h 
                                PROPERTIES LANGUAGE C )
-  set_source_files_properties( pocl-formosa-util.cc
-                               pocl-formosa-util.h PROPERTIES LANGUAGE CXX )
+  set_source_files_properties( formosa-util.cc formosa-util.h
+                               formosa-llvm-util.cc formosa-llvm-util.h 
+                               PROPERTIES LANGUAGE CXX )
 endif(MSVC)
 
 # this is required, because we're compiling the C++ files of this directory
@@ -35,25 +36,31 @@ endif(MSVC)
 # C++ standard, which may be in conflict with pocl's default C++ standard.
 unset(CMAKE_CXX_STANDARD)
 unset(CMAKE_CXX_STANDARD_REQUIRED)
-set_source_files_properties(pocl-formosa-util.cc pocl-formosa-util.h
-                            PROPERTIES COMPILE_FLAGS "${LLVM_CXXFLAGS}")
-include_directories(${LLVM_INCLUDE_DIRS}
-                    ${CMAKE_CURRENT_SOURCE_DIR}/../../../llvmopencl)
 set(CMAKE_CXX_STANDARD ${POCL_CMAKE_CXX_STANDARD})
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_compile_definitions(FORMOSA_LLVM="${LLVM_PREFIX}")
 add_pocl_device_library(pocl-devices-formosa
                         pocl-formosa.c pocl-formosa.h
-                        pocl-formosa-util.cc pocl-formosa-util.h)
+                        formosa-llvm-util.cc formosa-llvm-util.h
+                        formosa-util.cc formosa-util.h)
 
 if(ENABLE_LOADABLE_DRIVERS)
   # Add runtime library
   target_link_libraries(pocl-devices-formosa PRIVATE ${PTHREAD_LIBRARY})
 endif()
 
-message(STATUS "CASVP_INSTALL_DIR: ${CASVP_INSTALL_DIR}")
-target_include_directories(pocl-devices-formosa PRIVATE
-                           ${CASVP_INSTALL_DIR}/include)
+set(FORMOSA_PLATFORM "lv" CACHE STRING "Platform for FORMOSA HAL, default to lv")
+message(STATUS "FORMOSA_PLATFORM: ${FORMOSA_PLATFORM}")
 
-target_link_libraries(pocl-devices-formosa PRIVATE comm formosa-driver-casvp)
+if(CMAKE_BUILD_TYPE STREQUAL Release)
+  find_package(Formosa REQUIRED)
+else()
+  set(ENABLE_PROJECTS hal)
+  add_subdirectory("$ENV{FORMOSA_SOURCE_DIR}" formosa-build)
+endif()
+
+target_link_libraries(pocl-devices-formosa PUBLIC formosa-hal.${FORMOSA_PLATFORM})
+
+target_include_directories(pocl-devices-formosa PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../llvmopencl)
+target_compile_options(pocl-devices-formosa PRIVATE -I${LLVM_INCLUDE_DIRS})

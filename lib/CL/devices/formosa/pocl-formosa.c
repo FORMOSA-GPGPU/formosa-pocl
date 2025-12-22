@@ -1,16 +1,14 @@
 #include "pocl-formosa.h"
 
-#include <libcomm/comm.h>
-#include <libcomm/msg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
-#include "casvp-config.h"
 #include "common.h"
 #include "common_driver.h"
-#include "formosa-driver.h"
-#include "pocl-formosa-util.h"
+#include "formosa-hal/formosa-hal.h"
+#include "formosa-llvm-util.h"
+#include "formosa-util.h"
 #include "pocl_llvm.h"
 #include "pocl_util.h"
 
@@ -69,11 +67,6 @@ void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
 
 static cl_bool formosa_available = CL_TRUE;
 static char *formosa_build_hash = "formosa-riscv64-unknown-unknwon-elf";
-struct CasvpInitArgs {
-  uint64_t global_mem_base;
-  uint64_t csr_base;
-  void (*interrupt_handler)(int signum);
-};
 
 unsigned int pocl_formosa_probe(struct pocl_device_ops *ops) {
   int err = fsa_probe();
@@ -130,16 +123,16 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
 
   device->image_support = CL_FALSE;
 
-  size_t num_warps = CASVP_FORMOSA_WARPS_PER_CORE;
-  size_t num_threads = CASVP_FORMOSA_THREADS_PER_WARP;
+  size_t num_warps = fsa_warps_per_core();
+  size_t num_threads = fsa_threads_per_warp();
   uint64_t max_work_group_size = num_warps * num_threads;
 
   device->global_mem_cache_type = CL_READ_WRITE_CACHE;
-  device->global_mem_cacheline_size = CASVP_FORMOSA_CACHE_BLOCK_SIZE;
-  device->global_mem_cache_size = CASVP_FORMOSA_CACHE_SIZE;
-  device->global_mem_size = CASVP_FORMOSA_GLOBAL_MEM_SIZE;
-  device->max_mem_alloc_size = CASVP_FORMOSA_GLOBAL_MEM_SIZE;
-  device->local_mem_size = CASVP_FORMOSA_LOCAL_MEM_SIZE;
+  device->global_mem_cacheline_size = fsa_cache_block_size();
+  device->global_mem_cache_size = fsa_cache_size();
+  device->global_mem_size = fsa_global_mem_size();
+  device->max_mem_alloc_size = fsa_global_mem_size();
+  device->local_mem_size = fsa_local_mem_size();
   device->max_work_group_size = max_work_group_size;
   device->max_work_item_sizes[0] = max_work_group_size;
   device->max_work_item_sizes[1] = max_work_group_size;
@@ -158,9 +151,7 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   dd->kernel_buffer = NULL;
   formosa_available = CL_TRUE;
 
-  struct CasvpInitArgs args = {FSA_GLOBAL_MEM_BASE, FSA_TASK_DISPATCHER_BASE,
-                               fsa_int_handler};
-  int err = fsa_driver_init(&args);
+  int err = fsa_hal_init();
   if (err != 0) {
     formosa_available = CL_FALSE;
     POCL_ABORT("ERROR (pocl_formosa_init): Driver initialization failed\n");
@@ -175,7 +166,7 @@ cl_int pocl_formosa_uninit(unsigned j, cl_device_id device) {
 
   POCL_DESTROY_LOCK(dd->compile_lock);
   POCL_DESTROY_LOCK(dd->cq_lock);
-  if (fsa_driver_uninit() != 0) {
+  if (fsa_hal_cleanup() != 0) {
     POCL_ABORT("ERROR (pocl_formosa_uninit): Driver uninitialization failed\n");
   }
   if (dd->kernel_buffer != NULL) {
@@ -214,9 +205,14 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   const uint32_t word_size = 8;
 
   // calculate kernel arguments buffer size
-  uint64_t local_mem_size = 0;           // total local memory size
-  size_t kargs_buffer_size = word_size;  // kernel argument buffer size,
-                                         // preserve space for local memory size
+  uint64_t local_mem_size = 0;  // total local memory size
+
+  // kernel arguments buffer size
+  // it contains:
+  // 1. trampoline address (8 bytes)
+  // 2. local memory size (8 bytes)
+  // 3. other arguments
+  size_t kargs_buffer_size = word_size * 2;
 
   for (int i = 0; i < meta->num_args; ++i) {
     struct pocl_argument *al = &(cmd->command.run.arguments[i]);
@@ -243,7 +239,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   // check occupancy
   if (group_size != 1) {
     uint64_t available_local_mem;
-    err = fsa_check_occupancy(group_size, &available_local_mem);
+    err = pocl_fsa_check_occupancy(group_size, &available_local_mem);
     if (err != 0) {
       POCL_ABORT("ERROR (pocl_formosa_run): Check occupancy failed\n");
     }
@@ -262,31 +258,18 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   // allocate kernel arguments buffer
   formosa_buffer_data_t fsa_kargs_buffer;
   memset(&fsa_kargs_buffer, 0, sizeof(formosa_buffer_data_t));
-  void *device_args_buffer_addr;
+  void *device_args_buffer_addr, *device_kernel_status_addr;
   err = fsa_malloc(&device_args_buffer_addr, kargs_buffer_size);
   if (err != 0) {
     POCL_ABORT("ERROR (pocl_formosa_run): Device memory allocation failed\n");
   }
+  err = fsa_malloc(&device_kernel_status_addr, sizeof(KernelStatus));
+  if (err != 0) {
+    POCL_ABORT(
+        "ERROR (pocl_formosa_run): Device kernel status allocation failed\n");
+  }
   fsa_kargs_buffer.buf_address = (uint64_t)device_args_buffer_addr;
   fsa_kargs_buffer.buf_size = kargs_buffer_size;
-
-  // write context data
-  err = fsa_mmio(CASVP_FORMOSA_CSR_DIM, pc->work_dim, NULL);
-  err |= fsa_mmio(CASVP_FORMOSA_CSR_LAUNCH_KERNEL_ID, kdata->kernel_id, NULL);
-  err |= fsa_mmio(CASVP_FORMOSA_CSR_KERNEL_ARG,
-                  (uint64_t)device_args_buffer_addr, NULL);
-  err |= fsa_mmio(CASVP_FORMOSA_CSR_LOCAL_SIZE_X, pc->local_size[0], NULL);
-  err |= fsa_mmio(CASVP_FORMOSA_CSR_LOCAL_SIZE_Y, pc->local_size[1], NULL);
-  err |= fsa_mmio(CASVP_FORMOSA_CSR_LOCAL_SIZE_Z, pc->local_size[2], NULL);
-  err |= fsa_mmio(CASVP_FORMOSA_CSR_NUM_GROUPS_X, pc->num_groups[0], NULL);
-  err |= fsa_mmio(CASVP_FORMOSA_CSR_NUM_GROUPS_Y, pc->num_groups[1], NULL);
-  err |= fsa_mmio(CASVP_FORMOSA_CSR_NUM_GROUPS_Z, pc->num_groups[2], NULL);
-  err |=
-      fsa_mmio(CASVP_FORMOSA_CSR_GLOBAL_OFFSET_X, pc->global_offset[0], NULL);
-  err |=
-      fsa_mmio(CASVP_FORMOSA_CSR_GLOBAL_OFFSET_Y, pc->global_offset[1], NULL);
-  err |=
-      fsa_mmio(CASVP_FORMOSA_CSR_GLOBAL_OFFSET_Z, pc->global_offset[2], NULL);
 
   // write arguments
   uint32_t host_args_offset = 0;
@@ -360,39 +343,43 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   free(host_kargs_base_ptr);
 
   // upload kernel to device
+  uintptr_t entry_pc = 0, trampoline_pc = 0;
   if (dd->kernel_buffer == NULL) {
     char sz_program_fsabin[POCL_MAX_PATHNAME_LENGTH];
-    err = fsa_get_elf_name(program, device_i, sz_program_fsabin);
+    err = pocl_fsa_get_elf_name(program, device_i, sz_program_fsabin);
     POCL_MSG_PRINT_INFO("elf path: %s\n", sz_program_fsabin);
     uint64_t dev_kernel_addr = 0;
-    err |= fsa_upload_kernel(sz_program_fsabin, dd, &dev_kernel_addr);
+    err |= pocl_fsa_upload_kernel(sz_program_fsabin, dd, &dev_kernel_addr);
     if (err != 0) {
       POCL_ABORT("ERROR (pocl_formosa_run): Kernel upload failed\n");
     }
+
+    entry_pc =
+        pocl_fsa_get_symbol_pc(sz_program_fsabin, "_start") + dev_kernel_addr;
+    POCL_MSG_PRINT_INFO("entry_pc: %lx\n", entry_pc);
+
     char *trampoline_name = malloc(strlen(kernel->name) + 12);
     sprintf(trampoline_name, "%s_trampoline", kernel->name);
-    uint64_t kernel_pc =
-        fsa_get_symbol_pc(sz_program_fsabin, trampoline_name) + dev_kernel_addr;
-    POCL_MSG_PRINT_INFO("kernel_pc: %lx\n", kernel_pc);
+    trampoline_pc = pocl_fsa_get_symbol_pc(sz_program_fsabin, trampoline_name) +
+                    dev_kernel_addr;
+    POCL_MSG_PRINT_INFO("trampoline_pc: %lx\n", trampoline_pc);
     POCL_MEM_FREE(trampoline_name);
-    uint64_t entry_pc =
-        fsa_get_symbol_pc(sz_program_fsabin, "_start") + dev_kernel_addr;
-    POCL_MSG_PRINT_INFO("entry_pc: %lx\n", entry_pc);
-    err = fsa_mmio(CASVP_FORMOSA_CSR_KERNEL_PC, kernel_pc, NULL);
-    err |= fsa_mmio(CASVP_FORMOSA_CSR_ENTRY_PC, entry_pc, NULL);
-    if (err != 0) {
-      POCL_ABORT("ERROR (pocl_formosa_run): Kernel CSR setup failed\n");
-    }
   }
 
   // launch kernel execution
-  err = fsa_start_kernel();
+  uintptr_t completion_signal;
+  err = fsa_cmd_start_kernel(
+      pc->work_dim, pc->local_size, pc->num_groups, pc->global_offset, entry_pc,
+      (uintptr_t)device_args_buffer_addr, (uintptr_t)trampoline_pc,
+      (uintptr_t)device_kernel_status_addr, &completion_signal);
+
   if (err != 0) {
     POCL_ABORT("ERROR (pocl_formosa_run): Kernel launch failed\n");
   }
 
   // wait for the execution to complete
-  err = fsa_wait_ack(dd);
+  err = pocl_fsa_wait_ack(dd, completion_signal,
+                          (uintptr_t)device_kernel_status_addr);
   if (err != 0) {
     POCL_ABORT("ERROR (pocl_formosa_run): Kernel execution failed\n");
   }
@@ -401,6 +388,12 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   err = fsa_free((void *)fsa_kargs_buffer.buf_address);
   if (err != 0) {
     POCL_ABORT("ERROR (pocl_formosa_run): Kernel argument free failed\n");
+  }
+
+  // release kernel status device buffer
+  err = fsa_free((void *)device_kernel_status_addr);
+  if (err != 0) {
+    POCL_ABORT("ERROR (pocl_formosa_run): Kernel status free failed\n");
   }
 }
 
@@ -434,14 +427,14 @@ int pocl_formosa_post_build_program(cl_program program, cl_uint device_i) {
   pdata->kernel_names = NULL;
 
   char fsa_program_bin[POCL_MAX_PATHNAME_LENGTH];
-  err = fsa_get_elf_name(program, device_i, fsa_program_bin);
+  err = pocl_fsa_get_elf_name(program, device_i, fsa_program_bin);
   if (err != 0) {
     POCL_MSG_ERR("Get ELF name failed\n");
     goto POST_BUILD_PROGRAM_FINALLY;
   }
-  err = fsa_compile_program(&pdata->kernel_names, &pdata->num_kernels,
-                            fsa_program_bin, program->compiler_options,
-                            program->llvm_irs[device_i]);
+  err = pocl_fsa_compile_program(&pdata->kernel_names, &pdata->num_kernels,
+                                 fsa_program_bin, program->compiler_options,
+                                 program->llvm_irs[device_i]);
 
 POST_BUILD_PROGRAM_FINALLY:
   program->data[device_i] = pdata;
@@ -673,20 +666,19 @@ void pocl_formosa_notify(cl_device_id device, cl_event event,
      * with the command queue that will be locked during
      * pocl_update_event_failed.
      */
-    pocl_unlock_events_inorder (event, finished);
-    pocl_update_event_failed (CL_FAILED, NULL, 0, event, NULL);
+    pocl_unlock_events_inorder(event, finished);
+    pocl_update_event_failed(CL_FAILED, NULL, 0, event, NULL);
     /* Lock events in this order to avoid a lock order violation between
      * the finished/notifier and event/wait events.
      */
-    pocl_lock_events_inorder (finished, event);
+    pocl_lock_events_inorder(finished, event);
     return;
   }
 
-
   if (node->state != POCL_COMMAND_READY) {
-    POCL_MSG_PRINT_EVENTS (
-      "formosa: command related to the notified event %lu not ready\n",
-      event->id);
+    POCL_MSG_PRINT_EVENTS(
+        "formosa: command related to the notified event %lu not ready\n",
+        event->id);
     return;
   }
 

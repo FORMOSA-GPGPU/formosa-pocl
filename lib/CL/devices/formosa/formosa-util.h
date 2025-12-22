@@ -1,5 +1,5 @@
-#ifndef POCL_FORMOSA_UTIL_H
-#define POCL_FORMOSA_UTIL_H
+#ifndef FORMOSA_UTIL_H
+#define FORMOSA_UTIL_H
 
 #include "pocl.h"
 #include "pocl_threads.h"
@@ -60,29 +60,28 @@ typedef struct _pocl_basic_usm_allocation_t {
   struct _pocl_basic_usm_allocation_t *next, *prev;
 } pocl_formosa_usm_allocation_t;
 
-int fsa_check_occupancy(uint32_t group_size, uint64_t *max_local_mem);
+int pocl_fsa_check_occupancy(uint32_t group_size, uint64_t *max_local_mem);
 
-int fsa_get_elf_name(cl_program program, cl_uint device_i, char *elf_name);
+int pocl_fsa_get_elf_name(cl_program program, cl_uint device_i, char *elf_name);
 
-int fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
-                      uint64_t *kernel_dev_addr);
-void fsa_int_handler(int sig);
+int pocl_fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
+                           uint64_t *kernel_dev_addr);
 
-int fsa_wait_ack(pocl_formosa_data_t *dd);
+int pocl_fsa_wait_ack(pocl_formosa_data_t *dd, uintptr_t completion_signal,
+                      uintptr_t device_kernel_status_addr);
 
-int fsa_compile_program(char **kernel_names, int *num_kernels,
-                        char *str_program_fsa_bin, char *compiler_options,
-                        void *llvm_module);
-
-uint64_t fsa_get_symbol_pc(const char *elf_path, const char *symbol_name);
+int pocl_fsa_compile_program(char **kernel_names, int *num_kernels,
+                             char *str_program_fsa_bin, char *compiler_options,
+                             void *llvm_module);
 
 #define FSA_TASK_DISPATCHER_BASE 0x1000
-#define FSA_GLOBAL_MEM_BASE                                      \
-  ((0x80000000) +                                                \
-   ((CASVP_FORMOSA_NUM_CORES) * (CASVP_FORMOSA_WARPS_PER_CORE) * \
-    (CASVP_FORMOSA_THREADS_PER_WARP) * (CASVP_FORMOSA_STACK_SIZE_PER_THREAD)))
+#define FSA_GLOBAL_MEM_BASE                      \
+  ((0x80000000) +                                \
+   ((fsa_num_cores()) * (fsa_warps_per_core()) * \
+    (fsa_threads_per_warp() * (fsa_stack_size_per_thread()))
+
 #ifdef __cplusplus
 }
 #endif
 
-#endif
+#endif  // FORMOSA_UTIL_H
