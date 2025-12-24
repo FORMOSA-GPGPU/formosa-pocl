@@ -209,10 +209,9 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
 
   // kernel arguments buffer size
   // it contains:
-  // 1. trampoline address (8 bytes)
-  // 2. local memory size (8 bytes)
-  // 3. other arguments
-  size_t kargs_buffer_size = word_size * 2;
+  // 1. local memory size (8 bytes)
+  // 2. other arguments
+  size_t kargs_buffer_size = word_size;
 
   for (int i = 0; i < meta->num_args; ++i) {
     struct pocl_argument *al = &(cmd->command.run.arguments[i]);
@@ -326,7 +325,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   for (int i = 0; i < meta->num_locals; ++i) {
     host_args_offset = align(host_args_offset, word_size);
     memcpy(host_kargs_base_ptr + host_args_offset, &local_mem_offset,
-           4);  // arg offset
+           word_size);  // arg offset
     host_args_offset += word_size;
     local_mem_offset += meta->local_sizes[i];
   }
