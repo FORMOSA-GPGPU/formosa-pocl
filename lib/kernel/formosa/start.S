@@ -1,3 +1,12 @@
+#define WG_INFO_DIM 0x0
+#define WG_INFO_OFFSET_WGID 0x4
+#define WG_INFO_OFFSET_LOCAL_SIZE 0x10
+#define WG_INFO_OFFSET_NUM_GROUPS 0x1C
+#define WG_INFO_OFFSET_GLOBAL_OFFSET 0x28
+#define WG_INFO_OFFSET_NUM_THREADS 0x34
+#define WG_INFO_OFFSET_TRAMPOLINE 0x38
+#define WG_INFO_OFFSET_KARG 0x40
+
 .section .text
 
 .org 0x0
@@ -38,29 +47,7 @@ _start:
   mv x29, x0
   mv x30, x0
   mv x31, x0
-
-  /*
-    calculate workitem local id
-    local linear thread id = mhartid - mhartidbase
-    local id z (xcllz) = linear thread id / (group size x * group size y)
-    remaining = linear thread id % (group size x * group size y)
-    local id y (xclly) = remaining / group size x
-    local id x (xcllx) = remaining % group size x
-  */
-  csrr t0, mhartid        /* global linear thread id */
-  csrr t1, xmhartidbase   /* global linear thread id base */
-  sub  t0, t0, t1         /* local linear thread id */
-  csrr t1, xclsx          /* get workgroup size x */
-  csrr t2, xclsy          /* get workgroup size y */
-  mul  t2, t1, t2         /* group size x * group size y */
-  div  t3, t0, t2         /* local id x */
-  csrw xcllz, t3          /* set local id z */
-  rem  t0, t0, t2         /* remaining */
-  div  t3, t0, t1         /* local id y */
-  csrw xclly, t3          /* set local id y */
-  rem  t0, t0, t1         /* local id x */
-  csrw xcllx, t0          /* set local id x */
-
+  
   /* 
     Stack Initialization:
 
@@ -75,19 +62,19 @@ _start:
   csrr t0, mhartid
   addi t0, t0, 1
   slli t0, t0, 10         /* 1KiB per thread */
-  li t1, 0x80000000       /* global mem base */
+  li t1, 0x81000000       /* Stack base address in global memory */
   add sp, t1, t0
 
 main_entry:
-  /* set argc and argv to 0 */
-  csrr a0, xkernelarg
-  ld t0, 0(a0)  // trampoline address
-  li a1, 0
+  // Read the wg_info
+  csrr t0, mscratch
+  // Read trampoline
+  ld t1, WG_INFO_OFFSET_TRAMPOLINE(t0)
+  // Read kernel argument
+  ld a0, WG_INFO_OFFSET_KARG(t0)
 
   /* jump to main program entry point */
-  fsa.pri.raise.f
-  jalr ra, t0, 0
-  fsa.pri.lower.f
+  jalr ra, t1, 0
 
   /* flush all caches */
   // fence  // TODO: uncomment this line when fence instruction is supported

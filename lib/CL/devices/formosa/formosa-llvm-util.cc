@@ -66,7 +66,7 @@ void createTrampolineFunction(llvm::Function *F, llvm::Module *M,
   auto ArgPtr = TrampolineFunction->getArg(0);
 
   auto LocalSizePtr =
-      Builder.CreateGEP(I8Ty, ArgPtr, Builder.getInt32(8), "local_size_gep");
+      Builder.CreateGEP(I8Ty, ArgPtr, Builder.getInt32(0), "local_size_gep");
   auto LocalSize = Builder.CreateLoad(I64Ty, LocalSizePtr, "local_size");
   auto FTY = llvm::FunctionType::get(I8PtrTy, {I64Ty}, false);
   auto FSALocalAllocFunc = M->getOrInsertFunction("fsa_local_alloc", FTY);
@@ -75,7 +75,7 @@ void createTrampolineFunction(llvm::Function *F, llvm::Module *M,
 
   // Cast the `i8*` pointer to the structure type representing the arguments
   llvm::Type *ArgStructPtrType = llvm::PointerType::get(ArgStructType->getContext(), 0);
-  auto ArgStructBytes = Builder.CreateGEP(I8Ty, ArgPtr, Builder.getInt32(16));
+  auto ArgStructBytes = Builder.CreateGEP(I8Ty, ArgPtr, Builder.getInt32(8));
   auto CastedArg = Builder.CreateBitCast(ArgStructBytes, ArgStructPtrType);
 
   // Extract each argument from the structure

@@ -140,15 +140,16 @@ int pocl_fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
   return 0;
 }
 
-int pocl_fsa_wait_ack(pocl_formosa_data_t *dd, uintptr_t completion_signal, uintptr_t device_kernel_status_addr) {
+int pocl_fsa_wait_ack(pocl_formosa_data_t *dd, uintptr_t completion_signal,
+                      uintptr_t device_kernel_status_addr) {
   if (dd == nullptr || completion_signal == 0) return -1;
   // polling the completion_signal until it is set to non-zero value
-  fsa_wait_for_completion(
-      completion_signal,
-      0);  // blocking wait
+  fsa_wait_for_completion(completion_signal,
+                          0);  // blocking wait
 
   uint8_t status_raw[sizeof(KernelStatus)];
-  int err = fsa_copy_from_dev(device_kernel_status_addr, status_raw, sizeof(status_raw));
+  int err = fsa_copy_from_dev(device_kernel_status_addr, status_raw,
+                              sizeof(status_raw));
   if (err != 0) {
     POCL_MSG_ERR("Failed to read kernel status from device (%d)\n", err);
     return -1;
@@ -233,8 +234,8 @@ int pocl_fsa_compile_program(char **kernel_names, int *num_kernels,
   if (extra_cflags == "") {
     POCL_MSG_WARN(
         "Environment variable 'POCL_FORMOSA_CFLAGS' is not set, default to "
-        "-O1 -mllvm -fsa-pdom-level\n");
-    build_cflags += "-O1 -mllvm -fsa-pdom-level";
+        "-O2\n");
+    build_cflags += "-O2";
   } else {
     if (extra_cflags.find("-fsa-ics-first") != std::string::npos)
       build_cflags += " -Xclang -fsa-ics-first-cg ";
