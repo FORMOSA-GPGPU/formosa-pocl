@@ -34,7 +34,7 @@ foreach(FILE printf.c printf_base.c get_local_id.c get_local_size.c get_group_id
 endforeach()
 
 foreach(FILE get_local_id.cl get_local_size.cl get_group_id.cl get_global_size.cl
-  barrier.cl get_num_groups.cl get_work_dim.cl get_global_id.c get_global_offset.cl
+  barrier.cl get_num_groups.cl get_work_dim.cl get_global_id.cl get_global_offset.cl
   erf.cl erfc.cl)
   list(APPEND KERNEL_SOURCES "formosa/${FILE}")
 endforeach()
