@@ -1,9 +1,9 @@
-uint64_t _CL_OVERLOADABLE get_local_size(uint);
-uint64_t _CL_OVERLOADABLE get_group_id(uint);
-uint64_t _CL_OVERLOADABLE get_local_id(uint);
-uint64_t _CL_OVERLOADABLE get_global_offset(uint);
+size_t _CL_OVERLOADABLE get_local_size(uint);
+size_t _CL_OVERLOADABLE get_group_id(uint);
+size_t _CL_OVERLOADABLE get_local_id(uint);
+size_t _CL_OVERLOADABLE get_global_offset(uint);
 
-uint64_t _CL_OVERLOADABLE get_global_id(unsigned int dim) {
+size_t _CL_OVERLOADABLE get_global_id(unsigned int dim) {
   switch (dim) {
   case 0:
     return get_local_size(0) * get_group_id(0) + get_local_id(0) +

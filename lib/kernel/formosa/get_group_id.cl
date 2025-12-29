@@ -1,12 +1,8 @@
+#include "wg_info.h"
+
 size_t _CL_OVERLOADABLE get_group_id(uint dim) {
-    switch(dim) {
-        case 0:
-            return __builtin_riscv_fsa_group_id_x();
-        case 1:
-            return __builtin_riscv_fsa_group_id_y();
-        case 2:
-            return __builtin_riscv_fsa_group_id_z();
-        default:
-            return 1;
-    }
+  if (dim > 2)
+    return 1;
+  else
+    return get_wg_info()->wg_id[dim];
 }
