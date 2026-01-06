@@ -6,6 +6,8 @@
 #define WG_INFO_OFFSET_NUM_THREADS 0x34
 #define WG_INFO_OFFSET_TRAMPOLINE 0x38
 #define WG_INFO_OFFSET_KARG 0x40
+#define WG_INFO_OFFSET_STACK_BASE 0x48
+#define WG_INFO_OFFSET_STACK_SIZE 0x50
 
 .section .text
 
@@ -58,16 +60,17 @@ _start:
     This ensures each thread gets a unique, non-overlapping stack region.
   */
 
-  /* stack initilization */
-  csrr t0, mhartid
-  addi t0, t0, 1
-  slli t0, t0, 10         /* 1KiB per thread */
-  li t1, 0x81000000       /* Stack base address in global memory */
-  add sp, t1, t0
-
-main_entry:
   // Read the wg_info
   csrr t0, mscratch
+  /* stack initilization */
+  csrr t1, mhartid
+  addi t1, t1, 1
+  lw t2, WG_INFO_OFFSET_STACK_SIZE(t0)
+  mul t2, t1, t2  // t2 = (mhartid + 1) * stack_size
+  ld t1, WG_INFO_OFFSET_STACK_BASE(t0)  // load stack base address
+  add sp, t1, t2
+
+main_entry:
   // Read trampoline
   ld t1, WG_INFO_OFFSET_TRAMPOLINE(t0)
   // Read kernel argument

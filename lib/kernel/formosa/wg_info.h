@@ -13,6 +13,8 @@ struct WGInfo {
   uint32_t num_threads;
   void *trampoline;
   void *kargs;
+  uint64_t stack_base;  // stack base address for this work-group
+  uint32_t stack_size;  // stack size for a work-item
 };
 
 static inline struct WGInfo *get_wg_info() {
