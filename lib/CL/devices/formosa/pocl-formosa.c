@@ -368,7 +368,8 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   // launch kernel execution
   uintptr_t completion_signal;
   err = fsa_cmd_start_kernel(
-      pc->work_dim, pc->local_size, pc->num_groups, pc->global_offset, entry_pc,
+      pc->work_dim, pc->local_size, pc->num_groups, pc->global_offset,
+      local_mem_size, entry_pc,
       (uintptr_t)device_args_buffer_addr, (uintptr_t)trampoline_pc,
       (uintptr_t)device_kernel_status_addr, &completion_signal);
 
