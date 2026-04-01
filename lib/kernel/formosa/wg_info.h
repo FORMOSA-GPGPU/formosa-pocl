@@ -15,6 +15,8 @@ struct WGInfo {
   void *kargs;
   uint64_t stack_base;  // stack base address for this work-group
   uint32_t stack_size;  // stack size for a work-item
+  uint64_t local_memory_base;
+  uint32_t local_memory_size;
 };
 
 static inline struct WGInfo *get_wg_info() {
