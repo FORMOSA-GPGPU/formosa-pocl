@@ -65,13 +65,10 @@ void createTrampolineFunction(llvm::Function *F, llvm::Module *M,
   // Get the trampoline's argument (the `i8*` pointer)
   auto ArgPtr = TrampolineFunction->getArg(0);
 
-  auto LocalSizePtr =
-      Builder.CreateGEP(I8Ty, ArgPtr, Builder.getInt32(0), "local_size_gep");
-  auto LocalSize = Builder.CreateLoad(I64Ty, LocalSizePtr, "local_size");
-  auto FTY = llvm::FunctionType::get(I8PtrTy, {I64Ty}, false);
+  auto FTY = llvm::FunctionType::get(I8PtrTy, {}, false);
   auto FSALocalAllocFunc = M->getOrInsertFunction("fsa_local_alloc", FTY);
   llvm::Value *LocalMemPtr =
-      Builder.CreateCall(FSALocalAllocFunc, {LocalSize}, "allocated_local_mem");
+      Builder.CreateCall(FSALocalAllocFunc, {}, "allocated_local_mem");
 
   // Cast the `i8*` pointer to the structure type representing the arguments
   llvm::Type *ArgStructPtrType = llvm::PointerType::get(ArgStructType->getContext(), 0);

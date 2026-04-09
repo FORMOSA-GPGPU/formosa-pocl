@@ -71,6 +71,6 @@ set(KERNEL_TARGET_LIST "${KERNEL_TARGET_LIST}" PARENT_SCOPE)
 install(FILES "${KERNEL_BC}"
         DESTINATION "${POCL_INSTALL_PRIVATE_DATADIR}" COMPONENT "lib")
 
-install(FILES "kernel_util.cl" "start.S" "link.ld" "printf.c" "putchar.c"
+install(FILES "kernel_util.cl" "wg_info.h" "start.S" "link.ld" "printf.c" "putchar.c"
         DESTINATION "${POCL_INSTALL_PRIVATE_DATADIR}/formosa"
         COMPONENT "lib")
