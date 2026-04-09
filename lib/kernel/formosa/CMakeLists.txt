@@ -27,7 +27,7 @@ include("bitcode_rules")
 
 set(KERNEL_SOURCES ${SOURCES_GENERIC})
 
-foreach(FILE printf.c printf_base.c get_local_id.c get_local_size.c get_group_id.c
+foreach(FILE printf_base.c get_local_id.c get_local_size.c get_group_id.c
     get_global_size.c get_num_groups.c get_work_dim.c get_global_id.c
     get_global_offset.c barrier.ll erf.cl erfc.cl)
   list(REMOVE_ITEM KERNEL_SOURCES "${FILE}")
@@ -38,6 +38,8 @@ foreach(FILE get_local_id.cl get_local_size.cl get_group_id.cl get_global_size.c
   erf.cl erfc.cl)
   list(APPEND KERNEL_SOURCES "formosa/${FILE}")
 endforeach()
+
+list(APPEND KERNEL_SOURCES "formosa/printf_globals.c")
 
 set(CLANG_FLAGS "-emit-llvm" "-target" "riscv64-unknown-unknown-elf" "-mcpu=formosa-gpgpu")
 set(LLC_FLAGS "")
