@@ -20,6 +20,14 @@
 #include "pocl_runtime_config.h"
 #include "pocl_util.h"
 
+#ifndef R_RISCV_NONE
+#define R_RISCV_NONE 0
+#endif
+
+#ifndef R_RISCV_RELATIVE
+#define R_RISCV_RELATIVE 3
+#endif
+
 namespace {
 void deserialize_kernel_status(const uint8_t *raw, KernelStatus *status) {
   uint64_t code = *reinterpret_cast<const uint64_t *>(raw);
@@ -40,6 +48,61 @@ void deserialize_kernel_status(const uint8_t *raw, KernelStatus *status) {
   status->mcause = *reinterpret_cast<const uint64_t *>(raw + 8);
   status->mepc = *reinterpret_cast<const uint64_t *>(raw + 16);
   status->mtval = *reinterpret_cast<const uint64_t *>(raw + 24);
+}
+
+int apply_kernel_relocations(FILE *elf, const Elf64_Ehdr &ehdr,
+                             uint8_t *host_image, uint64_t image_size,
+                             uint64_t image_base) {
+  if (ehdr.e_shoff == 0 || ehdr.e_shnum == 0) return 0;
+
+  for (int i = 0; i < ehdr.e_shnum; ++i) {
+    if (fseek(elf, ehdr.e_shoff + i * ehdr.e_shentsize, SEEK_SET) != 0)
+      return -1;
+
+    Elf64_Shdr shdr;
+    if (fread(&shdr, sizeof(shdr), 1, elf) != 1) return -1;
+
+    if (shdr.sh_type == SHT_RELA) {
+      if (shdr.sh_entsize != 0 && shdr.sh_entsize != sizeof(Elf64_Rela)) {
+        POCL_MSG_ERR("Unexpected RELA entry size %lu in kernel ELF\n",
+                     (unsigned long)shdr.sh_entsize);
+        return -1;
+      }
+
+      const size_t num_entries = shdr.sh_size / sizeof(Elf64_Rela);
+      if (fseek(elf, shdr.sh_offset, SEEK_SET) != 0) return -1;
+
+      for (size_t j = 0; j < num_entries; ++j) {
+        Elf64_Rela rela;
+        if (fread(&rela, sizeof(rela), 1, elf) != 1) return -1;
+
+        const uint32_t type = ELF64_R_TYPE(rela.r_info);
+        switch (type) {
+          case R_RISCV_RELATIVE: {
+            if (rela.r_offset + sizeof(uint64_t) > image_size) {
+              POCL_MSG_ERR("Kernel relocation target 0x%lx is out of bounds\n",
+                           (unsigned long)rela.r_offset);
+              return -1;
+            }
+            const uint64_t relocated = image_base + rela.r_addend;
+            memcpy(host_image + rela.r_offset, &relocated, sizeof(relocated));
+            break;
+          }
+          case R_RISCV_NONE:
+            break;
+          default:
+            POCL_MSG_ERR("Unsupported kernel relocation type %u in kernel ELF\n",
+                         type);
+            return -1;
+        }
+      }
+    } else if (shdr.sh_type == SHT_REL) {
+      POCL_MSG_ERR("REL relocations are not supported in kernel ELF\n");
+      return -1;
+    }
+  }
+
+  return 0;
 }
 }  // namespace
 
@@ -157,9 +220,12 @@ int pocl_fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
   // move file pointer to beginning of file
   rewind(elf);
   uint8_t *host_ptr = (uint8_t *)calloc(1, sizeof(uint8_t) * kernel_size);
-  uint64_t offset = 0;
+  if (host_ptr == nullptr) {
+    fclose(elf);
+    return -1;
+  }
 
-  // 2nd pass, copy all program headers to device memory
+  // 2nd pass, load all PT_LOAD segments into the host-side image.
   for (int i = 0; i < ehdr.e_phnum; i++) {
     fseek(elf, ehdr.e_phoff + i * (ehdr.e_phentsize), SEEK_SET);
     Elf64_Phdr phdr;
@@ -171,7 +237,24 @@ int pocl_fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
     if (size) {
       read_size = fread(host_ptr + offset, size, 1, elf);
     }
-    if (size < phdr.p_memsz) size = phdr.p_memsz;  // trail-zero-filling
+  }
+
+  if (apply_kernel_relocations(elf, ehdr, host_ptr, kernel_size,
+                               *kernel_dev_addr) != 0) {
+    free(host_ptr);
+    fclose(elf);
+    return -1;
+  }
+
+  // 3rd pass, copy the relocated loadable image to device memory.
+  for (int i = 0; i < ehdr.e_phnum; i++) {
+    fseek(elf, ehdr.e_phoff + i * (ehdr.e_phentsize), SEEK_SET);
+    Elf64_Phdr phdr;
+    read_size = fread(&phdr, sizeof(phdr), 1, elf);
+    if (phdr.p_type != PT_LOAD) continue;
+
+    uint64_t size = phdr.p_memsz;
+    uint64_t offset = phdr.p_paddr;  // ORIGIN in link.ld is zero
 
     POCL_MSG_PRINT_INFO("Copy %lx to %lx with size %lx\n",
                         (uint64_t)host_ptr + offset,
@@ -179,6 +262,7 @@ int pocl_fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
     fsa_copy_to_dev((uint64_t)kernel_start_addr + offset, host_ptr + offset,
                     size);
   }
+
   free(host_ptr);
   fclose(elf);
   return 0;
@@ -317,58 +401,21 @@ int pocl_fsa_compile_program(char **kernel_names, int *num_kernels,
   char kernel_util_path[POCL_MAX_PATHNAME_LENGTH];
   char start_file_path[POCL_MAX_PATHNAME_LENGTH];
   char linker_script_path[POCL_MAX_PATHNAME_LENGTH];
-  char printf_src_path[POCL_MAX_PATHNAME_LENGTH];
-  char putchar_src_path[POCL_MAX_PATHNAME_LENGTH];
-  pocl_get_srcdir_or_datadir(kernel_util_path, "/lib/CL/devices", "",
+  pocl_get_srcdir_or_datadir(kernel_util_path, "/lib/kernel", "",
                              "/formosa/kernel_util.cl");
-  pocl_get_srcdir_or_datadir(start_file_path, "/lib/CL/devices", "",
+  pocl_get_srcdir_or_datadir(start_file_path, "/lib/kernel", "",
                              "/formosa/start.S");
-  pocl_get_srcdir_or_datadir(linker_script_path, "/lib/CL/devices", "",
+  pocl_get_srcdir_or_datadir(linker_script_path, "/lib/kernel", "",
                              "/formosa/link.ld");
-  pocl_get_srcdir_or_datadir(printf_src_path, "/lib/CL/devices", "",
-                             "/formosa/printf.c");
-  pocl_get_srcdir_or_datadir(putchar_src_path, "/lib/CL/devices", "",
-                             "/formosa/putchar.c");
-
-  const char *printf_obj_path = "/tmp/printf.o";
-  const char *putchar_obj_path = "/tmp/putchar.o";
-  const char *printf_lib_path = "/tmp/libprintf.a";
-
-  // First compile printf.c and putchar.c
   std::stringstream ss_out;
-  std::tie(err, ss_out) = compile_source(printf_src_path, printf_obj_path,
-                                         clang_path, build_cflags + " -fPIC ");
-  if (err != 0) {
-    POCL_MSG_ERR("%s\n", ss_out.str().c_str());
-    return err;
-  }
-  std::tie(err, ss_out) = compile_source(putchar_src_path, putchar_obj_path,
-                                         clang_path, build_cflags + " -fPIC ");
-  if (err != 0) {
-    POCL_MSG_ERR("%s\n", ss_out.str().c_str());
-    return err;
-  }
-
-  // Archive printf.o and putchar.o into libprintf.a
-  std::stringstream ss_cmd;
-  std::string archive_path = llvm_path + "/bin/llvm-ar";
-  std::vector<std::string> args = {archive_path, " -rcs ", printf_lib_path,
-                                   printf_obj_path, putchar_obj_path};
-  ss_cmd = generate_command(args);
-  POCL_MSG_PRINT_LLVM("Running \"%s\"\n", ss_cmd.str().c_str());
-  err = exec(ss_cmd.str().c_str(), ss_out);
-  if (err != 0) {
-    POCL_MSG_ERR("%s\n", ss_out.str().c_str());
-    return err;
-  }
 
   // Link kernel program with predefined kernel functions and libprintf.a
-  args = {clang_path,       build_cflags + " -fPIE ",
-          start_file_path,  bitcode_path,
-          " -L/tmp ",       " -lprintf ",
-          kernel_util_path, build_ldflags,
-          " -T ",           linker_script_path,
-          " -Wl,-pie -o ",  elf_path};
+  std::stringstream ss_cmd;
+  std::vector<std::string> args = {clang_path,       build_cflags + " -fPIE ",
+                                   start_file_path,  bitcode_path,
+                                   kernel_util_path, build_ldflags,
+                                   " -T ",           linker_script_path,
+                                   " -Wl,-pie -o ",  elf_path};
   ss_cmd = generate_command(args);
   POCL_MSG_PRINT_LLVM("Running \"%s\"\n", ss_cmd.str().c_str());
   err = exec(ss_cmd.str().c_str(), ss_out);

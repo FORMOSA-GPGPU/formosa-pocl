@@ -27,6 +27,13 @@ typedef struct {
   uint64_t msg_id;
 } formosa_buffer_data_t;
 
+typedef struct {
+  uint64_t printf_buffer;
+  uint64_t printf_buffer_position;
+  uint32_t printf_buffer_capacity;
+  uint32_t reserved;
+} formosa_printf_launch_meta_t;
+
 // device specific data
 typedef struct {
   /* List of commands ready to be executed */
