@@ -272,16 +272,19 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   }
   err = fsa_malloc(&device_printf_buffer_addr, cmd->device->printf_buffer_size);
   if (err != 0) {
-    POCL_ABORT("ERROR (pocl_formosa_run): Device printf buffer allocation "
-               "failed\n");
+    POCL_ABORT(
+        "ERROR (pocl_formosa_run): Device printf buffer allocation "
+        "failed\n");
   }
-  POCL_MSG_PRINT_INFO("Device printf buffer allocated at address %p with size %zu "
-                     "bytes\n",
-                     device_printf_buffer_addr, cmd->device->printf_buffer_size);
+  POCL_MSG_PRINT_INFO(
+      "Device printf buffer allocated at address %p with size %zu "
+      "bytes\n",
+      device_printf_buffer_addr, cmd->device->printf_buffer_size);
   err = fsa_malloc(&device_printf_position_addr, sizeof(uint32_t));
   if (err != 0) {
-    POCL_ABORT("ERROR (pocl_formosa_run): Device printf position allocation "
-               "failed\n");
+    POCL_ABORT(
+        "ERROR (pocl_formosa_run): Device printf position allocation "
+        "failed\n");
   }
   fsa_kargs_buffer.buf_address = (uint64_t)device_args_buffer_addr;
   fsa_kargs_buffer.buf_size = kargs_buffer_size;
@@ -421,12 +424,14 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
                           &printf_position, sizeof(printf_position));
   if (err != 0) {
     POCL_ABORT(
-        "ERROR (pocl_formosa_run): Reading printf position from device failed\n");
+        "ERROR (pocl_formosa_run): Reading printf position from device "
+        "failed\n");
   }
   if (printf_position > cmd->device->printf_buffer_size) {
-    POCL_ABORT("ERROR (pocl_formosa_run): Invalid printf buffer position %u "
-               "(capacity %zu)\n",
-               printf_position, cmd->device->printf_buffer_size);
+    POCL_ABORT(
+        "ERROR (pocl_formosa_run): Invalid printf buffer position %u "
+        "(capacity %zu)\n",
+        printf_position, cmd->device->printf_buffer_size);
   }
   if (printf_position > 0) {
     char *host_printf_buffer = (char *)malloc(printf_position);
@@ -434,8 +439,9 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     err = fsa_copy_from_dev((uintptr_t)device_printf_buffer_addr,
                             host_printf_buffer, printf_position);
     if (err != 0) {
-      POCL_ABORT("ERROR (pocl_formosa_run): Reading printf buffer from device "
-                 "failed\n");
+      POCL_ABORT(
+          "ERROR (pocl_formosa_run): Reading printf buffer from device "
+          "failed\n");
     }
     pocl_write_printf_buffer(host_printf_buffer, printf_position);
     free(host_printf_buffer);
@@ -471,9 +477,10 @@ char *pocl_formosa_init_build(void *data) {
   // clang -cc1 options
   const char *pocl_cflags = pocl_get_string_option("POCL_FORMOSA_CFLAGS", "");
   if (strstr(pocl_cflags, "-fsa-ics-first") != NULL)
-    return strdup("-fsa-ics-first-cg -target-feature +xformosapri");
-  else
-    return strdup("");
+    return strdup(
+        "-target-feature +zaamo "
+        "-fsa-ics-first-cg -target-feature +xformosapri");
+  return strdup("-target-feature +zaamo");
 }
 
 int pocl_formosa_post_build_program(cl_program program, cl_uint device_i) {

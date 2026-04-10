@@ -2196,7 +2196,7 @@ if(ENABLE_FORMOSA)
   # TODO unify with autotools
   set(BUILD_FORMOSA 1)
 
-  set(FORMOSA_DEVICE_EXTENSIONS "cl_khr_byte_addressable_store cl_khr_int64 cl_khr_fp64")
+  set(FORMOSA_DEVICE_EXTENSIONS "cl_khr_byte_addressable_store cl_khr_global_int32_base_atomics cl_khr_global_int32_extended_atomics cl_khr_int64 cl_khr_int64_base_atomics cl_khr_int64_extended_atomics cl_khr_fp64")
   set(FORMOSA_DEVICE_CL_VERSION_MAJOR 1)
   set(FORMOSA_DEVICE_CL_VERSION_MINOR 2)
   set(FORMOSA_DEVICE_CL_VERSION "120")

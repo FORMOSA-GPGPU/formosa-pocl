@@ -27,7 +27,7 @@ include("bitcode_rules")
 
 set(KERNEL_SOURCES ${SOURCES_GENERIC})
 
-foreach(FILE printf_base.c get_local_id.c get_local_size.c get_group_id.c
+foreach(FILE atomics.cl printf.c printf_base.c get_local_id.c get_local_size.c get_group_id.c
     get_global_size.c get_num_groups.c get_work_dim.c get_global_id.c
     get_global_offset.c barrier.ll erf.cl erfc.cl)
   list(REMOVE_ITEM KERNEL_SOURCES "${FILE}")
@@ -40,6 +40,8 @@ foreach(FILE get_local_id.cl get_local_size.cl get_group_id.cl get_global_size.c
 endforeach()
 
 list(APPEND KERNEL_SOURCES "formosa/printf_globals.c")
+list(APPEND KERNEL_SOURCES "formosa/printf_alloc.c")
+list(APPEND KERNEL_SOURCES "formosa/atomics.cl")
 
 set(CLANG_FLAGS "-emit-llvm" "-target" "riscv64-unknown-unknown-elf" "-mcpu=formosa-gpgpu")
 set(LLC_FLAGS "")
@@ -47,9 +49,13 @@ set(LLC_FLAGS "")
 set(KERNEL_CL_FLAGS "-Xclang"
                     "-cl-std=CL${FORMOSA_DEVICE_CL_STD}"
                     "-Xclang"
-                    "-cl-ext=-all,+cl_khr_byte_addressable_store,+cl_khr_int64,+cl_khr_fp64"
+                    "-cl-ext=-all,+cl_khr_byte_addressable_store,+cl_khr_global_int32_base_atomics,+cl_khr_global_int32_extended_atomics,+cl_khr_int64,+cl_khr_int64_base_atomics,+cl_khr_int64_extended_atomics,+cl_khr_fp64"
                     "-D__OPENCL_C_VERSION__=${FORMOSA_DEVICE_CL_VERSION}"
+                    "-Dcl_khr_global_int32_base_atomics"
+                    "-Dcl_khr_global_int32_extended_atomics"
                     "-Dcl_khr_int64"
+                    "-Dcl_khr_int64_base_atomics"
+                    "-Dcl_khr_int64_extended_atomics"
                     "-Dcl_khr_fp64"
                     "-DPOCL_DEVICE_ADDRESS_BITS=64"
                     ${KERNEL_CL_FLAGS})
