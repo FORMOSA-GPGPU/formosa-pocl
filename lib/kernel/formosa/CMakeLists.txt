@@ -43,7 +43,12 @@ list(APPEND KERNEL_SOURCES "formosa/printf_globals.c")
 list(APPEND KERNEL_SOURCES "formosa/printf_alloc.c")
 list(APPEND KERNEL_SOURCES "formosa/atomics.cl")
 
-set(CLANG_FLAGS "-emit-llvm" "-target" "riscv64-unknown-unknown-elf" "-mcpu=formosa-gpgpu")
+set(CLANG_FLAGS
+    "-emit-llvm"
+    "-target" "riscv64-unknown-unknown-elf"
+    "-mcpu=formosa-gpgpu"
+    "-Xclang" "-target-feature"
+    "-Xclang" "+zaamo")
 set(LLC_FLAGS "")
 
 set(KERNEL_CL_FLAGS "-Xclang"
@@ -79,6 +84,6 @@ set(KERNEL_TARGET_LIST "${KERNEL_TARGET_LIST}" PARENT_SCOPE)
 install(FILES "${KERNEL_BC}"
         DESTINATION "${POCL_INSTALL_PRIVATE_DATADIR}" COMPONENT "lib")
 
-install(FILES "kernel_util.cl" "wg_info.h" "start.S" "link.ld" "printf.c" "putchar.c"
+install(FILES "kernel_util.cl" "wg_info.h" "start.S" "link.ld"
         DESTINATION "${POCL_INSTALL_PRIVATE_DATADIR}/formosa"
         COMPONENT "lib")
