@@ -309,8 +309,9 @@ int pocl_fsa_compile_program(char **kernel_names, int *num_kernels,
   pocl_fsa_build_kernel(llvm_module, bitcode_path, (unsigned *)num_kernels,
                         kernel_names);
 
-  std::string clang_path(CLANGCC);
-  if (!llvm_path.empty()) {
+  std::string clang_path =
+      pocl_get_string_option("FORMOSA_CLANG", std::string(CLANGCC).c_str());
+  if (clang_path.empty() && !llvm_path.empty()) {
     clang_path = llvm_path + "/bin/clang";
   }
 
