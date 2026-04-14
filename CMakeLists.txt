@@ -2202,6 +2202,10 @@ if(ENABLE_FORMOSA)
   set(FORMOSA_DEVICE_CL_VERSION "120")
   set(FORMOSA_DEVICE_CL_STD "1.2")
 
+  if(ENABLE_SPIRV)
+    set(FORMOSA_DEVICE_EXTENSIONS "${FORMOSA_DEVICE_EXTENSIONS} cl_khr_il_program cl_khr_spirv_queries")
+  endif()
+
 endif()
 
 ##########################################################
