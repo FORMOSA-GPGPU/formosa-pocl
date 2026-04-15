@@ -8,6 +8,11 @@
 #define WG_INFO_OFFSET_KARG 0x40
 #define WG_INFO_OFFSET_STACK_BASE 0x48
 #define WG_INFO_OFFSET_STACK_SIZE 0x50
+#define WG_INFO_OFFSET_LOCAL_MEM_BASE 0x58
+#define WG_INFO_OFFSET_LOCAL_MEM_SIZE 0x60
+#define WG_INFO_OFFSET_PRINTF_BUFFER 0x68
+#define WG_INFO_OFFSET_PRINTF_BUFFER_POSITION 0x70
+#define WG_INFO_OFFSET_PRINTF_BUFFER_CAPACITY 0x78
 
 .section .text
 
@@ -75,6 +80,19 @@ main_entry:
   ld t1, WG_INFO_OFFSET_TRAMPOLINE(t0)
   // Read kernel argument
   ld a0, WG_INFO_OFFSET_KARG(t0)
+
+  // Seed the generic PoCL device-side printf globals from WGInfo.
+  la t2, _printf_buffer
+  ld t3, WG_INFO_OFFSET_PRINTF_BUFFER(t0)
+  sd t3, 0(t2)
+
+  la t2, _printf_buffer_position
+  ld t3, WG_INFO_OFFSET_PRINTF_BUFFER_POSITION(t0)
+  sd t3, 0(t2)
+
+  la t2, _printf_buffer_capacity
+  lw t3, WG_INFO_OFFSET_PRINTF_BUFFER_CAPACITY(t0)
+  sw t3, 0(t2)
 
   /* jump to main program entry point */
   jalr ra, t1, 0
