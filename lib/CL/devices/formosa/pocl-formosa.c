@@ -1,5 +1,6 @@
 #include "pocl-formosa.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -250,18 +251,15 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   }
 
   // check occupancy
-  if (group_size != 1) {
-    uint64_t available_local_mem;
-    err = pocl_fsa_check_occupancy(group_size, &available_local_mem);
-    if (err != 0) {
-      POCL_ABORT("ERROR (pocl_formosa_run): Check occupancy failed\n");
-    }
-    if (local_mem_size > available_local_mem) {
-      POCL_ABORT(
-          "ERROR (pocl_formosa_run): Out of local memory: needed=%ld bytes, "
-          "available=%ld bytes\n",
-          local_mem_size, available_local_mem);
-    }
+  uint64_t available_local_mem = 0;
+  err = pocl_fsa_check_occupancy(group_size, local_mem_size,
+                                 &available_local_mem);
+  if (err != 0) {
+    POCL_ABORT(
+        "ERROR (pocl_formosa_run): Check occupancy failed "
+        "(group_size=%" PRIu32 ", local_mem_size=%" PRIu64
+        ", available_local_mem=%" PRIu64 ")\n",
+        group_size, local_mem_size, available_local_mem);
   }
 
   // allocate arguments host buffer

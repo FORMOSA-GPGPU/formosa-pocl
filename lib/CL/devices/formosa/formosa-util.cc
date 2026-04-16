@@ -1,5 +1,6 @@
 #include "formosa-util.h"
 
+#include <inttypes.h>
 #include <linux/elf.h>
 #include <unistd.h>
 
@@ -11,6 +12,7 @@
 
 #include "formosa-hal/formosa-hal.h"
 #include "formosa-llvm-util.h"
+#include "formosa-real/formosa-config.h"
 #include "pocl.h"
 #include "pocl_cache.h"
 #include "pocl_debug.h"
@@ -104,26 +106,68 @@ int apply_kernel_relocations(FILE *elf, const Elf64_Ehdr &ehdr,
 }
 }  // namespace
 
-int pocl_fsa_check_occupancy(uint32_t group_size, uint64_t *max_local_mem) {
-  // check group size
+int pocl_fsa_check_occupancy(uint32_t group_size, uint64_t local_mem_per_group,
+                             uint64_t *max_local_mem) {
+  // Hardware limits
   uint32_t warps_per_core = fsa_warps_per_core();
   uint32_t threads_per_warp = fsa_threads_per_warp();
   uint32_t threads_per_core = warps_per_core * threads_per_warp;
+  uint64_t local_mem_size = fsa_local_mem_size();
+
+  // Sanity check
+  if (group_size == 0) {
+    POCL_MSG_ERR("group_size must be > 0\n");
+    return -1;
+  }
+
+  // Check thread capacity
   if (group_size > threads_per_core) {
     POCL_MSG_ERR(
-        "Cannot schedule kernel with group_size (%d) > threads_per_core (%d)\n",
+        "Cannot schedule kernel: group_size (%u) > threads_per_core (%u)\n",
         group_size, threads_per_core);
     return -1;
   }
 
-  // calculate groups occupancy
-  int warps_per_group = (group_size + threads_per_warp - 1) / threads_per_warp;
-  int groups_per_core = warps_per_core / warps_per_group;
+  // --- Thread-based occupancy ---
+  // ceil(group_size / threads_per_warp)
+  uint32_t warps_per_group =
+      (group_size + threads_per_warp - 1) / threads_per_warp;
 
-  // check local memory capacity
+  // max groups limited by warp slots
+  uint32_t groups_by_threads = warps_per_core / warps_per_group;
+
+  if (groups_by_threads == 0) {
+    POCL_MSG_ERR("No available slots due to warp/thread constraint\n");
+    return -1;
+  }
+
+  // --- Local memory-based occupancy ---
+  uint32_t groups_by_local_mem;
+
+  if (local_mem_per_group == 0) {
+    // no local memory usage, not a limiting factor
+    groups_by_local_mem = groups_by_threads;
+  } else {
+    if (local_mem_per_group > local_mem_size) {
+      POCL_MSG_ERR("Cannot schedule kernel: local_mem_per_group (%" PRIu64
+                   ") > local_mem_size (%" PRIu64 ")\n",
+                   local_mem_per_group, local_mem_size);
+      return -1;
+    }
+
+    groups_by_local_mem = local_mem_size / local_mem_per_group;
+  }
+
+  // --- Final occupancy (take the bottleneck) ---
+  if (std::min(groups_by_threads, groups_by_local_mem) == 0) {
+    POCL_MSG_ERR("Kernel cannot have any resident workgroups per core\n");
+    return -1;
+  }
+
+  // Output: max local memory per WG to preserve thread-based occupancy
   if (max_local_mem) {
-    uint64_t local_mem_size = fsa_local_mem_size();
-    *max_local_mem = local_mem_size / groups_per_core;
+    // evenly distribute local memory across thread-limited WG slots
+    *max_local_mem = local_mem_size / groups_by_threads;
   }
 
   return 0;
@@ -349,8 +393,13 @@ int pocl_fsa_compile_program(char **kernel_names, int *num_kernels,
   pocl_fsa_build_kernel(llvm_module, bitcode_path, (unsigned *)num_kernels,
                         kernel_names);
 
-  std::string clang_path(CLANGCC);
-  if (!llvm_path.empty()) {
+  const char *default_clang = CLANGCC;
+#ifdef FORMOSA_CLANG_PATH
+  default_clang = FORMOSA_CLANG_PATH;
+#endif
+  std::string clang_path =
+      pocl_get_string_option("FORMOSA_CLANG", default_clang);
+  if (clang_path.empty() && !llvm_path.empty()) {
     clang_path = llvm_path + "/bin/clang";
   }
 

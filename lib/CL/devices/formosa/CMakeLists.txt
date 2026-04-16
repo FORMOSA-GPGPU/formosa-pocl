@@ -39,7 +39,16 @@ unset(CMAKE_CXX_STANDARD_REQUIRED)
 set(CMAKE_CXX_STANDARD ${POCL_CMAKE_CXX_STANDARD})
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+set(FORMOSA_CLANG_PATH "" CACHE FILEPATH
+    "Path to the FORMOSA kernel compiler wrapper")
+if(NOT FORMOSA_CLANG_PATH)
+  find_program(FORMOSA_CLANG_PATH NAMES formosa-clang)
+endif()
+
 add_compile_definitions(FORMOSA_LLVM="${LLVM_PREFIX}")
+if(FORMOSA_CLANG_PATH)
+  add_compile_definitions(FORMOSA_CLANG_PATH="${FORMOSA_CLANG_PATH}")
+endif()
 add_pocl_device_library(pocl-devices-formosa
                         pocl-formosa.c pocl-formosa.h
                         formosa-llvm-util.cc formosa-llvm-util.h
