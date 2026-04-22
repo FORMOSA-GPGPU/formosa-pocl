@@ -1,3 +1,0 @@
-[submodule "thirdparty/SPIRV-LLVM-Translator"]
-	path = thirdparty/SPIRV-LLVM-Translator
-	url = https://github.com/KhronosGroup/SPIRV-LLVM-Translator.git
