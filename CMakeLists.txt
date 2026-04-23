@@ -2196,11 +2196,16 @@ if(ENABLE_FORMOSA)
   # TODO unify with autotools
   set(BUILD_FORMOSA 1)
 
-  set(FORMOSA_DEVICE_EXTENSIONS "cl_khr_byte_addressable_store cl_khr_global_int32_base_atomics cl_khr_global_int32_extended_atomics cl_khr_int64 cl_khr_int64_base_atomics cl_khr_int64_extended_atomics cl_khr_fp64 cl_khr_subgroups")
+  set(FORMOSA_DEVICE_EXTENSIONS "cl_khr_byte_addressable_store cl_khr_global_int32_base_atomics cl_khr_global_int32_extended_atomics cl_khr_local_int32_base_atomics cl_khr_local_int32_extended_atomics cl_khr_int64 cl_khr_int64_base_atomics cl_khr_int64_extended_atomics cl_khr_fp64 cl_khr_subgroups")
+
   set(FORMOSA_DEVICE_CL_VERSION_MAJOR 1)
   set(FORMOSA_DEVICE_CL_VERSION_MINOR 2)
   set(FORMOSA_DEVICE_CL_VERSION "120")
   set(FORMOSA_DEVICE_CL_STD "1.2")
+
+  if(ENABLE_SPIRV)
+    set(FORMOSA_DEVICE_EXTENSIONS "${FORMOSA_DEVICE_EXTENSIONS} cl_khr_il_program cl_khr_spirv_queries")
+  endif()
 
 endif()
 

@@ -12,6 +12,7 @@
 #include "formosa-util.h"
 #include "pocl_llvm.h"
 #include "pocl_util.h"
+#include "spirv_queries.h"
 
 static inline uint64_t align(uint64_t n, size_t size) {
   return (n + size - 1) & ~(size - 1);
@@ -125,6 +126,12 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
 
   device->image_support = CL_FALSE;
 
+#if defined(ENABLE_SPIRV)
+  device->supported_spir_v_versions =
+      "SPIR-V_1.5 SPIR-V_1.4 SPIR-V_1.3 SPIR-V_1.2 SPIR-V_1.1 SPIR-V_1.0";
+  device->supported_spirv_extensions = "+SPV_KHR_no_integer_wrap_decoration";
+#endif
+
   size_t num_warps = fsa_warps_per_core();
   size_t num_threads = fsa_threads_per_warp();
   uint64_t max_work_group_size = num_warps * num_threads;
@@ -141,6 +148,10 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   device->max_work_item_sizes[2] = max_work_group_size;
   device->max_compute_units = 1;
   device->mem_base_addr_align = 128;  // TODO: determine this
+
+  pocl_setup_extensions_with_version(device);
+  pocl_setup_ils_with_version(device);
+  pocl_setup_spirv_queries(device);
 
   dd->context_ref_count = 0;
 
