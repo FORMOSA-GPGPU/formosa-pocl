@@ -81,7 +81,7 @@ can be used from the build directory (without installing it system-wide).
 |:------------|:--------------:|:---------------:|:----------------:|:---------------:|:---------------:|
 | [CUDA SM5.0](https://github.com/pocl/pocl/actions/workflows/build_cuda.yml) | :yellow_circle: | :green_circle: | :yellow_circle: | :green_circle: | :x: |
 | CUDA SM other than 5.0                                                      | :yellow_circle: | :yellow_circle: | :yellow_circle: | :yellow_circle: | :x: |
-| [Level Zero](https://github.com/pocl/pocl/actions/workflows/build_level0.yml) | :yellow_circle: | :yellow_circle: | :green_circle: | :green_circle: | :large_orange_diamond: | 
+| [Level Zero](https://github.com/pocl/pocl/actions/workflows/build_level0.yml) | :yellow_circle: | :yellow_circle: | :green_circle: | :green_circle: | :large_orange_diamond: |
 | [Vulkan](https://github.com/pocl/pocl/actions/workflows/build_openasip_vulkan.yml) | :green_circle: | :x: | :x: | :x: | :x: |
 
 Note: CUDA with LLVM 21 is broken due to a bug in Clang (https://github.com/llvm/llvm-project/issues/154772).
