@@ -1645,6 +1645,9 @@ endif()
 set(HOST_DEVICE_CL_VERSION_MAJOR 3)
 set(HOST_DEVICE_CL_VERSION_MINOR 0)
 
+# Probe native host CPU support for cl_khr_kernel_clock
+include(CheckHostCpuKernelClock)
+
 # Host CPU device: list of extensions that are always enabled, for both OpenCL 1.2 and 3.0
 set(HOST_DEVICE_EXTENSIONS "cl_khr_byte_addressable_store cl_khr_global_int32_base_atomics \
 cl_khr_global_int32_extended_atomics cl_khr_local_int32_base_atomics \
@@ -1740,7 +1743,17 @@ if(HOST_CPU_ENABLE_CL_KHR_FP64)
   set(HOST_DEVICE_FEATURES_30 "${HOST_DEVICE_FEATURES_30} __opencl_c_fp64")
 endif()
 
+if(HOST_CPU_ENABLE_CL_KHR_KERNEL_CLOCK)
+  set(HOST_DEVICE_EXTENSIONS "${HOST_DEVICE_EXTENSIONS} cl_khr_kernel_clock")
+endif()
 
+if(HOST_DEVICE_EXTENSIONS MATCHES "cl_khr_kernel_clock")
+  set(HOST_DEVICE_FEATURES "${HOST_DEVICE_FEATURES} \
+    __opencl_c_kernel_clock_scope_device \
+    __opencl_c_kernel_clock_scope_work_group \
+    __opencl_c_kernel_clock_scope_sub_group"
+  )
+endif()
 
 if(HOST_DEVICE_EXTENSIONS MATCHES "cl_ext_float_atomics")
   set(HOST_DEVICE_FEATURES_30 "${HOST_DEVICE_FEATURES_30} __opencl_c_ext_fp32_global_atomic_add __opencl_c_ext_fp32_local_atomic_add __opencl_c_ext_fp32_global_atomic_min_max __opencl_c_ext_fp32_local_atomic_min_max")
@@ -2196,12 +2209,13 @@ if(ENABLE_FORMOSA)
   # TODO unify with autotools
   set(BUILD_FORMOSA 1)
 
-  set(FORMOSA_DEVICE_EXTENSIONS "cl_khr_byte_addressable_store cl_khr_global_int32_base_atomics cl_khr_global_int32_extended_atomics cl_khr_local_int32_base_atomics cl_khr_local_int32_extended_atomics cl_khr_int64 cl_khr_int64_base_atomics cl_khr_int64_extended_atomics cl_khr_fp64 cl_khr_subgroups")
+  set(FORMOSA_DEVICE_EXTENSIONS "cl_khr_byte_addressable_store cl_khr_global_int32_base_atomics cl_khr_global_int32_extended_atomics cl_khr_local_int32_base_atomics cl_khr_local_int32_extended_atomics cl_khr_int64 cl_khr_int64_base_atomics cl_khr_int64_extended_atomics cl_khr_fp64 cl_khr_subgroups cl_khr_kernel_clock")
+  set(FORMOSA_DEVICE_FEATURES_30 "__opencl_c_fp64 __opencl_c_subgroups __opencl_c_kernel_clock_scope_device __opencl_c_kernel_clock_scope_work_group __opencl_c_kernel_clock_scope_sub_group")
 
-  set(FORMOSA_DEVICE_CL_VERSION_MAJOR 1)
-  set(FORMOSA_DEVICE_CL_VERSION_MINOR 2)
-  set(FORMOSA_DEVICE_CL_VERSION "120")
-  set(FORMOSA_DEVICE_CL_STD "1.2")
+  set(FORMOSA_DEVICE_CL_VERSION_MAJOR 3)
+  set(FORMOSA_DEVICE_CL_VERSION_MINOR 0)
+  set(FORMOSA_DEVICE_CL_VERSION "300")
+  set(FORMOSA_DEVICE_CL_STD "3.0")
 
   if(ENABLE_SPIRV)
     set(FORMOSA_DEVICE_EXTENSIONS "${FORMOSA_DEVICE_EXTENSIONS} cl_khr_il_program cl_khr_spirv_queries")
