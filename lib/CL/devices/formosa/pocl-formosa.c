@@ -5,8 +5,10 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#include "CL/cl_ext.h"
 #include "common.h"
 #include "common_driver.h"
+#include "config.h"
 #include "formosa-hal/formosa-hal.h"
 #include "formosa-llvm-util.h"
 #include "formosa-util.h"
@@ -92,6 +94,14 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   assert(device->data == NULL);
 
   pocl_init_default_device_infos(device, FORMOSA_DEVICE_EXTENSIONS);
+  device->features = FORMOSA_DEVICE_FEATURES_30;
+
+  if (strstr(FORMOSA_DEVICE_EXTENSIONS, "cl_khr_kernel_clock") != NULL) {
+    device->kernel_clock_caps = CL_DEVICE_KERNEL_CLOCK_SCOPE_DEVICE_KHR |
+                                CL_DEVICE_KERNEL_CLOCK_SCOPE_WORK_GROUP_KHR |
+                                CL_DEVICE_KERNEL_CLOCK_SCOPE_SUB_GROUP_KHR;
+  }
+
 
   SETUP_DEVICE_CL_VERSION(device, FORMOSA_DEVICE_CL_VERSION_MAJOR,
                           FORMOSA_DEVICE_CL_VERSION_MINOR);
