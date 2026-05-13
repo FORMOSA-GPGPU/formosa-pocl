@@ -30,7 +30,7 @@
 #include <llvm/Transforms/Utils/Cloning.h>
 
 namespace {
-void createTrampolineFunction(llvm::Function *F, llvm::Module *M,
+bool createTrampolineFunction(llvm::Function *F, llvm::Module *M,
                               llvm::SmallVector<std::string, 8> &FuncNames) {
   auto &Context = M->getContext();
   llvm::IRBuilder<> Builder(Context);
@@ -55,7 +55,7 @@ void createTrampolineFunction(llvm::Function *F, llvm::Module *M,
   // Create the trampoline function
   auto TrampolineFunction =
       llvm::Function::Create(TrampolineTy, llvm::Function::ExternalLinkage,
-                             F->getName() + "_trampoline", M);
+                             F->getName() + "_trampolined", M);
 
   // Create a basic block in the trampoline function
   auto EntryBlock =
@@ -71,7 +71,8 @@ void createTrampolineFunction(llvm::Function *F, llvm::Module *M,
       Builder.CreateCall(FSALocalAllocFunc, {}, "allocated_local_mem");
 
   // Cast the `i8*` pointer to the structure type representing the arguments
-  llvm::Type *ArgStructPtrType = llvm::PointerType::get(ArgStructType->getContext(), 0);
+  llvm::Type *ArgStructPtrType =
+      llvm::PointerType::get(ArgStructType->getContext(), 0);
   auto ArgStructBytes = Builder.CreateGEP(I8Ty, ArgPtr, Builder.getInt32(8));
   auto CastedArg = Builder.CreateBitCast(ArgStructBytes, ArgStructPtrType);
 
@@ -98,26 +99,39 @@ void createTrampolineFunction(llvm::Function *F, llvm::Module *M,
     }
   }
 
-  // Call the target function with the extracted arguments
+  // Call the target function with the extracted arguments and finish the wrapper
+  // CFG before inlining. InlineFunction rewrites the call site and may split
+  // blocks, so appending the return after inlining can leave malformed CFG.
   auto CallInst = Builder.CreateCall(F, ExtractedArgs);
 
-  // Handle return type (if void, return void)
   if (FuncType->getReturnType()->isVoidTy()) {
     Builder.CreateRetVoid();
   } else {
-    llvm::Type *RetType = FuncType->getReturnType();
-    llvm::Value *RetValue = CallInst;
-    // If necessary, process RetValue before return
-    Builder.CreateRet(RetValue);
+    Builder.CreateRet(CallInst);
   }
 
-  TrampolineFunction->addFnAttr(llvm::Attribute::NoInline);
-  TrampolineFunction->addFnAttr(llvm::Attribute::OptimizeNone);
+  // Inline the kernel into the trampoline to avoid the kernel calling
+  // convention overhead.
+  bool HadNoInline = F->hasFnAttribute(llvm::Attribute::NoInline);
+  bool HadOptimizeNone = F->hasFnAttribute(llvm::Attribute::OptimizeNone);
+  F->removeFnAttr(llvm::Attribute::NoInline);
+  F->removeFnAttr(llvm::Attribute::OptimizeNone);
+  CallInst->removeFnAttr(llvm::Attribute::NoInline);
+
+  llvm::InlineFunctionInfo IFI;
+  llvm::InlineResult InlineRes = llvm::InlineFunction(*CallInst, IFI);
+  if (!InlineRes.isSuccess()) {
+    if (HadNoInline) F->addFnAttr(llvm::Attribute::NoInline);
+    if (HadOptimizeNone) F->addFnAttr(llvm::Attribute::OptimizeNone);
+    POCL_MSG_WARN("Failed to inline %s into trampoline: %s\n",
+                  F->getName().str().c_str(), InlineRes.getFailureReason());
+  }
 
   FuncNames.push_back(F->getName().str());
 
   // Finish
   llvm::verifyFunction(*TrampolineFunction);
+  return InlineRes.isSuccess();
 }
 
 void generateTrampolineForKernels(llvm::SmallVector<std::string, 8> &FuncNames,
@@ -125,8 +139,15 @@ void generateTrampolineForKernels(llvm::SmallVector<std::string, 8> &FuncNames,
   llvm::SmallVector<llvm::Function *, 8> FunctionsToErase;
   for (auto &F : M->functions()) {
     if (!pocl::isKernelToProcess(F)) continue;
-    createTrampolineFunction(&F, M, FuncNames);
+    bool Inlined = createTrampolineFunction(&F, M, FuncNames);
+    if (!Inlined) continue;
+    if (F.use_empty())
+      FunctionsToErase.push_back(&F);
+    else
+      F.setLinkage(llvm::GlobalValue::InternalLinkage);
   }
+  // remove original functions if inlined to save code size
+  for (auto *F : FunctionsToErase) F->eraseFromParent();
 }
 
 char *convertToCharArray(const llvm::SmallVector<std::string, 8> &Names) {
