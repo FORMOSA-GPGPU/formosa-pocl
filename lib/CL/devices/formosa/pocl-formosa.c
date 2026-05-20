@@ -413,8 +413,8 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
         pocl_fsa_get_symbol_pc(sz_program_fsabin, "_start") + dev_kernel_addr;
     POCL_MSG_PRINT_INFO("entry_pc: %lx\n", entry_pc);
 
-    char *trampoline_name = malloc(strlen(kernel->name) + 12);
-    sprintf(trampoline_name, "%s_trampoline", kernel->name);
+    char *trampoline_name = malloc(strlen(kernel->name) + 13);
+    sprintf(trampoline_name, "%s_trampolined", kernel->name);
     trampoline_pc = pocl_fsa_get_symbol_pc(sz_program_fsabin, trampoline_name) +
                     dev_kernel_addr;
     POCL_MSG_PRINT_INFO("trampoline_pc: %lx\n", trampoline_pc);
