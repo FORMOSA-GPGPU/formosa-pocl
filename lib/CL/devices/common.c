@@ -673,6 +673,13 @@ pocl_exec_command (_cl_command_node *node)
       POCL_UPDATE_EVENT_COMPLETE_MSG (event, "Event Enqueue NDRange       ");
       break;
 
+    case CL_COMMAND_FSA_GRAPH_LAUNCH:
+      pocl_update_event_running (event);
+      assert (dev->ops->run_fsa_graph);
+      dev->ops->run_fsa_graph (dev->data, node);
+      POCL_UPDATE_EVENT_COMPLETE_MSG (event, "Event FSA Graph Launch      ");
+      break;
+
     case CL_COMMAND_NATIVE_KERNEL:
       pocl_update_event_running (event);
       assert (dev->ops->run_native);

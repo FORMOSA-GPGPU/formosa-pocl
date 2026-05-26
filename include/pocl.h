@@ -486,6 +486,13 @@ typedef struct
   cl_mem_advice_intel advice;
 } _cl_command_svm_memadvise;
 
+typedef struct
+{
+  void *graph;             /* cl_fsa_graph, retained */
+  unsigned num_root_inputs;
+  void *root_inputs;       /* cl_fsa_root_input *, deep-copied array */
+} _cl_command_fsa_graph_launch;
+
 typedef union
 {
   _cl_command_run run;
@@ -522,6 +529,7 @@ typedef union
   _cl_command_svm_migrate svm_migrate;
 
   _cl_command_svm_memadvise mem_advise;
+  _cl_command_fsa_graph_launch fsa_graph_launch;
 } _cl_command_t;
 
 typedef struct _pocl_buffer_migration_info

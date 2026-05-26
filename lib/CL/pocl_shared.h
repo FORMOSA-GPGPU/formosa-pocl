@@ -383,6 +383,13 @@ pocl_kernel_calc_wg_size (cl_device_id dev, cl_kernel kernel,
                           const size_t *local_work_size, size_t *global_offset,
                           size_t *local_size, size_t *num_groups);
 
+cl_int
+pocl_kernel_collect_mem_objs (cl_device_id realdev,
+                              cl_context context,
+                              cl_kernel kernel,
+                              struct pocl_argument *src_arguments,
+                              pocl_buffer_migration_info **dst_migr_infos);
+
 /* this one is NOT implemented for command buffers */
 cl_int pocl_svm_migrate_mem_common (cl_command_type command_type,
                                     cl_command_queue command_queue,

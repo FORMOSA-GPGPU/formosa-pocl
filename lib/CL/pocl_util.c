@@ -1746,6 +1746,24 @@ static void pocl_free_event_node (_cl_command_node *node)
       pocl_unmap_command_finished (node->device, &node->command);
       break;
 
+    case CL_COMMAND_FSA_GRAPH_LAUNCH:
+      {
+        _cl_command_fsa_graph_launch *fsa_launch = &node->command.fsa_graph_launch;
+        if (fsa_launch->graph)
+          pocl_fsa_release_graph ((cl_fsa_graph)fsa_launch->graph);
+        if (fsa_launch->root_inputs)
+          {
+            cl_fsa_root_input *root_inputs = (cl_fsa_root_input *)fsa_launch->root_inputs;
+            for (cl_uint i = 0; i < fsa_launch->num_root_inputs; ++i)
+              {
+                if (root_inputs[i].records)
+                  POname (clReleaseMemObject) (root_inputs[i].records);
+              }
+            free (fsa_launch->root_inputs);
+          }
+        break;
+      }
+
     case CL_COMMAND_SVM_MIGRATE_MEM:
       POCL_MEM_FREE (node->command.svm_migrate.sizes);
       POCL_MEM_FREE (node->command.svm_migrate.svm_pointers);

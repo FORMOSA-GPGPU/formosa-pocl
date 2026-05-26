@@ -428,6 +428,24 @@ struct _pocl_buffer_migration_info
 
 /* The device driver layer operations. The device implementations override
    these hooks for their device-specific functionality. */
+struct pocl_fsa_graph_ops {
+  cl_int (*create_graph) (cl_fsa_graph graph,
+                          const cl_fsa_graph_properties *properties);
+  cl_int (*create_node) (
+      cl_fsa_graph_node node, cl_kernel kernel, cl_uint node_id,
+      cl_uint work_dim, const size_t *global_offset, const size_t *global_size,
+      const size_t *local_size, const cl_fsa_node_properties *properties);
+  cl_int (*create_edge) (cl_fsa_graph_edge edge, cl_fsa_graph_node src,
+                         cl_fsa_graph_node dst, cl_uint edge_id,
+                         const cl_fsa_edge_properties *properties);
+
+  cl_int (*get_info) (cl_fsa_graph graph, cl_uint param, size_t size,
+                      void *value, size_t *size_ret);
+
+  cl_int (*free_graph) (cl_fsa_graph graph);
+  };
+
+
 struct pocl_device_ops {
   const char *device_name;
 
@@ -879,6 +897,8 @@ struct pocl_device_ops {
   /* For clEnqueueNativeKernel. May be NULL. */
   void (*run_native) (void *data, _cl_command_node *cmd);
 
+  /* For clfsaEnqueueGraphLaunch. May be NULL. */
+  void (*run_fsa_graph) (void *data, _cl_command_node *cmd);
   /** Perform initialization steps and can return additional
    * build options that are required for the device.
    *
@@ -1050,6 +1070,9 @@ struct pocl_device_ops {
 
   cl_int (*free_command_buffer) (cl_device_id device,
                                  cl_command_buffer_khr command_buffer);
+
+  /****** cl_fsa_work_graph extension APIs (optional). */
+  struct pocl_fsa_graph_ops *fsa_graph_ops;
 
 };
 
@@ -2288,6 +2311,47 @@ struct _cl_sampler {
 
 #define TP_CREATE_SAMPLER(context_id, sampler_id)
 #define TP_FREE_SAMPLER(context_id, sampler_id)
+
+/* cl_fsa_work_graph */
+
+struct _cl_fsa_graph {
+  POCL_ICD_OBJECT
+  POCL_OBJECT;
+  cl_context context;
+  cl_device_id device;
+  struct pocl_fsa_graph_ops *ops;
+  void *backend_data;
+  struct _cl_fsa_graph_node *nodes;
+  struct _cl_fsa_graph_edge *edges;
+};
+
+struct _cl_fsa_graph_node {
+  POCL_ICD_OBJECT
+  cl_fsa_graph graph;
+  cl_kernel kernel;
+  cl_uint node_id;
+  cl_uint work_dim;
+  size_t global_work_offset[3];
+  size_t global_work_size[3];
+  size_t local_work_size[3];
+  cl_fsa_node_properties properties;
+  void *backend_data;
+  struct _cl_fsa_graph_node *next;
+};
+
+struct _cl_fsa_graph_edge {
+  POCL_ICD_OBJECT
+  cl_fsa_graph graph;
+  cl_fsa_graph_node src_node;
+  cl_fsa_graph_node dst_node;
+  cl_uint edge_id;
+  cl_fsa_edge_properties properties;
+  void *backend_data;
+  struct _cl_fsa_graph_edge *next;
+};
+
+POCL_EXPORT
+cl_int pocl_fsa_release_graph (cl_fsa_graph graph);
 
 #endif
 

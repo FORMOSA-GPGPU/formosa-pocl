@@ -37,6 +37,8 @@ if(INSTALL_OPENCL_HEADERS)
                 cl_exp_defined_builtin_kernels.h
                 cl_ext_intel.h
                 cl_ext_pocl.h
+                cl_fsa_work_graph.h
+                cl_fsa_work_graph_device.h
                 cl_gl.h
                 cl_gl_ext.h
                 cl_half.h

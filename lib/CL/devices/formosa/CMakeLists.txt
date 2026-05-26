@@ -51,6 +51,7 @@ if(FORMOSA_CLANG_PATH)
 endif()
 add_pocl_device_library(pocl-devices-formosa
                         pocl-formosa.c pocl-formosa.h
+                        pocl-formosa-graph.c
                         formosa-llvm-util.cc formosa-llvm-util.h
                         formosa-util.cc formosa-util.h)
 
@@ -71,6 +72,12 @@ else()
   endif()
   set(ENABLE_PROJECTS hal)
   add_subdirectory(${FORMOSA_SOURCE_DIR} formosa-build)
+
+  # Prioritize source headers
+  target_include_directories(pocl-devices-formosa BEFORE PRIVATE
+                             "${FORMOSA_SOURCE_DIR}/hal/include"
+                             "${FORMOSA_SOURCE_DIR}/fw")
+
   target_link_libraries(pocl-devices-formosa PUBLIC formosa-hal.${FORMOSA_PLATFORM})
 endif()
 
