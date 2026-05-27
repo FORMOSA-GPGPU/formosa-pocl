@@ -25,14 +25,32 @@
 #include "pocl_cl.h"
 #include <string.h>
 
-/* cl_fsa_work_graph */
-extern CL_API_ENTRY cl_fsa_graph CL_API_CALL POname (clfsaCreateGraph) (cl_context, cl_device_id, const cl_fsa_graph_properties *, cl_int *);
-extern CL_API_ENTRY cl_fsa_graph_node CL_API_CALL POname (clfsaCreateGraphKernelNode) (cl_fsa_graph, cl_kernel, cl_uint, cl_uint, const size_t *, const size_t *, const size_t *, const cl_fsa_node_properties *, cl_int *);
-extern CL_API_ENTRY cl_fsa_graph_edge CL_API_CALL POname (clfsaCreateGraphEdge) (cl_fsa_graph, cl_fsa_graph_node, cl_fsa_graph_node, cl_uint, const cl_fsa_edge_properties *, cl_int *);
-extern CL_API_ENTRY cl_int CL_API_CALL POname (clfsaEnqueueGraphLaunch) (cl_command_queue, cl_fsa_graph, cl_uint, const cl_fsa_root_input *, cl_uint, const cl_event *, cl_event *);
-extern CL_API_ENTRY cl_int CL_API_CALL POname (clfsaGetGraphInfo) (cl_fsa_graph, cl_uint, size_t, void *, size_t *);
-extern CL_API_ENTRY cl_int CL_API_CALL POname (clfsaRetainGraph) (cl_fsa_graph);
-extern CL_API_ENTRY cl_int CL_API_CALL POname (clfsaReleaseGraph) (cl_fsa_graph);
+/* cl_formosa_work_graph */
+extern CL_API_ENTRY cl_work_graph_formosa CL_API_CALL
+    POname(clCreateWorkGraphFORMOSA)(cl_context, cl_device_id,
+                                     const cl_work_graph_properties_formosa *,
+                                     cl_int *);
+extern CL_API_ENTRY cl_work_graph_node_formosa CL_API_CALL
+    POname(clCreateWorkGraphKernelNodeFORMOSA)(
+        cl_work_graph_formosa, cl_kernel, cl_uint, cl_uint, const size_t *,
+        const size_t *, const size_t *,
+        const cl_work_graph_node_properties_formosa *, cl_int *);
+extern CL_API_ENTRY cl_work_graph_edge_formosa CL_API_CALL POname(
+    clCreateWorkGraphEdgeFORMOSA)(cl_work_graph_formosa,
+                                  cl_work_graph_node_formosa,
+                                  cl_work_graph_node_formosa, cl_uint,
+                                  const cl_work_graph_edge_properties_formosa *,
+                                  cl_int *);
+extern CL_API_ENTRY cl_int CL_API_CALL POname(clEnqueueWorkGraphLaunchFORMOSA)(
+    cl_command_queue, cl_work_graph_formosa, cl_uint,
+    const cl_work_graph_root_input_formosa *, cl_uint, const cl_event *,
+    cl_event *);
+extern CL_API_ENTRY cl_int CL_API_CALL POname(clGetWorkGraphInfoFORMOSA)(
+    cl_work_graph_formosa, cl_uint, size_t, void *, size_t *);
+extern CL_API_ENTRY
+    cl_int CL_API_CALL POname(clRetainWorkGraphFORMOSA)(cl_work_graph_formosa);
+extern CL_API_ENTRY
+    cl_int CL_API_CALL POname(clReleaseWorkGraphFORMOSA)(cl_work_graph_formosa);
 
 CL_API_ENTRY void * CL_API_CALL
 POname (clGetExtensionFunctionAddressForPlatform) (cl_platform_id  platform,
@@ -237,21 +255,21 @@ CL_API_SUFFIX__VERSION_1_2
   if (strcmp (func_name, "clCreateProgramWithDefinedBuiltInKernelsEXP") == 0)
     return (void *)&POname (clCreateProgramWithDefinedBuiltInKernelsEXP);
 
-  /* cl_fsa_work_graph */
-  if (strcmp (func_name, "clfsaCreateGraph") == 0)
-    return (void *)&POname (clfsaCreateGraph);
-  if (strcmp (func_name, "clfsaCreateGraphKernelNode") == 0)
-    return (void *)&POname (clfsaCreateGraphKernelNode);
-  if (strcmp (func_name, "clfsaCreateGraphEdge") == 0)
-    return (void *)&POname (clfsaCreateGraphEdge);
-  if (strcmp (func_name, "clfsaEnqueueGraphLaunch") == 0)
-    return (void *)&POname (clfsaEnqueueGraphLaunch);
-  if (strcmp (func_name, "clfsaGetGraphInfo") == 0)
-    return (void *)&POname (clfsaGetGraphInfo);
-  if (strcmp (func_name, "clfsaRetainGraph") == 0)
-    return (void *)&POname (clfsaRetainGraph);
-  if (strcmp (func_name, "clfsaReleaseGraph") == 0)
-    return (void *)&POname (clfsaReleaseGraph);
+  /* cl_formosa_work_graph */
+  if (strcmp(func_name, "clCreateWorkGraphFORMOSA") == 0)
+    return (void *)&POname(clCreateWorkGraphFORMOSA);
+  if (strcmp(func_name, "clCreateWorkGraphKernelNodeFORMOSA") == 0)
+    return (void *)&POname(clCreateWorkGraphKernelNodeFORMOSA);
+  if (strcmp(func_name, "clCreateWorkGraphEdgeFORMOSA") == 0)
+    return (void *)&POname(clCreateWorkGraphEdgeFORMOSA);
+  if (strcmp(func_name, "clEnqueueWorkGraphLaunchFORMOSA") == 0)
+    return (void *)&POname(clEnqueueWorkGraphLaunchFORMOSA);
+  if (strcmp(func_name, "clGetWorkGraphInfoFORMOSA") == 0)
+    return (void *)&POname(clGetWorkGraphInfoFORMOSA);
+  if (strcmp(func_name, "clRetainWorkGraphFORMOSA") == 0)
+    return (void *)&POname(clRetainWorkGraphFORMOSA);
+  if (strcmp(func_name, "clReleaseWorkGraphFORMOSA") == 0)
+    return (void *)&POname(clReleaseWorkGraphFORMOSA);
 
   POCL_MSG_ERR ("unknown platform extension requested: %s\n", func_name);
   return NULL;

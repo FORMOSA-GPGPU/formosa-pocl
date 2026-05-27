@@ -1,9 +1,9 @@
+#include "CL/cl_formosa_work_graph.h"
+#include <CL/cl.h>
+#include <CL/cl_ext.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <CL/cl.h>
-#include <CL/cl_ext.h>
-#include "CL/cl_fsa_work_graph.h"
 
 int main() {
     cl_platform_id platform;
@@ -30,14 +30,10 @@ int main() {
     }
 
     const char *names[] = {
-        "clfsaCreateGraph",
-        "clfsaCreateGraphKernelNode",
-        "clfsaCreateGraphEdge",
-        "clfsaEnqueueGraphLaunch",
-        "clfsaGetGraphInfo",
-        "clfsaRetainGraph",
-        "clfsaReleaseGraph"
-    };
+        "clCreateWorkGraphFORMOSA",     "clCreateWorkGraphKernelNodeFORMOSA",
+        "clCreateWorkGraphEdgeFORMOSA", "clEnqueueWorkGraphLaunchFORMOSA",
+        "clGetWorkGraphInfoFORMOSA",    "clRetainWorkGraphFORMOSA",
+        "clReleaseWorkGraphFORMOSA"};
 
     int missing = 0;
     for (int i = 0; i < 7; ++i) {

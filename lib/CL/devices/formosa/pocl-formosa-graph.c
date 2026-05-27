@@ -9,58 +9,53 @@
 #include <string.h>
 #include <stdio.h>
 
-struct pocl_formosa_fsa_graph {
+struct pocl_formosa_work_graph_data {
   uint64_t dev_graph_status;
   uint64_t dev_graph_desc;
   uint64_t dev_node_descs;
   uint64_t dev_runtime_pool;
 };
 
-struct pocl_formosa_fsa_node {
+struct pocl_formosa_work_graph_node_data {
   uint64_t dev_static_kargs;
 };
 
-cl_int
-pocl_formosa_fsa_create_graph(cl_fsa_graph graph,
-                              const cl_fsa_graph_properties *properties)
-{
-  struct pocl_formosa_fsa_graph *bg = (struct pocl_formosa_fsa_graph *)calloc(
-      1, sizeof(struct pocl_formosa_fsa_graph));
+cl_int pocl_formosa_create_work_graph(
+    cl_work_graph_formosa graph,
+    const cl_work_graph_properties_formosa *properties) {
+  struct pocl_formosa_work_graph_data *bg =
+      (struct pocl_formosa_work_graph_data *)calloc(
+          1, sizeof(struct pocl_formosa_work_graph_data));
   if (bg == NULL) return CL_OUT_OF_HOST_MEMORY;
 
   graph->backend_data = bg;
   return CL_SUCCESS;
 }
 
-cl_int
-pocl_formosa_fsa_create_node(
-    cl_fsa_graph_node node, cl_kernel kernel, cl_uint node_id, cl_uint work_dim,
-    const size_t *global_offset, const size_t *global_size,
-    const size_t *local_size, const cl_fsa_node_properties *properties)
-{
-  struct pocl_formosa_fsa_node *bn = (struct pocl_formosa_fsa_node *)calloc(
-      1, sizeof(struct pocl_formosa_fsa_node));
+cl_int pocl_formosa_create_work_graph_node(
+    cl_work_graph_node_formosa node, cl_kernel kernel, cl_uint node_id,
+    cl_uint work_dim, const size_t *global_offset, const size_t *global_size,
+    const size_t *local_size,
+    const cl_work_graph_node_properties_formosa *properties) {
+  struct pocl_formosa_work_graph_node_data *bn =
+      (struct pocl_formosa_work_graph_node_data *)calloc(
+          1, sizeof(struct pocl_formosa_work_graph_node_data));
   if (bn == NULL) return CL_OUT_OF_HOST_MEMORY;
 
   node->backend_data = bn;
   return CL_SUCCESS;
 }
 
-cl_int
-pocl_formosa_fsa_create_edge(cl_fsa_graph_edge edge, cl_fsa_graph_node src,
-                             cl_fsa_graph_node dst, cl_uint edge_id,
-                             const cl_fsa_edge_properties *properties)
-{
+cl_int pocl_formosa_create_work_graph_edge(
+    cl_work_graph_edge_formosa edge, cl_work_graph_node_formosa src,
+    cl_work_graph_node_formosa dst, cl_uint edge_id,
+    const cl_work_graph_edge_properties_formosa *properties) {
   /* Not implemented in Phase 1 */
   return CL_SUCCESS;
 }
 
-static cl_int
-pocl_formosa_fsa_prepare_mem_arg(
-    cl_device_id device,
-    cl_mem mem,
-    formosa_buffer_data_t **buf_data_out)
-{
+static cl_int pocl_formosa_prepare_mem_arg(
+    cl_device_id device, cl_mem mem, formosa_buffer_data_t **buf_data_out) {
   if (mem == NULL) return CL_INVALID_MEM_OBJECT;
   if (mem->device_ptrs == NULL) return CL_INVALID_MEM_OBJECT;
 
@@ -90,14 +85,11 @@ pocl_formosa_fsa_prepare_mem_arg(
  * TODO: generalize this helper to iterate over kernel metadata and pack all
  * pointer/scalar/local arguments exactly like pocl_formosa_run().
  */
-static cl_int
-pocl_formosa_fsa_pack_kernel_args(
-    cl_device_id device,
-    cl_kernel kernel,
-    uint64_t *dev_kernarg_addr,
-    uint32_t *kernarg_size,
-    uint64_t *local_mem_size)
-{
+static cl_int pocl_formosa_pack_kernel_args(cl_device_id device,
+                                            cl_kernel kernel,
+                                            uint64_t *dev_kernarg_addr,
+                                            uint32_t *kernarg_size,
+                                            uint64_t *local_mem_size) {
   if (kernel == NULL) return CL_INVALID_KERNEL;
   if (kernel->dyn_arguments == NULL) return CL_INVALID_KERNEL_ARGS;
 
@@ -116,7 +108,7 @@ pocl_formosa_fsa_pack_kernel_args(
 
   cl_mem out_mem = *(cl_mem *)arg0->value;
   formosa_buffer_data_t *buf_data = NULL;
-  cl_int err = pocl_formosa_fsa_prepare_mem_arg(device, out_mem, &buf_data);
+  cl_int err = pocl_formosa_prepare_mem_arg(device, out_mem, &buf_data);
   if (err != CL_SUCCESS) return err;
 
   uint64_t out_dev_addr = buf_data->buf_address + arg0->offset;
@@ -135,20 +127,23 @@ pocl_formosa_fsa_pack_kernel_args(
   return CL_SUCCESS;
 }
 
-void
-pocl_formosa_fsa_run_graph(void *data, _cl_command_node *cmd)
-{
-  cl_fsa_graph graph = (cl_fsa_graph)cmd->command.fsa_graph_launch.graph;
-  cl_uint num_root_inputs = cmd->command.fsa_graph_launch.num_root_inputs;
-  cl_fsa_root_input *root_inputs = (cl_fsa_root_input *)cmd->command.fsa_graph_launch.root_inputs;
+void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
+  cl_work_graph_formosa graph =
+      (cl_work_graph_formosa)cmd->command.work_graph_launch_formosa.graph;
+  cl_uint num_root_inputs =
+      cmd->command.work_graph_launch_formosa.num_root_inputs;
+  cl_work_graph_root_input_formosa *root_inputs =
+      (cl_work_graph_root_input_formosa *)
+          cmd->command.work_graph_launch_formosa.root_inputs;
 
-  struct pocl_formosa_fsa_graph *bg = (struct pocl_formosa_fsa_graph *)graph->backend_data;
+  struct pocl_formosa_work_graph_data *bg =
+      (struct pocl_formosa_work_graph_data *)graph->backend_data;
   cl_device_id device = cmd->device;
   pocl_formosa_data_t *dd = (pocl_formosa_data_t *)data;
 
   /* Phase 1 Validation */
   cl_uint node_count = 0;
-  struct _cl_fsa_graph_node *curr_node = graph->nodes;
+  struct _cl_work_graph_node_formosa *curr_node = graph->nodes;
   while (curr_node) {
     node_count++;
     curr_node = curr_node->next;
@@ -166,8 +161,9 @@ pocl_formosa_fsa_run_graph(void *data, _cl_command_node *cmd)
     return;
   }
 
-  struct _cl_fsa_graph_node *found_node = graph->nodes;
-  struct pocl_formosa_fsa_node *bn = (struct pocl_formosa_fsa_node *)found_node->backend_data;
+  struct _cl_work_graph_node_formosa *found_node = graph->nodes;
+  struct pocl_formosa_work_graph_node_data *bn =
+      (struct pocl_formosa_work_graph_node_data *)found_node->backend_data;
 
   /* Resolve kernel symbols */
   char sz_program_fsabin[POCL_MAX_PATHNAME_LENGTH];
@@ -209,9 +205,9 @@ pocl_formosa_fsa_run_graph(void *data, _cl_command_node *cmd)
     uint32_t kargs_size = 0;
     uint64_t local_mem_size = 0;
 
-    cl_int err = pocl_formosa_fsa_pack_kernel_args(device, found_node->kernel,
-                                                   &dev_kargs_addr, &kargs_size,
-                                                   &local_mem_size);
+    cl_int err = pocl_formosa_pack_kernel_args(device, found_node->kernel,
+                                               &dev_kargs_addr, &kargs_size,
+                                               &local_mem_size);
     if (err != CL_SUCCESS) {
         POCL_MSG_ERR("formosa: failed to pack kernel args for graph node\n");
         return;
@@ -239,7 +235,8 @@ pocl_formosa_fsa_run_graph(void *data, _cl_command_node *cmd)
   rid.record_count = root_inputs[0].record_count;
   
   formosa_buffer_data_t *root_buf_data = NULL;
-  cl_int err = pocl_formosa_fsa_prepare_mem_arg(device, root_inputs[0].records, &root_buf_data);
+  cl_int err = pocl_formosa_prepare_mem_arg(device, root_inputs[0].records,
+                                            &root_buf_data);
   if (err != CL_SUCCESS) {
       POCL_MSG_ERR("formosa: failed to prepare root input memory\n");
       return;
@@ -283,14 +280,13 @@ pocl_formosa_fsa_run_graph(void *data, _cl_command_node *cmd)
   fsa_free((void *)pool.kernarg_pool_base);
 }
 
-cl_int
-pocl_formosa_fsa_get_info(cl_fsa_graph graph, cl_uint param, size_t size,
-                          void *value, size_t *size_ret)
-{
-  if (param == CL_FSA_GRAPH_INFO_STATUS) {
+cl_int pocl_formosa_get_work_graph_info(cl_work_graph_formosa graph,
+                                        cl_uint param, size_t size, void *value,
+                                        size_t *size_ret) {
+  if (param == CL_GRAPH_INFO_STATUS_FORMOSA) {
     if (value) {
       if (size < sizeof(cl_uint)) return CL_INVALID_VALUE;
-      *(cl_uint *)value = CL_FSA_GRAPH_STATUS_IDLE;
+      *(cl_uint *)value = CL_GRAPH_STATUS_IDLE_FORMOSA;
     }
     if (size_ret) *size_ret = sizeof(cl_uint);
     return CL_SUCCESS;
@@ -298,10 +294,9 @@ pocl_formosa_fsa_get_info(cl_fsa_graph graph, cl_uint param, size_t size,
   return CL_INVALID_VALUE;
 }
 
-cl_int
-pocl_formosa_fsa_free_graph(cl_fsa_graph graph)
-{
-  struct pocl_formosa_fsa_graph *bg = (struct pocl_formosa_fsa_graph *)graph->backend_data;
+cl_int pocl_formosa_free_work_graph(cl_work_graph_formosa graph) {
+  struct pocl_formosa_work_graph_data *bg =
+      (struct pocl_formosa_work_graph_data *)graph->backend_data;
   if (bg) {
     if (bg->dev_graph_status) fsa_free((void *)bg->dev_graph_status);
     if (bg->dev_graph_desc) fsa_free((void *)bg->dev_graph_desc);
@@ -311,9 +306,10 @@ pocl_formosa_fsa_free_graph(cl_fsa_graph graph)
   }
 
   /* Core will free node wrappers, but we should free backend node data */
-  struct _cl_fsa_graph_node *curr_node = graph->nodes;
+  struct _cl_work_graph_node_formosa *curr_node = graph->nodes;
   while (curr_node) {
-    struct pocl_formosa_fsa_node *bn = (struct pocl_formosa_fsa_node *)curr_node->backend_data;
+    struct pocl_formosa_work_graph_node_data *bn =
+        (struct pocl_formosa_work_graph_node_data *)curr_node->backend_data;
     if (bn) {
       if (bn->dev_static_kargs) fsa_free((void *)bn->dev_static_kargs);
       free(bn);

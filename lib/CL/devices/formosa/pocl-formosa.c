@@ -21,13 +21,12 @@ static inline uint64_t align(uint64_t n, size_t size) {
   return (n + size - 1) & ~(size - 1);
 }
 
-static struct pocl_fsa_graph_ops pocl_formosa_fsa_graph_ops = {
-  .create_graph = pocl_formosa_fsa_create_graph,
-  .create_node = pocl_formosa_fsa_create_node,
-  .create_edge = pocl_formosa_fsa_create_edge,
-  .get_info = pocl_formosa_fsa_get_info,
-  .free_graph = pocl_formosa_fsa_free_graph
-};
+static struct pocl_work_graph_formosa_ops pocl_formosa_work_graph_formosa_ops =
+    {.create_graph = pocl_formosa_create_work_graph,
+     .create_node = pocl_formosa_create_work_graph_node,
+     .create_edge = pocl_formosa_create_work_graph_edge,
+     .get_info = pocl_formosa_get_work_graph_info,
+     .free_graph = pocl_formosa_free_work_graph};
 
 void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
   ops->device_name = "formosa";
@@ -41,7 +40,7 @@ void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
 
   ops->run = pocl_formosa_run;
   ops->run_native = NULL;
-  ops->run_fsa_graph = pocl_formosa_fsa_run_graph;
+  ops->run_work_graph_formosa = pocl_formosa_run_work_graph;
 
   ops->alloc_mem_obj = pocl_formosa_alloc_mem_obj;
   ops->free = pocl_formosa_free;
@@ -74,7 +73,7 @@ void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
   ops->get_mapping_ptr = pocl_driver_get_mapping_ptr;
   ops->free_mapping_ptr = pocl_driver_free_mapping_ptr;
 
-  ops->fsa_graph_ops = &pocl_formosa_fsa_graph_ops;
+  ops->work_graph_formosa_ops = &pocl_formosa_work_graph_formosa_ops;
 }
 
 /**************************

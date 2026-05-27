@@ -1,13 +1,13 @@
 #include "wg_info.h"
 
-uint clfsa_get_record_count(void) {
+uint formosa_get_record_count(void) {
   struct WGInfo *info = get_wg_info();
   struct WorkGraphNodeContext *ctx = (struct WorkGraphNodeContext *)info->work_graph_ctx;
   if (ctx == NULL) return 0;
   return ctx->input_record_count;
 }
 
-int clfsa_get_record(uint index, void *record_out, size_t record_size) {
+int formosa_get_record(uint index, void *record_out, size_t record_size) {
   struct WGInfo *info = get_wg_info();
   struct WorkGraphNodeContext *ctx = (struct WorkGraphNodeContext *)info->work_graph_ctx;
   
@@ -25,7 +25,7 @@ int clfsa_get_record(uint index, void *record_out, size_t record_size) {
   return 0;
 }
 
-int clfsa_emit(uint edge_id, const void *record) {
+int formosa_emit(uint edge_id, const void *record) {
   // Placeholder for Phase 2
   return -1;
 }

@@ -488,10 +488,10 @@ typedef struct
 
 typedef struct
 {
-  void *graph;             /* cl_fsa_graph, retained */
+  void *graph; /* cl_work_graph_formosa, retained */
   unsigned num_root_inputs;
-  void *root_inputs;       /* cl_fsa_root_input *, deep-copied array */
-} _cl_command_fsa_graph_launch;
+  void *root_inputs; /* cl_work_graph_root_input_formosa *, deep-copied array */
+} _cl_command_work_graph_launch_formosa;
 
 typedef union
 {
@@ -529,7 +529,7 @@ typedef union
   _cl_command_svm_migrate svm_migrate;
 
   _cl_command_svm_memadvise mem_advise;
-  _cl_command_fsa_graph_launch fsa_graph_launch;
+  _cl_command_work_graph_launch_formosa work_graph_launch_formosa;
 } _cl_command_t;
 
 typedef struct _pocl_buffer_migration_info
