@@ -174,7 +174,7 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
 
   uint64_t entry_pc = pocl_fsa_get_symbol_pc(sz_program_fsabin, "_start") + dev_kernel_addr;
   char trampoline_name[256];
-  snprintf(trampoline_name, sizeof(trampoline_name), "%s_trampoline", found_node->kernel->name);
+  snprintf(trampoline_name, sizeof(trampoline_name), "%s_trampolined", found_node->kernel->name);
   uint64_t trampoline_pc = pocl_fsa_get_symbol_pc(sz_program_fsabin, trampoline_name) + dev_kernel_addr;
 
   /* Allocate/Update Device Descriptors */
