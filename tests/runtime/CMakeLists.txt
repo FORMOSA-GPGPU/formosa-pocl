@@ -47,7 +47,8 @@ set(C_PROGRAMS_TO_BUILD test_clFinish test_clGetDeviceInfo test_clGetEventInfo
   test_cl_pocl_content_size test_cl_pocl_content_size_migration
   test_deviceside_enqueue test_command_buffer test_command_buffer_images
   test_command_buffer_multi_device test_queue_creation_with_hints
-  test_remote_discovery test_dbk_color_convert)
+  test_remote_discovery test_dbk_color_convert
+  test_formosa_extension_discovery)
 
 if(HAVE_ONNXRT)
   list(APPEND C_PROGRAMS_TO_BUILD test_dbk_onnx_inference)
@@ -156,6 +157,8 @@ add_test(NAME "runtime/test_subbuffers" COMMAND "test_subbuffers")
 add_test(NAME "runtime/test_large_buf" COMMAND "test_large_buf")
 
 add_test(NAME "runtime/test_compile_n_link" COMMAND "test_compile_n_link")
+
+add_test(NAME "runtime/test_formosa_extension_discovery" COMMAND "test_formosa_extension_discovery")
 
 if(HAVE_LIBJPEG_TURBO)
   add_test(NAME "runtime/test_dbk_jpeg"

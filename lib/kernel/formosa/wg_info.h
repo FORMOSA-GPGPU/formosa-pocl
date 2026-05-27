@@ -5,6 +5,25 @@
 #include <stdint.h>
 
 // https://wiki.caslab.ee.ncku.edu.tw/doc/hardware-s6Qvv4Rq2B#h-work-group
+struct WorkGraphNodeContext {
+  uint32_t node_id;
+  uint32_t launch_mode;
+
+  uint32_t input_record_count;
+  uint32_t input_record_size;
+
+  uint64_t input_records;
+
+  uint64_t graph_runtime;
+  uint64_t edge_table;
+
+  uint32_t edge_count;
+  uint32_t dispatch_id;
+
+  uint32_t graph_launch_id;
+  uint32_t reserved0;
+};
+
 struct WGInfo {
   uint32_t dim;
   uint32_t wg_id[3];
@@ -22,12 +41,15 @@ struct WGInfo {
   uint32_t *printf_buffer_position;
   uint32_t printf_buffer_capacity;
   uint32_t reserved0;
+  uint64_t work_graph_ctx;
 };
 
 _Static_assert(offsetof(struct WGInfo, stack_base) == 0x48,
                "WGInfo.stack_base offset mismatch");
 _Static_assert(offsetof(struct WGInfo, printf_buffer) == 0x68,
                "WGInfo.printf_buffer offset mismatch");
+_Static_assert(offsetof(struct WGInfo, work_graph_ctx) == 0x80,
+               "WGInfo.work_graph_ctx offset mismatch");
 
 static inline struct WGInfo *get_wg_info() {
   struct WGInfo *info;

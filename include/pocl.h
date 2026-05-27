@@ -486,6 +486,13 @@ typedef struct
   cl_mem_advice_intel advice;
 } _cl_command_svm_memadvise;
 
+typedef struct
+{
+  void *graph; /* cl_work_graph_formosa, retained */
+  unsigned num_root_inputs;
+  void *root_inputs; /* cl_work_graph_root_input_formosa *, deep-copied array */
+} _cl_command_work_graph_launch_formosa;
+
 typedef union
 {
   _cl_command_run run;
@@ -522,6 +529,7 @@ typedef union
   _cl_command_svm_migrate svm_migrate;
 
   _cl_command_svm_memadvise mem_advise;
+  _cl_command_work_graph_launch_formosa work_graph_launch_formosa;
 } _cl_command_t;
 
 typedef struct _pocl_buffer_migration_info

@@ -428,6 +428,25 @@ struct _pocl_buffer_migration_info
 
 /* The device driver layer operations. The device implementations override
    these hooks for their device-specific functionality. */
+struct pocl_work_graph_formosa_ops {
+  cl_int (*create_graph)(cl_work_graph_formosa graph,
+                         const cl_work_graph_properties_formosa *properties);
+  cl_int (*create_node)(
+      cl_work_graph_node_formosa node, cl_kernel kernel, cl_uint node_id,
+      cl_uint work_dim, const size_t *global_offset, const size_t *global_size,
+      const size_t *local_size,
+      const cl_work_graph_node_properties_formosa *properties);
+  cl_int (*create_edge)(
+      cl_work_graph_edge_formosa edge, cl_work_graph_node_formosa src,
+      cl_work_graph_node_formosa dst, cl_uint edge_id,
+      const cl_work_graph_edge_properties_formosa *properties);
+
+  cl_int (*get_info)(cl_work_graph_formosa graph, cl_uint param, size_t size,
+                     void *value, size_t *size_ret);
+
+  cl_int (*free_graph)(cl_work_graph_formosa graph);
+};
+
 struct pocl_device_ops {
   const char *device_name;
 
@@ -879,6 +898,8 @@ struct pocl_device_ops {
   /* For clEnqueueNativeKernel. May be NULL. */
   void (*run_native) (void *data, _cl_command_node *cmd);
 
+  /* For clEnqueueWorkGraphLaunchFORMOSA. May be NULL. */
+  void (*run_work_graph_formosa)(void *data, _cl_command_node *cmd);
   /** Perform initialization steps and can return additional
    * build options that are required for the device.
    *
@@ -1051,6 +1072,8 @@ struct pocl_device_ops {
   cl_int (*free_command_buffer) (cl_device_id device,
                                  cl_command_buffer_khr command_buffer);
 
+  /****** cl_formosa_work_graph extension APIs (optional). */
+  struct pocl_work_graph_formosa_ops *work_graph_formosa_ops;
 };
 
 typedef struct pocl_global_mem_t {
@@ -2288,6 +2311,47 @@ struct _cl_sampler {
 
 #define TP_CREATE_SAMPLER(context_id, sampler_id)
 #define TP_FREE_SAMPLER(context_id, sampler_id)
+
+/* cl_formosa_work_graph */
+
+struct _cl_work_graph_formosa {
+  POCL_ICD_OBJECT
+  POCL_OBJECT;
+  cl_context context;
+  cl_device_id device;
+  struct pocl_work_graph_formosa_ops *ops;
+  void *backend_data;
+  struct _cl_work_graph_node_formosa *nodes;
+  struct _cl_work_graph_edge_formosa *edges;
+};
+
+struct _cl_work_graph_node_formosa {
+  POCL_ICD_OBJECT
+  cl_work_graph_formosa graph;
+  cl_kernel kernel;
+  cl_uint node_id;
+  cl_uint work_dim;
+  size_t global_work_offset[3];
+  size_t global_work_size[3];
+  size_t local_work_size[3];
+  cl_work_graph_node_properties_formosa properties;
+  void *backend_data;
+  struct _cl_work_graph_node_formosa *next;
+};
+
+struct _cl_work_graph_edge_formosa {
+  POCL_ICD_OBJECT
+  cl_work_graph_formosa graph;
+  cl_work_graph_node_formosa src_node;
+  cl_work_graph_node_formosa dst_node;
+  cl_uint edge_id;
+  cl_work_graph_edge_properties_formosa properties;
+  void *backend_data;
+  struct _cl_work_graph_edge_formosa *next;
+};
+
+POCL_EXPORT
+cl_int pocl_formosa_release_work_graph(cl_work_graph_formosa graph);
 
 #endif
 

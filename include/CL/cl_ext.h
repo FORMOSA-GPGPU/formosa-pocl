@@ -4437,6 +4437,8 @@ clSetPerfHintQCOM(
 
 #endif /* !defined(CL_NO_NON_ICD_DISPATCH_EXTENSION_PROTOTYPES) */
 
+#include <CL/cl_formosa_work_graph.h>
+
 #ifdef __cplusplus
 }
 #endif
