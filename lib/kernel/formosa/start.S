@@ -75,6 +75,12 @@ _start:
   ld t1, WG_INFO_OFFSET_STACK_BASE(t0)  // load stack base address
   add sp, t1, t2
 
+  // Skip lanes outside the logical work-group size. Hardware may activate a
+  // full warp, but only mhartid < WGInfo.num_threads is a valid work-item.
+  csrr t1, mhartid
+  lwu t2, WG_INFO_OFFSET_NUM_THREADS(t0)
+  bgeu t1, t2, kernel_exit
+
 main_entry:
   // Read trampoline
   ld t1, WG_INFO_OFFSET_TRAMPOLINE(t0)
@@ -101,6 +107,7 @@ main_entry:
   // fence  // TODO: uncomment this line when fence instruction is supported
 
   /* use ecall to terminate kernel programs */
+kernel_exit:
   ecall
 
 /* If execution ends up here just put the core to sleep */
