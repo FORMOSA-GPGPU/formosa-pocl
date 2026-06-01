@@ -13,12 +13,13 @@ uint formosa_get_record_count(void);
  * Copies the record at 'index' into 'record_out'.
  * Returns 0 on success, non-zero on error.
  */
-int formosa_get_record(uint index, void *record_out, size_t record_size);
+int formosa_get_record(uint index, __private void *record_out,
+                       size_t record_size);
 
 /*
  * Emits a record to the specified edge.
  * Returns 0 on success, non-zero on error.
  */
-int formosa_emit(uint edge_id, const void *record);
+int formosa_emit(uint edge_id, const __private void *record);
 
 #endif /* CL_FORMOSA_WORK_GRAPH_DEVICE_H */
