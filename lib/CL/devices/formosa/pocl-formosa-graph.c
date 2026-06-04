@@ -24,7 +24,9 @@ struct pocl_formosa_work_graph_data {
   uint64_t dev_runtime_pool;
 
   uint64_t *dev_node_queue_records;
+  uint64_t *dev_node_queue_ready_sequences;
   size_t *node_queue_record_sizes;
+  size_t *node_queue_ready_sequence_sizes;
   cl_uint node_desc_capacity;
   cl_uint edge_desc_capacity;
   cl_uint node_queue_capacity;
@@ -71,7 +73,7 @@ cl_int pocl_formosa_create_work_graph_edge(
   return CL_SUCCESS;
 }
 
-static void pocl_formosa_free_node_queue_records(
+static void pocl_formosa_free_node_queue_storage(
     struct pocl_formosa_work_graph_data *bg) {
   if (bg->dev_node_queue_records) {
     for (cl_uint i = 0; i < bg->node_queue_capacity; i++) {
@@ -82,8 +84,19 @@ static void pocl_formosa_free_node_queue_records(
     bg->dev_node_queue_records = NULL;
   }
 
+  if (bg->dev_node_queue_ready_sequences) {
+    for (cl_uint i = 0; i < bg->node_queue_capacity; i++) {
+      if (bg->dev_node_queue_ready_sequences[i])
+        fsa_free((void *)bg->dev_node_queue_ready_sequences[i]);
+    }
+    free(bg->dev_node_queue_ready_sequences);
+    bg->dev_node_queue_ready_sequences = NULL;
+  }
+
   free(bg->node_queue_record_sizes);
   bg->node_queue_record_sizes = NULL;
+  free(bg->node_queue_ready_sequence_sizes);
+  bg->node_queue_ready_sequence_sizes = NULL;
   bg->node_queue_capacity = 0;
 }
 
@@ -377,7 +390,7 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
   }
 
   /* The public graph list is prepended, so walking it directly reverses API
-     creation order. Preserve creation order for deterministic Phase 3 queue
+     creation order. Preserve creation order for deterministic Phase 4 queue
      scans after the root. */
   ordered_nodes[0] = root_node;
   node_idx = 1;
@@ -466,6 +479,14 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
     edge_descs[i].dst_node_id = edge->dst_node->node_id;
     edge_descs[i].record_size = record_size;
     edge_descs[i].queue_capacity = queue_capacity;
+    edge_descs[i].max_records_per_src_dispatch =
+        edge->properties.max_records_per_src_dispatch;
+    if (edge_descs[i].max_records_per_src_dispatch == 0) {
+      /* Phase 4 admission should eventually require an explicit nonzero
+         bound for every emitted edge. Use the edge capacity as a conservative
+         migration fallback. */
+      edge_descs[i].max_records_per_src_dispatch = queue_capacity;
+    }
 
     node_queue_caps[dst_idx] += queue_capacity;
   }
@@ -478,7 +499,7 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
   }
   if (cycle_check) {
     POCL_MSG_ERR(
-        "formosa: graph contains a cycle; Phase 3 supports DAGs only\n");
+        "formosa: graph contains a cycle; Phase 4 supports DAGs only\n");
     goto CLEANUP;
   }
 
@@ -500,8 +521,8 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
   if (root_inputs[0].record_count > 0 &&
       root_inputs[0].record_stride != root_record_size) {
     POCL_MSG_ERR(
-        "formosa: Phase 3 root queue seeding requires packed root "
-        "records (stride=%zu record_size=%u)\n",
+        "formosa: Phase 4 root queue seeding requires packed root records "
+        "(stride=%zu record_size=%u)\n",
         root_inputs[0].record_stride, root_record_size);
     goto CLEANUP;
   }
@@ -541,16 +562,24 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
 
   if (bg->dev_node_queues == 0 || bg->node_queue_capacity < node_count ||
       bg->dev_node_queue_records == NULL ||
-      bg->node_queue_record_sizes == NULL) {
+      bg->dev_node_queue_ready_sequences == NULL ||
+      bg->node_queue_record_sizes == NULL ||
+      bg->node_queue_ready_sequence_sizes == NULL) {
     if (bg->dev_node_queues) fsa_free((void *)bg->dev_node_queues);
-    pocl_formosa_free_node_queue_records(bg);
+    pocl_formosa_free_node_queue_storage(bg);
     fsa_malloc((void **)&bg->dev_node_queues,
                sizeof(NodeInputQueue) * node_count);
     bg->dev_node_queue_records =
         (uint64_t *)calloc(node_count, sizeof(uint64_t));
+    bg->dev_node_queue_ready_sequences =
+        (uint64_t *)calloc(node_count, sizeof(uint64_t));
     bg->node_queue_record_sizes = (size_t *)calloc(node_count, sizeof(size_t));
+    bg->node_queue_ready_sequence_sizes =
+        (size_t *)calloc(node_count, sizeof(size_t));
     if (bg->dev_node_queue_records == NULL ||
-        bg->node_queue_record_sizes == NULL) {
+        bg->dev_node_queue_ready_sequences == NULL ||
+        bg->node_queue_record_sizes == NULL ||
+        bg->node_queue_ready_sequence_sizes == NULL) {
       POCL_MSG_ERR("formosa: out of host memory for node queue bookkeeping\n");
       goto CLEANUP;
     }
@@ -589,6 +618,8 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
     nd->flags = node->properties.flags;
     nd->launch_mode = node->properties.launch_mode;
     nd->input_record_size = node->properties.input_record_size;
+    nd->max_input_records_per_dispatch =
+        node->properties.max_input_records_per_dispatch;
     nd->kernel_object = entry_pc;
     nd->kernel_trampoline = trampoline_pc;
     nd->work_dim = node->work_dim;
@@ -612,8 +643,8 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
       }
       if (kargs_size > 256) {
         POCL_MSG_ERR(
-            "formosa: graph node %u static kernargs exceed Phase 3 "
-            "slot size (%u > 256)\n",
+            "formosa: graph node %u static kernargs exceed static slot size "
+            "(%u > 256)\n",
             node->node_id, kargs_size);
         fsa_free((void *)dev_kargs_addr);
         goto CLEANUP;
@@ -641,9 +672,18 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
         (uint32_t)ordered_nodes[i]->properties.input_record_size;
     uint32_t capacity = node_queue_caps[i];
     size_t records_size = (size_t)record_size * capacity;
+    size_t ready_sequences_size = sizeof(uint32_t) * capacity;
+    uint32_t *ready_sequences =
+        (uint32_t *)calloc(capacity, sizeof(*ready_sequences));
+    if (ready_sequences == NULL) {
+      POCL_MSG_ERR("formosa: out of host memory for node ready sequences\n");
+      goto CLEANUP;
+    }
 
-    node_queues[i].tail = 0;
-    node_queues[i].consumed_count = 0;
+    node_queues[i].reserve_tail = 0;
+    node_queues[i].ready_tail = 0;
+    node_queues[i].consumed_head = 0;
+    node_queues[i].admission_reserved = 0;
     node_queues[i].capacity = capacity;
     node_queues[i].record_size = record_size;
 
@@ -653,21 +693,49 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
         bg->dev_node_queue_records[i] = 0;
         bg->node_queue_record_sizes[i] = 0;
       }
-      node_queues[i].tail = root_inputs[0].record_count;
+      node_queues[i].reserve_tail = root_inputs[0].record_count;
+      node_queues[i].ready_tail = root_inputs[0].record_count;
       node_queues[i].records_addr =
           root_buf_data->buf_address + root_inputs[0].records_offset;
-      continue;
+      for (cl_uint j = 0; j < root_inputs[0].record_count; j++) {
+        ready_sequences[j] = j + 1;
+      }
+    } else {
+      if (bg->dev_node_queue_records[i] == 0 ||
+          bg->node_queue_record_sizes[i] < records_size) {
+        if (bg->dev_node_queue_records[i])
+          fsa_free((void *)bg->dev_node_queue_records[i]);
+        fsa_malloc((void **)&bg->dev_node_queue_records[i], records_size);
+        bg->node_queue_record_sizes[i] = records_size;
+      }
+
+      node_queues[i].records_addr = bg->dev_node_queue_records[i];
     }
 
-    if (bg->dev_node_queue_records[i] == 0 ||
-        bg->node_queue_record_sizes[i] < records_size) {
-      if (bg->dev_node_queue_records[i])
-        fsa_free((void *)bg->dev_node_queue_records[i]);
-      fsa_malloc((void **)&bg->dev_node_queue_records[i], records_size);
-      bg->node_queue_record_sizes[i] = records_size;
+    if (bg->dev_node_queue_ready_sequences[i] == 0 ||
+        bg->node_queue_ready_sequence_sizes[i] < ready_sequences_size) {
+      if (bg->dev_node_queue_ready_sequences[i]) {
+        fsa_free((void *)bg->dev_node_queue_ready_sequences[i]);
+        bg->dev_node_queue_ready_sequences[i] = 0;
+        bg->node_queue_ready_sequence_sizes[i] = 0;
+      }
+      if (fsa_malloc((void **)&bg->dev_node_queue_ready_sequences[i],
+                     ready_sequences_size)) {
+        POCL_MSG_ERR("formosa: failed to allocate node ready sequences\n");
+        free(ready_sequences);
+        goto CLEANUP;
+      }
+      bg->node_queue_ready_sequence_sizes[i] = ready_sequences_size;
     }
 
-    node_queues[i].records_addr = bg->dev_node_queue_records[i];
+    node_queues[i].ready_sequence_addr = bg->dev_node_queue_ready_sequences[i];
+    if (fsa_copy_to_dev(node_queues[i].ready_sequence_addr, ready_sequences,
+                        ready_sequences_size)) {
+      POCL_MSG_ERR("formosa: failed to initialize node ready sequences\n");
+      free(ready_sequences);
+      goto CLEANUP;
+    }
+    free(ready_sequences);
   }
 
   fsa_copy_to_dev(bg->dev_node_queues, node_queues,
@@ -677,7 +745,7 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
 
   /* Fill Graph Descriptor */
   GraphDescriptor gd = {0};
-  gd.version = 1;
+  gd.version = 2;
   gd.node_count = node_count;
   gd.edge_count = edge_count;
   gd.node_desc_addr = bg->dev_node_descs;
@@ -780,7 +848,7 @@ cl_int pocl_formosa_free_work_graph(cl_work_graph_formosa graph) {
     if (bg->dev_edge_descs) fsa_free((void *)bg->dev_edge_descs);
     if (bg->dev_node_queues) fsa_free((void *)bg->dev_node_queues);
     if (bg->dev_node_states) fsa_free((void *)bg->dev_node_states);
-    pocl_formosa_free_node_queue_records(bg);
+    pocl_formosa_free_node_queue_storage(bg);
     if (bg->dev_runtime_pool) fsa_free((void *)bg->dev_runtime_pool);
     free(bg);
   }

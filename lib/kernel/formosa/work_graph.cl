@@ -1,5 +1,24 @@
 #include "wg_info.h"
 
+#define FORMOSA_WG_SUCCESS 0
+#define FORMOSA_WG_ERR_NULL_RECORD -1
+#define FORMOSA_WG_ERR_NULL_CONTEXT -2
+#define FORMOSA_WG_ERR_NO_EDGE_TABLE -3
+#define FORMOSA_WG_ERR_NO_RUNTIME -4
+#define FORMOSA_WG_ERR_BAD_RUNTIME_POOL -5
+#define FORMOSA_WG_ERR_BAD_NODE_QUEUE_TABLE -6
+#define FORMOSA_WG_ERR_BAD_GRAPH_DESC -7
+#define FORMOSA_WG_ERR_EDGE_NOT_FOUND -8
+#define FORMOSA_WG_ERR_WRONG_SOURCE_NODE -9
+#define FORMOSA_WG_ERR_BAD_EDGE_DESC -10
+#define FORMOSA_WG_ERR_DST_NODE_NOT_FOUND -11
+#define FORMOSA_WG_ERR_DST_QUEUE_OUT_OF_RANGE -12
+#define FORMOSA_WG_ERR_BAD_QUEUE -13
+#define FORMOSA_WG_ERR_RECORD_SIZE_MISMATCH -14
+#define FORMOSA_WG_ERR_QUEUE_OVERFLOW -15
+#define FORMOSA_WG_ERR_BAD_READY_SEQUENCE -16
+#define FORMOSA_WG_ERR_RECORD_OUT_OF_RANGE -17
+
 struct EdgeDescriptor {
   uint32_t edge_id;
   uint32_t src_node_id;
@@ -7,16 +26,20 @@ struct EdgeDescriptor {
   uint32_t record_size;
 
   uint32_t queue_capacity;
-  uint32_t reserved0;
+  uint32_t max_records_per_src_dispatch;
 };
 
 struct NodeInputQueue {
-  volatile uint32_t tail;
-  volatile uint32_t consumed_count;
+  volatile uint32_t reserve_tail;
+  volatile uint32_t ready_tail;
+  volatile uint32_t consumed_head;
+  volatile uint32_t admission_reserved;
+
   uint32_t capacity;
   uint32_t record_size;
 
   uint64_t records_addr;
+  uint64_t ready_sequence_addr;
 };
 
 struct GraphDescriptor {
@@ -69,7 +92,7 @@ struct NodeDescriptor {
   uint64_t local_mem_size;
   uint64_t static_kernarg_addr;
   uint32_t static_kernarg_size;
-  uint32_t reserved1;
+  uint32_t max_input_records_per_dispatch;
 };
 
 uint formosa_get_record_count(void) {
@@ -87,12 +110,14 @@ int formosa_get_record(uint index, __private void *record_out,
   __global struct WorkGraphNodeContext *ctx =
       (__global struct WorkGraphNodeContext *)(uintptr_t)info->work_graph_ctx;
 
+  if (record_out == NULL)
+    return FORMOSA_WG_ERR_NULL_RECORD;
   if (ctx == NULL)
-    return -1;
+    return FORMOSA_WG_ERR_NULL_CONTEXT;
   if (index >= ctx->input_record_count)
-    return -1;
+    return FORMOSA_WG_ERR_RECORD_OUT_OF_RANGE;
   if (record_size != (size_t)ctx->input_record_size)
-    return -1;
+    return FORMOSA_WG_ERR_RECORD_SIZE_MISMATCH;
 
   size_t stride = (size_t)ctx->input_record_size;
   __global uchar *src = (__global uchar *)(uintptr_t)ctx->input_records +
@@ -103,37 +128,37 @@ int formosa_get_record(uint index, __private void *record_out,
     dst[i] = src[i];
   }
 
-  return 0;
+  return FORMOSA_WG_SUCCESS;
 }
 
 int formosa_emit(uint edge_id, const __private void *record) {
   if (record == NULL)
-    return -1;
+    return FORMOSA_WG_ERR_NULL_RECORD;
 
   struct WGInfo *info = get_wg_info();
   __global struct WorkGraphNodeContext *ctx =
       (__global struct WorkGraphNodeContext *)(uintptr_t)info->work_graph_ctx;
   if (ctx == NULL)
-    return -2;
+    return FORMOSA_WG_ERR_NULL_CONTEXT;
   if (ctx->edge_count == 0 || ctx->edge_table == 0)
-    return -3;
+    return FORMOSA_WG_ERR_NO_EDGE_TABLE;
   if (ctx->graph_runtime == 0)
-    return -4;
+    return FORMOSA_WG_ERR_NO_RUNTIME;
 
   __global struct GraphRuntimePool *pool =
       (__global struct GraphRuntimePool *)(uintptr_t)ctx->graph_runtime;
   if (pool == NULL || pool->graph_desc_addr == 0)
-    return -5;
+    return FORMOSA_WG_ERR_BAD_RUNTIME_POOL;
   if (pool->node_queue_addr == 0 ||
       pool->node_queue_stride < sizeof(struct NodeInputQueue) ||
       pool->node_queue_count == 0) {
-    return -6;
+    return FORMOSA_WG_ERR_BAD_NODE_QUEUE_TABLE;
   }
 
   __global struct GraphDescriptor *graph =
       (__global struct GraphDescriptor *)(uintptr_t)pool->graph_desc_addr;
   if (graph == NULL || graph->node_count == 0 || graph->node_desc_addr == 0) {
-    return -7;
+    return FORMOSA_WG_ERR_BAD_GRAPH_DESC;
   }
 
   __global struct EdgeDescriptor *edges =
@@ -148,11 +173,11 @@ int formosa_emit(uint edge_id, const __private void *record) {
   }
 
   if (edge == 0)
-    return -8;
+    return FORMOSA_WG_ERR_EDGE_NOT_FOUND;
   if (edge->src_node_id != ctx->node_id)
-    return -9;
+    return FORMOSA_WG_ERR_WRONG_SOURCE_NODE;
   if (edge->record_size == 0 || edge->queue_capacity == 0)
-    return -10;
+    return FORMOSA_WG_ERR_BAD_EDGE_DESC;
 
   __global struct NodeDescriptor *nodes =
       (__global struct NodeDescriptor *)(uintptr_t)graph->node_desc_addr;
@@ -165,9 +190,9 @@ int formosa_emit(uint edge_id, const __private void *record) {
   }
 
   if (dst_index >= graph->node_count)
-    return -11;
+    return FORMOSA_WG_ERR_DST_NODE_NOT_FOUND;
   if (dst_index >= pool->node_queue_count)
-    return -12;
+    return FORMOSA_WG_ERR_DST_QUEUE_OUT_OF_RANGE;
 
   __global uchar *queue_base =
       (__global uchar *)(uintptr_t)pool->node_queue_addr;
@@ -178,23 +203,27 @@ int formosa_emit(uint edge_id, const __private void *record) {
 
   uint record_size = queue->record_size;
   if (queue->capacity == 0 || record_size == 0 || queue->records_addr == 0) {
-    return -13;
+    return FORMOSA_WG_ERR_BAD_QUEUE;
   }
   if (record_size != edge->record_size)
-    return -14;
+    return FORMOSA_WG_ERR_RECORD_SIZE_MISMATCH;
+  if (queue->ready_sequence_addr == 0)
+    return FORMOSA_WG_ERR_BAD_READY_SEQUENCE;
 
-  volatile __global uint *tail = (volatile __global uint *)&queue->tail;
-  uint slot = atomic_inc(tail);
-  if (slot >= queue->capacity) {
-    /* Formosa does not currently provide the OpenCL compare-and-swap builtin
-       in the kernel library. Undo the supported fetch-add reservation on
-       overflow so the final retired queue tail is not left past capacity in
-       Phase 3. The final protocol still needs bounded reservation plus ready
-       publication. */
-    atomic_dec(tail);
-    return -15;
-  }
-
+  /* Phase 4 queue protocol:
+     1. Reserve a monotonically increasing logical ticket.
+     2. Write the payload into the ticket's physical ring slot.
+     3. Publish ticket + 1 in the slot's ready sequence.
+     Firmware MaxRecords admission and active output reservations guarantee
+     that this producer has downstream capacity before launch; the device helper
+     intentionally does not re-check consumed_head, which is firmware-updated
+     metadata and may be stale in an SM cache.
+     Firmware advances ready_tail over the contiguous published prefix only
+     after producer retirement and cache visibility handling. */
+  volatile __global uint *reserve_tail =
+      (volatile __global uint *)&queue->reserve_tail;
+  uint ticket = atomic_inc(reserve_tail);
+  uint slot = ticket % queue->capacity;
   __global uchar *dst = (__global uchar *)(uintptr_t)queue->records_addr +
                         ((size_t)slot * record_size);
   const __private uchar *src = (const __private uchar *)record;
@@ -202,7 +231,15 @@ int formosa_emit(uint edge_id, const __private void *record) {
     dst[i] = src[i];
   }
 
-  /* Consumers are scheduled by firmware only after the producer node retires,
-     so this path relies on retire-driven visibility. */
-  return 0;
+  /* Formosa does not currently link the OpenCL mem_fence builtin. The payload
+     copy intentionally remains before ready publication in source order, and
+     the current scheduler does not allow consumers to read these records until
+     after the producer kernel retires and firmware has handled queue/cache
+     visibility. A real device-side release fence is needed before supporting
+     concurrent producer/consumer queue consumption. */
+  volatile __global uint *ready_sequence =
+      (volatile __global uint *)(uintptr_t)queue->ready_sequence_addr;
+  ready_sequence[slot] = ticket + 1;
+
+  return FORMOSA_WG_SUCCESS;
 }

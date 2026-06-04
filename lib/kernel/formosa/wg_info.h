@@ -21,7 +21,7 @@ struct WorkGraphNodeContext {
   uint32_t dispatch_id;
 
   uint32_t graph_launch_id;
-  uint32_t reserved0;
+  uint32_t input_record_head;
 };
 
 struct WGInfo {
@@ -33,8 +33,8 @@ struct WGInfo {
   uint32_t num_threads;
   void *trampoline;
   void *kargs;
-  uint64_t stack_base;  // stack base address for this work-group
-  uint32_t stack_size;  // stack size for a work-item
+  uint64_t stack_base; // stack base address for this work-group
+  uint32_t stack_size; // stack size for a work-item
   uint64_t local_memory_base;
   uint32_t local_memory_size;
   char *printf_buffer;
