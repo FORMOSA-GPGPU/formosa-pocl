@@ -535,8 +535,11 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
     if (node_queue_caps[i] == 0) node_queue_caps[i] = 16;
   }
 
-  if (bg->dev_graph_status == 0)
-    fsa_malloc((void **)&bg->dev_graph_status, sizeof(GraphStatus));
+  if (bg->dev_graph_status == 0 &&
+      fsa_malloc((void **)&bg->dev_graph_status, sizeof(GraphStatus))) {
+    POCL_MSG_ERR("formosa: failed to allocate graph status\n");
+    goto CLEANUP;
+  }
   if (bg->dev_graph_desc == 0)
     fsa_malloc((void **)&bg->dev_graph_desc, sizeof(GraphDescriptor));
   if (bg->dev_runtime_pool == 0)
@@ -567,8 +570,12 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
       bg->node_queue_ready_sequence_sizes == NULL) {
     if (bg->dev_node_queues) fsa_free((void *)bg->dev_node_queues);
     pocl_formosa_free_node_queue_storage(bg);
-    fsa_malloc((void **)&bg->dev_node_queues,
-               sizeof(NodeInputQueue) * node_count);
+    bg->dev_node_queues = 0;
+    if (fsa_malloc((void **)&bg->dev_node_queues,
+                   sizeof(NodeInputQueue) * node_count)) {
+      POCL_MSG_ERR("formosa: failed to allocate node input queues\n");
+      goto CLEANUP;
+    }
     bg->dev_node_queue_records =
         (uint64_t *)calloc(node_count, sizeof(uint64_t));
     bg->dev_node_queue_ready_sequences =
@@ -591,6 +598,14 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
     fsa_malloc((void **)&bg->dev_node_states,
                sizeof(NodeRuntimeState) * node_count);
     bg->node_state_capacity = node_count;
+  }
+
+  GraphStatus initial_status = {0};
+  initial_status.state = kGraphStatusIdle;
+  if (fsa_copy_to_dev(bg->dev_graph_status, &initial_status,
+                      sizeof(initial_status))) {
+    POCL_MSG_ERR("formosa: failed to initialize graph status\n");
+    goto CLEANUP;
   }
 
   for (cl_uint i = 0; i < node_count; i++) {
@@ -719,9 +734,10 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
         bg->dev_node_queue_ready_sequences[i] = 0;
         bg->node_queue_ready_sequence_sizes[i] = 0;
       }
-      if (fsa_malloc((void **)&bg->dev_node_queue_ready_sequences[i],
-                     ready_sequences_size)) {
-        POCL_MSG_ERR("formosa: failed to allocate node ready sequences\n");
+      if (fsa_malloc_noncache((void **)&bg->dev_node_queue_ready_sequences[i],
+                              ready_sequences_size)) {
+        POCL_MSG_ERR(
+            "formosa: failed to allocate non-cacheable node ready sequences\n");
         free(ready_sequences);
         goto CLEANUP;
       }
@@ -824,17 +840,43 @@ CLEANUP:
   free(node_states);
 }
 
+static cl_int pocl_formosa_read_graph_status(
+    struct pocl_formosa_work_graph_data *bg, GraphStatus *status) {
+  if (bg == NULL || bg->dev_graph_status == 0) return CL_INVALID_VALUE;
+  if (fsa_copy_from_dev(bg->dev_graph_status, status, sizeof(*status)) != 0)
+    return CL_OUT_OF_RESOURCES;
+  return CL_SUCCESS;
+}
+
 cl_int pocl_formosa_get_work_graph_info(cl_work_graph_formosa graph,
                                         cl_uint param, size_t size, void *value,
                                         size_t *size_ret) {
-  if (param == CL_GRAPH_INFO_STATUS_FORMOSA) {
+  if (graph == NULL) return CL_INVALID_VALUE;
+
+  struct pocl_formosa_work_graph_data *bg =
+      (struct pocl_formosa_work_graph_data *)graph->backend_data;
+
+  if (param == CL_GRAPH_INFO_STATUS_FORMOSA ||
+      param == CL_GRAPH_INFO_LAST_ERROR_FORMOSA ||
+      param == CL_GRAPH_INFO_MAX_ACTIVE_DISPATCHES_FORMOSA) {
+    GraphStatus status = {0};
+    cl_int err = pocl_formosa_read_graph_status(bg, &status);
+    if (err != CL_SUCCESS) return err;
+
     if (value) {
       if (size < sizeof(cl_uint)) return CL_INVALID_VALUE;
-      *(cl_uint *)value = CL_GRAPH_STATUS_IDLE_FORMOSA;
+      if (param == CL_GRAPH_INFO_STATUS_FORMOSA) {
+        *(cl_uint *)value = (cl_uint)status.state;
+      } else if (param == CL_GRAPH_INFO_LAST_ERROR_FORMOSA) {
+        *(cl_uint *)value = (cl_uint)status.error_code;
+      } else {
+        *(cl_uint *)value = status.max_active_dispatches;
+      }
     }
     if (size_ret) *size_ret = sizeof(cl_uint);
     return CL_SUCCESS;
   }
+
   return CL_INVALID_VALUE;
 }
 

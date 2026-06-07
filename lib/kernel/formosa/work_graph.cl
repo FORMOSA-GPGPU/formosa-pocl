@@ -95,6 +95,15 @@ struct NodeDescriptor {
   uint32_t max_input_records_per_dispatch;
 };
 
+static inline void formosa_wg_publish_ready(volatile __global uint *ready_slot,
+                                            uint value) {
+  uint old;
+  __asm__ volatile("amoswap.w.aqrl %0, %2, (%1)"
+                   : "=r"(old)
+                   : "r"(ready_slot), "r"(value)
+                   : "memory");
+}
+
 uint formosa_get_record_count(void) {
   struct WGInfo *info = get_wg_info();
   __global struct WorkGraphNodeContext *ctx =
@@ -218,8 +227,9 @@ int formosa_emit(uint edge_id, const __private void *record) {
      that this producer has downstream capacity before launch; the device helper
      intentionally does not re-check consumed_head, which is firmware-updated
      metadata and may be stale in an SM cache.
-     Firmware advances ready_tail over the contiguous published prefix only
-     after producer retirement and cache visibility handling. */
+     Firmware advances ready_tail over the contiguous published prefix after it
+     has observed ready_sequence entries and made the corresponding payload
+     range visible to later consumer kernels. */
   volatile __global uint *reserve_tail =
       (volatile __global uint *)&queue->reserve_tail;
   uint ticket = atomic_inc(reserve_tail);
@@ -231,15 +241,15 @@ int formosa_emit(uint edge_id, const __private void *record) {
     dst[i] = src[i];
   }
 
-  /* Formosa does not currently link the OpenCL mem_fence builtin. The payload
-     copy intentionally remains before ready publication in source order, and
-     the current scheduler does not allow consumers to read these records until
-     after the producer kernel retires and firmware has handled queue/cache
-     visibility. A real device-side release fence is needed before supporting
-     concurrent producer/consumer queue consumption. */
   volatile __global uint *ready_sequence =
       (volatile __global uint *)(uintptr_t)queue->ready_sequence_addr;
-  ready_sequence[slot] = ticket + 1;
+  /* Publish the per-slot ready marker with a Formosa AMO carrying acquire/
+     release ordering. ready_sequence storage is allocated from non-cacheable
+     metadata memory so firmware can poll it as a per-record completion marker.
+     Firmware must still flush the cacheable payload range before dispatching a
+     consumer; this publish point only orders this work-item's payload writes
+     before the ready marker. */
+  formosa_wg_publish_ready(&ready_sequence[slot], ticket + 1);
 
   return FORMOSA_WG_SUCCESS;
 }
