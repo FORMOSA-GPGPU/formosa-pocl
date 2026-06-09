@@ -33,6 +33,7 @@ struct NodeInputQueue {
   volatile uint32_t reserve_tail;
   volatile uint32_t ready_tail;
   volatile uint32_t consumed_head;
+  volatile uint32_t dispatch_head;
   volatile uint32_t admission_reserved;
 
   uint32_t capacity;
@@ -93,6 +94,7 @@ struct NodeDescriptor {
   uint64_t static_kernarg_addr;
   uint32_t static_kernarg_size;
   uint32_t max_input_records_per_dispatch;
+  uint32_t max_active_dispatches;
 };
 
 static inline void formosa_wg_publish_ready(volatile __global uint *ready_slot,
@@ -219,7 +221,7 @@ int formosa_emit(uint edge_id, const __private void *record) {
   if (queue->ready_sequence_addr == 0)
     return FORMOSA_WG_ERR_BAD_READY_SEQUENCE;
 
-  /* Phase 4 queue protocol:
+  /* WorkGraph ring queue protocol:
      1. Reserve a monotonically increasing logical ticket.
      2. Write the payload into the ticket's physical ring slot.
      3. Publish ticket + 1 in the slot's ready sequence.
@@ -244,11 +246,10 @@ int formosa_emit(uint edge_id, const __private void *record) {
   volatile __global uint *ready_sequence =
       (volatile __global uint *)(uintptr_t)queue->ready_sequence_addr;
   /* Publish the per-slot ready marker with a Formosa AMO carrying acquire/
-     release ordering. ready_sequence storage is allocated from non-cacheable
-     metadata memory so firmware can poll it as a per-record completion marker.
-     Firmware must still flush the cacheable payload range before dispatching a
-     consumer; this publish point only orders this work-item's payload writes
-     before the ready marker. */
+     release ordering. ready_sequence storage is non-cacheable so firmware can
+     observe completion while the producer dispatch is still active. Payload
+     records remain cacheable; firmware must flush the newly ready payload range
+     before dispatching a consumer. */
   formosa_wg_publish_ready(&ready_sequence[slot], ticket + 1);
 
   return FORMOSA_WG_SUCCESS;

@@ -10,6 +10,12 @@
 #include "pocl_cl.h"
 #include "pocl_util.h"
 
+/* Extra ctx/kernarg slots let firmware keep multiple dispatches active for the
+   same graph, including same-node dispatch overlap. The hard firmware cap is
+   still enforced by CP_GRAPH_MAX_DISPATCH_SLOTS. */
+#define FORMOSA_WG_EXTRA_DISPATCH_SLOTS 4
+#define FORMOSA_WG_MAX_DISPATCH_SLOTS 64
+
 static inline uint64_t pocl_formosa_align(uint64_t n, size_t size) {
   return (n + size - 1) & ~(size - 1);
 }
@@ -341,6 +347,11 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
     POCL_MSG_ERR("formosa: graph launch requires at least one node\n");
     return;
   }
+  if (node_count > FORMOSA_WG_MAX_DISPATCH_SLOTS) {
+    POCL_MSG_ERR("formosa: graph has too many nodes (%u > %u)\n", node_count,
+                 FORMOSA_WG_MAX_DISPATCH_SLOTS);
+    return;
+  }
 
   if (num_root_inputs != 1) {
     POCL_MSG_ERR("formosa: graph launch must have exactly 1 root input\n");
@@ -390,8 +401,8 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
   }
 
   /* The public graph list is prepended, so walking it directly reverses API
-     creation order. Preserve creation order for deterministic Phase 4 queue
-     scans after the root. */
+     creation order. Preserve creation order for deterministic queue scans after
+     the root. */
   ordered_nodes[0] = root_node;
   node_idx = 1;
   for (cl_uint rev_i = node_count; rev_i > 0; rev_i--) {
@@ -482,9 +493,9 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
     edge_descs[i].max_records_per_src_dispatch =
         edge->properties.max_records_per_src_dispatch;
     if (edge_descs[i].max_records_per_src_dispatch == 0) {
-      /* Phase 4 admission should eventually require an explicit nonzero
-         bound for every emitted edge. Use the edge capacity as a conservative
-         migration fallback. */
+      /* Admission should eventually require an explicit nonzero bound for every
+         emitted edge. Use the edge capacity as a conservative migration
+         fallback. */
       edge_descs[i].max_records_per_src_dispatch = queue_capacity;
     }
 
@@ -499,7 +510,7 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
   }
   if (cycle_check) {
     POCL_MSG_ERR(
-        "formosa: graph contains a cycle; Phase 4 supports DAGs only\n");
+        "formosa: graph contains a cycle; DAGs only are supported for now\n");
     goto CLEANUP;
   }
 
@@ -521,7 +532,7 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
   if (root_inputs[0].record_count > 0 &&
       root_inputs[0].record_stride != root_record_size) {
     POCL_MSG_ERR(
-        "formosa: Phase 4 root queue seeding requires packed root records "
+        "formosa: ring queue root seeding requires packed root records "
         "(stride=%zu record_size=%u)\n",
         root_inputs[0].record_stride, root_record_size);
     goto CLEANUP;
@@ -635,6 +646,7 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
     nd->input_record_size = node->properties.input_record_size;
     nd->max_input_records_per_dispatch =
         node->properties.max_input_records_per_dispatch;
+    nd->max_active_dispatches = node->properties.max_active_dispatches;
     nd->kernel_object = entry_pc;
     nd->kernel_trampoline = trampoline_pc;
     nd->work_dim = node->work_dim;
@@ -698,6 +710,7 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
     node_queues[i].reserve_tail = 0;
     node_queues[i].ready_tail = 0;
     node_queues[i].consumed_head = 0;
+    node_queues[i].dispatch_head = 0;
     node_queues[i].admission_reserved = 0;
     node_queues[i].capacity = capacity;
     node_queues[i].record_size = record_size;
@@ -734,6 +747,9 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
         bg->dev_node_queue_ready_sequences[i] = 0;
         bg->node_queue_ready_sequence_sizes[i] = 0;
       }
+      /* Firmware polls ready_sequence while producers may still be active, so
+       * these per-slot completion markers must bypass the SM D-cache.
+       */
       if (fsa_malloc_noncache((void **)&bg->dev_node_queue_ready_sequences[i],
                               ready_sequences_size)) {
         POCL_MSG_ERR(
@@ -761,7 +777,7 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
 
   /* Fill Graph Descriptor */
   GraphDescriptor gd = {0};
-  gd.version = 2;
+  gd.version = 5;
   gd.node_count = node_count;
   gd.edge_count = edge_count;
   gd.node_desc_addr = bg->dev_node_descs;
@@ -780,12 +796,15 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
   fsa_copy_to_dev(dev_root_desc, &rid, sizeof(RootInputDescriptor));
 
   /* Fill Runtime Pool */
+  cl_uint dispatch_slot_count = node_count + FORMOSA_WG_EXTRA_DISPATCH_SLOTS;
+  if (dispatch_slot_count > FORMOSA_WG_MAX_DISPATCH_SLOTS)
+    dispatch_slot_count = FORMOSA_WG_MAX_DISPATCH_SLOTS;
   pool.ctx_stride = sizeof(WorkGraphNodeContext);
-  pool.ctx_slot_count = node_count;
+  pool.ctx_slot_count = dispatch_slot_count;
   fsa_malloc((void **)&pool.ctx_pool_base,
              pool.ctx_stride * pool.ctx_slot_count);
   pool.kernarg_stride = 256;
-  pool.kernarg_slot_count = node_count;
+  pool.kernarg_slot_count = dispatch_slot_count;
   fsa_malloc((void **)&pool.kernarg_pool_base,
              pool.kernarg_stride * pool.kernarg_slot_count);
   pool.graph_desc_addr = bg->dev_graph_desc;
@@ -858,7 +877,8 @@ cl_int pocl_formosa_get_work_graph_info(cl_work_graph_formosa graph,
 
   if (param == CL_GRAPH_INFO_STATUS_FORMOSA ||
       param == CL_GRAPH_INFO_LAST_ERROR_FORMOSA ||
-      param == CL_GRAPH_INFO_MAX_ACTIVE_DISPATCHES_FORMOSA) {
+      param == CL_GRAPH_INFO_MAX_ACTIVE_DISPATCHES_FORMOSA ||
+      param == CL_GRAPH_INFO_MAX_NODE_ACTIVE_DISPATCHES_FORMOSA) {
     GraphStatus status = {0};
     cl_int err = pocl_formosa_read_graph_status(bg, &status);
     if (err != CL_SUCCESS) return err;
@@ -869,6 +889,8 @@ cl_int pocl_formosa_get_work_graph_info(cl_work_graph_formosa graph,
         *(cl_uint *)value = (cl_uint)status.state;
       } else if (param == CL_GRAPH_INFO_LAST_ERROR_FORMOSA) {
         *(cl_uint *)value = (cl_uint)status.error_code;
+      } else if (param == CL_GRAPH_INFO_MAX_NODE_ACTIVE_DISPATCHES_FORMOSA) {
+        *(cl_uint *)value = status.max_node_active_dispatches;
       } else {
         *(cl_uint *)value = status.max_active_dispatches;
       }

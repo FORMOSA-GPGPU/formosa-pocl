@@ -111,6 +111,7 @@ typedef struct _cl_work_graph_root_input_formosa {
 #define CL_GRAPH_INFO_STATUS_FORMOSA 0x5006
 #define CL_GRAPH_INFO_LAST_ERROR_FORMOSA 0x5007
 #define CL_GRAPH_INFO_MAX_ACTIVE_DISPATCHES_FORMOSA 0x5008
+#define CL_GRAPH_INFO_MAX_NODE_ACTIVE_DISPATCHES_FORMOSA 0x5009
 
 /*
  * Command type for graph launch.
