@@ -714,6 +714,7 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
     node_queues[i].admission_reserved = 0;
     node_queues[i].capacity = capacity;
     node_queues[i].record_size = record_size;
+    node_queues[i].flags = 0;
 
     if ((int)i == root_idx) {
       if (bg->dev_node_queue_records[i]) {
@@ -733,11 +734,22 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
           bg->node_queue_record_sizes[i] < records_size) {
         if (bg->dev_node_queue_records[i])
           fsa_free((void *)bg->dev_node_queue_records[i]);
-        fsa_malloc((void **)&bg->dev_node_queue_records[i], records_size);
+        bg->dev_node_queue_records[i] = 0;
+        bg->node_queue_record_sizes[i] = 0;
+        if (fsa_malloc_noncache((void **)&bg->dev_node_queue_records[i],
+                                records_size)) {
+          POCL_MSG_ERR(
+              "formosa: failed to allocate non-cacheable node queue records "
+              "node=%u cap=%u record_size=%u bytes=%zu\n",
+              ordered_nodes[i]->node_id, capacity, record_size, records_size);
+          free(ready_sequences);
+          goto CLEANUP;
+        }
         bg->node_queue_record_sizes[i] = records_size;
       }
 
       node_queues[i].records_addr = bg->dev_node_queue_records[i];
+      node_queues[i].flags |= NODE_QUEUE_RECORDS_NONCACHEABLE;
     }
 
     if (bg->dev_node_queue_ready_sequences[i] == 0 ||
@@ -777,7 +789,7 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
 
   /* Fill Graph Descriptor */
   GraphDescriptor gd = {0};
-  gd.version = 5;
+  gd.version = FORMOSA_WORK_GRAPH_ABI_VERSION;
   gd.node_count = node_count;
   gd.edge_count = edge_count;
   gd.node_desc_addr = bg->dev_node_descs;

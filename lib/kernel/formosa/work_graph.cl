@@ -19,6 +19,8 @@
 #define FORMOSA_WG_ERR_BAD_READY_SEQUENCE -16
 #define FORMOSA_WG_ERR_RECORD_OUT_OF_RANGE -17
 
+#define NODE_QUEUE_RECORDS_NONCACHEABLE (1u << 0)
+
 struct EdgeDescriptor {
   uint32_t edge_id;
   uint32_t src_node_id;
@@ -38,6 +40,7 @@ struct NodeInputQueue {
 
   uint32_t capacity;
   uint32_t record_size;
+  uint32_t flags;
 
   uint64_t records_addr;
   uint64_t ready_sequence_addr;
@@ -99,11 +102,7 @@ struct NodeDescriptor {
 
 static inline void formosa_wg_publish_ready(volatile __global uint *ready_slot,
                                             uint value) {
-  uint old;
-  __asm__ volatile("amoswap.w.aqrl %0, %2, (%1)"
-                   : "=r"(old)
-                   : "r"(ready_slot), "r"(value)
-                   : "memory");
+  *ready_slot = value;
 }
 
 uint formosa_get_record_count(void) {
@@ -135,8 +134,16 @@ int formosa_get_record(uint index, __private void *record_out,
                         ((size_t)index * stride);
   __private uchar *dst = (__private uchar *)record_out;
 
-  for (size_t i = 0; i < record_size; i++) {
-    dst[i] = src[i];
+  if ((((uintptr_t)src | (uintptr_t)dst | record_size) & 3u) == 0) {
+    __global uint *src_words = (__global uint *)src;
+    __private uint *dst_words = (__private uint *)dst;
+    for (size_t i = 0; i < record_size / sizeof(uint); i++) {
+      dst_words[i] = src_words[i];
+    }
+  } else {
+    for (size_t i = 0; i < record_size; i++) {
+      dst[i] = src[i];
+    }
   }
 
   return FORMOSA_WG_SUCCESS;
@@ -239,17 +246,24 @@ int formosa_emit(uint edge_id, const __private void *record) {
   __global uchar *dst = (__global uchar *)(uintptr_t)queue->records_addr +
                         ((size_t)slot * record_size);
   const __private uchar *src = (const __private uchar *)record;
-  for (uint i = 0; i < record_size; i++) {
-    dst[i] = src[i];
+  if ((((uintptr_t)dst | (uintptr_t)src | record_size) & 3u) == 0) {
+    __global uint *dst_words = (__global uint *)dst;
+    const __private uint *src_words = (const __private uint *)src;
+    for (uint i = 0; i < record_size / sizeof(uint); i++) {
+      dst_words[i] = src_words[i];
+    }
+  } else {
+    for (uint i = 0; i < record_size; i++) {
+      dst[i] = src[i];
+    }
   }
 
   volatile __global uint *ready_sequence =
       (volatile __global uint *)(uintptr_t)queue->ready_sequence_addr;
-  /* Publish the per-slot ready marker with a Formosa AMO carrying acquire/
-     release ordering. ready_sequence storage is non-cacheable so firmware can
-     observe completion while the producer dispatch is still active. Payload
-     records remain cacheable; firmware must flush the newly ready payload range
-     before dispatching a consumer. */
+  /* Publish after the payload slot has been written. ready_sequence storage is
+     non-cacheable so firmware can observe producer progress while the dispatch
+     is still active. Firmware uses queue flags to flush cacheable payload
+     ranges and skip payload flushes for non-cacheable record queues. */
   formosa_wg_publish_ready(&ready_sequence[slot], ticket + 1);
 
   return FORMOSA_WG_SUCCESS;
