@@ -28,7 +28,7 @@ struct EdgeDescriptor {
   uint32_t record_size;
 
   uint32_t queue_capacity;
-  uint32_t max_records_per_src_dispatch;
+  uint32_t max_records_per_src_record;
 };
 
 struct NodeInputQueue {
@@ -98,6 +98,7 @@ struct NodeDescriptor {
   uint32_t static_kernarg_size;
   uint32_t max_input_records_per_dispatch;
   uint32_t max_active_dispatches;
+  uint32_t workgroups_per_input_record;
 };
 
 static inline void formosa_wg_publish_ready(volatile __global uint *ready_slot,
@@ -112,6 +113,25 @@ uint formosa_get_record_count(void) {
   if (ctx == NULL)
     return 0;
   return ctx->input_record_count;
+}
+
+uint formosa_get_record_workgroup_count(void) {
+  struct WGInfo *info = get_wg_info();
+  __global struct WorkGraphNodeContext *ctx =
+      (__global struct WorkGraphNodeContext *)(uintptr_t)info->work_graph_ctx;
+  if (ctx == NULL || ctx->workgroups_per_input_record == 0)
+    return 1;
+  return ctx->workgroups_per_input_record;
+}
+
+uint formosa_get_current_record_index(void) {
+  uint expansion = formosa_get_record_workgroup_count();
+  return (uint)get_global_id(0) / expansion;
+}
+
+uint formosa_get_current_record_workgroup_id(void) {
+  uint expansion = formosa_get_record_workgroup_count();
+  return (uint)get_global_id(0) % expansion;
 }
 
 int formosa_get_record(uint index, __private void *record_out,

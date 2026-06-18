@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// https://wiki.caslab.ee.ncku.edu.tw/doc/hardware-s6Qvv4Rq2B#h-work-group
+/* Keep this ABI mirror in sync with formosa-hal/formosa-graph.h. */
 struct WorkGraphNodeContext {
   uint32_t node_id;
   uint32_t launch_mode;
@@ -22,7 +22,25 @@ struct WorkGraphNodeContext {
 
   uint32_t graph_launch_id;
   uint32_t input_record_head;
+  uint32_t workgroups_per_input_record;
+  uint32_t reserved0;
 };
+
+_Static_assert(sizeof(struct WorkGraphNodeContext) == 64,
+               "WorkGraphNodeContext size mismatch");
+_Static_assert(offsetof(struct WorkGraphNodeContext, input_records) == 16,
+               "WorkGraphNodeContext.input_records offset mismatch");
+_Static_assert(offsetof(struct WorkGraphNodeContext, graph_runtime) == 24,
+               "WorkGraphNodeContext.graph_runtime offset mismatch");
+_Static_assert(offsetof(struct WorkGraphNodeContext, edge_table) == 32,
+               "WorkGraphNodeContext.edge_table offset mismatch");
+_Static_assert(offsetof(struct WorkGraphNodeContext, graph_launch_id) == 48,
+               "WorkGraphNodeContext.graph_launch_id offset mismatch");
+_Static_assert(offsetof(struct WorkGraphNodeContext, input_record_head) == 52,
+               "WorkGraphNodeContext.input_record_head offset mismatch");
+_Static_assert(
+    offsetof(struct WorkGraphNodeContext, workgroups_per_input_record) == 56,
+    "WorkGraphNodeContext.workgroups_per_input_record offset mismatch");
 
 struct WGInfo {
   uint32_t dim;

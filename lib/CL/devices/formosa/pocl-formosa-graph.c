@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,9 +16,57 @@
    still enforced by CP_GRAPH_MAX_DISPATCH_SLOTS. */
 #define FORMOSA_WG_EXTRA_DISPATCH_SLOTS 4
 #define FORMOSA_WG_MAX_DISPATCH_SLOTS 64
+#define FORMOSA_WG_DEFAULT_QUEUE_CAPACITY 16
 
 static inline uint64_t pocl_formosa_align(uint64_t n, size_t size) {
   return (n + size - 1) & ~(size - 1);
+}
+
+static inline uint32_t pocl_formosa_default_queue_capacity(
+    cl_uint root_record_count) {
+  return root_record_count != 0 ? root_record_count
+                                : FORMOSA_WG_DEFAULT_QUEUE_CAPACITY;
+}
+
+static int pocl_formosa_mul_u32_overflow(uint32_t a, uint32_t b,
+                                         uint32_t *out) {
+  if (a != 0 && b > UINT32_MAX / a) return 1;
+  *out = a * b;
+  return 0;
+}
+
+static cl_int pocl_formosa_validate_node_properties(
+    const struct _cl_work_graph_node_formosa *node) {
+  uint32_t launch_mode = node->properties.launch_mode;
+  if (launch_mode != CL_NODE_LAUNCH_THREAD_FORMOSA &&
+      launch_mode != CL_NODE_LAUNCH_COALESCING_FORMOSA &&
+      launch_mode != CL_NODE_LAUNCH_BROADCASTING_FORMOSA) {
+    POCL_MSG_ERR("formosa: unsupported WorkGraph node launch mode %u\n",
+                 launch_mode);
+    return CL_INVALID_VALUE;
+  }
+
+  if (launch_mode != CL_NODE_LAUNCH_BROADCASTING_FORMOSA &&
+      node->properties.workgroups_per_input_record > 1) {
+    POCL_MSG_ERR(
+        "formosa: workgroups_per_input_record requires BROADCASTING mode\n");
+    return CL_INVALID_VALUE;
+  }
+
+  if (launch_mode == CL_NODE_LAUNCH_COALESCING_FORMOSA &&
+      node->properties.max_input_records_per_dispatch == 0) {
+    POCL_MSG_ERR(
+        "formosa: COALESCING nodes require max_input_records_per_dispatch\n");
+    return CL_INVALID_VALUE;
+  }
+
+  if (node->properties.input_record_size == 0) {
+    POCL_MSG_ERR("formosa: graph node %u has zero input record size\n",
+                 node->node_id);
+    return CL_INVALID_VALUE;
+  }
+
+  return CL_SUCCESS;
 }
 
 struct pocl_formosa_work_graph_data {
@@ -62,6 +111,9 @@ cl_int pocl_formosa_create_work_graph_node(
     cl_uint work_dim, const size_t *global_offset, const size_t *global_size,
     const size_t *local_size,
     const cl_work_graph_node_properties_formosa *properties) {
+  cl_int err = pocl_formosa_validate_node_properties(node);
+  if (err != CL_SUCCESS) return err;
+
   struct pocl_formosa_work_graph_node_data *bn =
       (struct pocl_formosa_work_graph_node_data *)calloc(
           1, sizeof(struct pocl_formosa_work_graph_node_data));
@@ -326,8 +378,11 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
   EdgeDescriptor *edge_descs = NULL;
   NodeInputQueue *node_queues = NULL;
   NodeRuntimeState *node_states = NULL;
+  uint8_t *edge_capacity_resolved = NULL;
+  uint32_t *node_unresolved_in_edges = NULL;
   uint64_t dev_root_desc = 0;
   GraphRuntimePool pool = {0};
+  cl_int err = CL_SUCCESS;
 
   cl_uint node_count = 0;
   struct _cl_work_graph_node_formosa *curr_node = graph->nodes;
@@ -370,6 +425,11 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
     POCL_MSG_ERR("formosa: root target node not found\n");
     return;
   }
+  if ((root_node->properties.flags & CL_NODE_ROOT_CAPABLE_FORMOSA) == 0) {
+    POCL_MSG_ERR("formosa: root target node %u is not root-capable\n",
+                 root_node->node_id);
+    return;
+  }
 
   listed_nodes = (struct _cl_work_graph_node_formosa **)calloc(
       node_count, sizeof(*listed_nodes));
@@ -385,10 +445,15 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
                    : NULL;
   node_queues = (NodeInputQueue *)calloc(node_count, sizeof(*node_queues));
   node_states = (NodeRuntimeState *)calloc(node_count, sizeof(*node_states));
+  edge_capacity_resolved =
+      edge_count ? (uint8_t *)calloc(edge_count, sizeof(uint8_t)) : NULL;
+  node_unresolved_in_edges =
+      (uint32_t *)calloc(node_count, sizeof(*node_unresolved_in_edges));
 
   if (!listed_nodes || !ordered_nodes || (edge_count && !ordered_edges) ||
       !node_queue_caps || !node_descs || (edge_count && !edge_descs) ||
-      !node_queues || !node_states) {
+      !node_queues || !node_states || (edge_count && !edge_capacity_resolved) ||
+      !node_unresolved_in_edges) {
     POCL_MSG_ERR("formosa: out of host memory while lowering graph\n");
     goto CLEANUP;
   }
@@ -411,9 +476,8 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
   }
 
   for (cl_uint i = 0; i < node_count; i++) {
-    if (ordered_nodes[i]->properties.input_record_size == 0) {
-      POCL_MSG_ERR("formosa: graph node %u has zero input record size\n",
-                   ordered_nodes[i]->node_id);
+    err = pocl_formosa_validate_node_properties(ordered_nodes[i]);
+    if (err != CL_SUCCESS) {
       goto CLEANUP;
     }
     for (cl_uint j = i + 1; j < node_count; j++) {
@@ -473,33 +537,21 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
       goto CLEANUP;
     }
 
-    uint32_t queue_capacity = edge->properties.queue_capacity;
-    if (queue_capacity == 0)
-      queue_capacity =
-          edge->dst_node->properties.max_input_records_per_dispatch;
-    if (queue_capacity == 0) queue_capacity = root_inputs[0].record_count;
-    if (queue_capacity == 0) queue_capacity = 16;
-    if (queue_capacity == 0) {
-      POCL_MSG_ERR("formosa: graph edge %u has zero queue capacity\n",
-                   edge->edge_id);
-      goto CLEANUP;
-    }
-
     edge_descs[i].edge_id = edge->edge_id;
     edge_descs[i].src_node_id = edge->src_node->node_id;
     edge_descs[i].dst_node_id = edge->dst_node->node_id;
     edge_descs[i].record_size = record_size;
-    edge_descs[i].queue_capacity = queue_capacity;
-    edge_descs[i].max_records_per_src_dispatch =
-        edge->properties.max_records_per_src_dispatch;
-    if (edge_descs[i].max_records_per_src_dispatch == 0) {
-      /* Admission should eventually require an explicit nonzero bound for every
-         emitted edge. Use the edge capacity as a conservative migration
-         fallback. */
-      edge_descs[i].max_records_per_src_dispatch = queue_capacity;
+    edge_descs[i].queue_capacity = edge->properties.queue_capacity;
+    edge_descs[i].max_records_per_src_record =
+        edge->properties.max_records_per_src_record;
+    if (edge_descs[i].max_records_per_src_record == 0) {
+      /* Admission interprets this as a per-source-input-record emit bound.
+         Producers that can emit more than one output record per input must
+         specify an explicit bound. */
+      edge_descs[i].max_records_per_src_record = 1;
     }
 
-    node_queue_caps[dst_idx] += queue_capacity;
+    node_unresolved_in_edges[dst_idx]++;
   }
 
   int cycle_check = pocl_formosa_graph_has_cycle(ordered_nodes, node_count,
@@ -519,9 +571,69 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
   if (root_inputs[0].record_count > node_queue_caps[root_idx])
     node_queue_caps[root_idx] = root_inputs[0].record_count;
 
+  /* Infer destination queue storage. An explicit edge queue_capacity wins. If
+     the app leaves it at 0, derive a conservative capacity from the source
+     queue capacity and the per-source-record emit bound. This keeps queue
+     storage policy in PoCL instead of tying it to dispatch batch size. */
+  cl_uint resolved_edges = 0;
+  for (cl_uint pass = 0; pass < node_count && resolved_edges < edge_count;
+       pass++) {
+    int made_progress = 0;
+    for (cl_uint i = 0; i < edge_count; i++) {
+      if (edge_capacity_resolved[i]) continue;
+
+      struct _cl_work_graph_edge_formosa *edge = ordered_edges[i];
+      int src_idx = pocl_formosa_find_node_index_by_ptr(
+          ordered_nodes, node_count, edge->src_node);
+      int dst_idx = pocl_formosa_find_node_index_by_ptr(
+          ordered_nodes, node_count, edge->dst_node);
+
+      if (src_idx != (int)root_idx && node_unresolved_in_edges[src_idx] != 0)
+        continue;
+
+      uint32_t queue_capacity = edge_descs[i].queue_capacity;
+      if (queue_capacity == 0) {
+        if (node_queue_caps[src_idx] == 0) continue;
+        if (pocl_formosa_mul_u32_overflow(
+                node_queue_caps[src_idx],
+                edge_descs[i].max_records_per_src_record, &queue_capacity)) {
+          POCL_MSG_ERR(
+              "formosa: graph edge %u inferred queue capacity overflows\n",
+              edge->edge_id);
+          goto CLEANUP;
+        }
+        if (queue_capacity == 0)
+          queue_capacity =
+              pocl_formosa_default_queue_capacity(root_inputs[0].record_count);
+      }
+
+      if (UINT32_MAX - node_queue_caps[dst_idx] < queue_capacity) {
+        POCL_MSG_ERR("formosa: graph node %u queue capacity overflow\n",
+                     edge->dst_node->node_id);
+        goto CLEANUP;
+      }
+
+      edge_descs[i].queue_capacity = queue_capacity;
+      node_queue_caps[dst_idx] += queue_capacity;
+      edge_capacity_resolved[i] = 1;
+      node_unresolved_in_edges[dst_idx]--;
+      resolved_edges++;
+      made_progress = 1;
+    }
+
+    if (!made_progress) break;
+  }
+
+  if (resolved_edges != edge_count) {
+    POCL_MSG_ERR(
+        "formosa: failed to infer queue capacities; provide explicit edge "
+        "queue_capacity for disconnected or non-root-reachable graph edges\n");
+    goto CLEANUP;
+  }
+
   formosa_buffer_data_t *root_buf_data = NULL;
-  cl_int err = pocl_formosa_prepare_mem_arg(device, root_inputs[0].records,
-                                            &root_buf_data);
+  err = pocl_formosa_prepare_mem_arg(device, root_inputs[0].records,
+                                     &root_buf_data);
   if (err != CL_SUCCESS) {
     POCL_MSG_ERR("formosa: failed to prepare root input memory\n");
     goto CLEANUP;
@@ -541,9 +653,8 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
   for (cl_uint i = 0; i < node_count; i++) {
     if (node_queue_caps[i] == 0) {
       node_queue_caps[i] =
-          ordered_nodes[i]->properties.max_input_records_per_dispatch;
+          pocl_formosa_default_queue_capacity(root_inputs[0].record_count);
     }
-    if (node_queue_caps[i] == 0) node_queue_caps[i] = 16;
   }
 
   if (bg->dev_graph_status == 0 &&
@@ -647,6 +758,10 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
     nd->max_input_records_per_dispatch =
         node->properties.max_input_records_per_dispatch;
     nd->max_active_dispatches = node->properties.max_active_dispatches;
+    nd->workgroups_per_input_record =
+        node->properties.workgroups_per_input_record != 0
+            ? node->properties.workgroups_per_input_record
+            : 1;
     nd->kernel_object = entry_pc;
     nd->kernel_trampoline = trampoline_pc;
     nd->work_dim = node->work_dim;
@@ -654,6 +769,8 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
       nd->global_work_offset[j] = node->global_work_offset[j];
       nd->global_work_size[j] = node->global_work_size[j];
       nd->local_work_size[j] = node->local_work_size[j];
+      if (j < (int)node->work_dim && nd->local_work_size[j] == 0)
+        nd->local_work_size[j] = 1;
     }
 
     if (bn->dev_static_kargs == 0) {
@@ -698,6 +815,12 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
     uint32_t record_size =
         (uint32_t)ordered_nodes[i]->properties.input_record_size;
     uint32_t capacity = node_queue_caps[i];
+    if (record_size != 0 && capacity > SIZE_MAX / record_size) {
+      POCL_MSG_ERR(
+          "formosa: graph node %u queue records allocation overflows size_t\n",
+          ordered_nodes[i]->node_id);
+      goto CLEANUP;
+    }
     size_t records_size = (size_t)record_size * capacity;
     size_t ready_sequences_size = sizeof(uint32_t) * capacity;
     uint32_t *ready_sequences =
@@ -869,6 +992,8 @@ CLEANUP:
   free(edge_descs);
   free(node_queues);
   free(node_states);
+  free(edge_capacity_resolved);
+  free(node_unresolved_in_edges);
 }
 
 static cl_int pocl_formosa_read_graph_status(
