@@ -19,8 +19,6 @@
 #define FORMOSA_WG_ERR_BAD_READY_SEQUENCE -16
 #define FORMOSA_WG_ERR_RECORD_OUT_OF_RANGE -17
 
-#define NODE_QUEUE_RECORDS_NONCACHEABLE (1u << 0)
-
 struct EdgeDescriptor {
   uint32_t edge_id;
   uint32_t src_node_id;
@@ -282,8 +280,8 @@ int formosa_emit(uint edge_id, const __private void *record) {
       (volatile __global uint *)(uintptr_t)queue->ready_sequence_addr;
   /* Publish after the payload slot has been written. ready_sequence storage is
      non-cacheable so firmware can observe producer progress while the dispatch
-     is still active. Firmware uses queue flags to flush cacheable payload
-     ranges and skip payload flushes for non-cacheable record queues. */
+     is still active. WorkGraph record payload rings are also non-cacheable, so
+     firmware can advance ready_tail without flushing payload ranges. */
   formosa_wg_publish_ready(&ready_sequence[slot], ticket + 1);
 
   return FORMOSA_WG_SUCCESS;

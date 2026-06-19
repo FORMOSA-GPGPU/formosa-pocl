@@ -872,7 +872,6 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
       }
 
       node_queues[i].records_addr = bg->dev_node_queue_records[i];
-      node_queues[i].flags |= NODE_QUEUE_RECORDS_NONCACHEABLE;
     }
 
     if (bg->dev_node_queue_ready_sequences[i] == 0 ||
