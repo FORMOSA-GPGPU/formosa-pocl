@@ -20,10 +20,11 @@ struct WorkGraphNodeContext {
   uint32_t edge_count;
   uint32_t dispatch_id;
 
-  uint32_t graph_launch_id;
-  uint32_t input_record_head;
-  uint32_t workgroups_per_input_record;
+  /* Reserved ABI slots; keep input_record_head at offset 52. */
   uint32_t reserved0;
+  uint32_t input_record_head;
+  uint32_t work_items_per_input_record;
+  uint32_t reserved1;
 };
 
 _Static_assert(sizeof(struct WorkGraphNodeContext) == 64,
@@ -34,13 +35,13 @@ _Static_assert(offsetof(struct WorkGraphNodeContext, graph_runtime) == 24,
                "WorkGraphNodeContext.graph_runtime offset mismatch");
 _Static_assert(offsetof(struct WorkGraphNodeContext, edge_table) == 32,
                "WorkGraphNodeContext.edge_table offset mismatch");
-_Static_assert(offsetof(struct WorkGraphNodeContext, graph_launch_id) == 48,
-               "WorkGraphNodeContext.graph_launch_id offset mismatch");
+_Static_assert(offsetof(struct WorkGraphNodeContext, reserved0) == 48,
+               "WorkGraphNodeContext.reserved0 offset mismatch");
 _Static_assert(offsetof(struct WorkGraphNodeContext, input_record_head) == 52,
                "WorkGraphNodeContext.input_record_head offset mismatch");
 _Static_assert(
-    offsetof(struct WorkGraphNodeContext, workgroups_per_input_record) == 56,
-    "WorkGraphNodeContext.workgroups_per_input_record offset mismatch");
+    offsetof(struct WorkGraphNodeContext, work_items_per_input_record) == 56,
+    "WorkGraphNodeContext.work_items_per_input_record offset mismatch");
 
 struct WGInfo {
   uint32_t dim;

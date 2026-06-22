@@ -47,9 +47,9 @@ static cl_int pocl_formosa_validate_node_properties(
   }
 
   if (launch_mode != CL_NODE_LAUNCH_BROADCASTING_FORMOSA &&
-      node->properties.workgroups_per_input_record > 1) {
+      node->properties.work_items_per_input_record > 1) {
     POCL_MSG_ERR(
-        "formosa: workgroups_per_input_record requires BROADCASTING mode\n");
+        "formosa: work_items_per_input_record requires BROADCASTING mode\n");
     return CL_INVALID_VALUE;
   }
 
@@ -758,9 +758,9 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
     nd->max_input_records_per_dispatch =
         node->properties.max_input_records_per_dispatch;
     nd->max_active_dispatches = node->properties.max_active_dispatches;
-    nd->workgroups_per_input_record =
-        node->properties.workgroups_per_input_record != 0
-            ? node->properties.workgroups_per_input_record
+    nd->work_items_per_input_record =
+        node->properties.work_items_per_input_record != 0
+            ? node->properties.work_items_per_input_record
             : 1;
     nd->kernel_object = entry_pc;
     nd->kernel_trampoline = trampoline_pc;
@@ -837,7 +837,7 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
     node_queues[i].admission_reserved = 0;
     node_queues[i].capacity = capacity;
     node_queues[i].record_size = record_size;
-    node_queues[i].flags = 0;
+    node_queues[i].reserved0 = 0;
 
     if ((int)i == root_idx) {
       if (bg->dev_node_queue_records[i]) {

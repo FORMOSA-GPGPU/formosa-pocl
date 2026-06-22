@@ -38,7 +38,7 @@ struct NodeInputQueue {
 
   uint32_t capacity;
   uint32_t record_size;
-  uint32_t flags;
+  uint32_t reserved0;
 
   uint64_t records_addr;
   uint64_t ready_sequence_addr;
@@ -96,7 +96,7 @@ struct NodeDescriptor {
   uint32_t static_kernarg_size;
   uint32_t max_input_records_per_dispatch;
   uint32_t max_active_dispatches;
-  uint32_t workgroups_per_input_record;
+  uint32_t work_items_per_input_record;
 };
 
 static inline void formosa_wg_publish_ready(volatile __global uint *ready_slot,
@@ -113,22 +113,22 @@ uint formosa_get_record_count(void) {
   return ctx->input_record_count;
 }
 
-uint formosa_get_record_workgroup_count(void) {
+uint formosa_get_record_work_item_count(void) {
   struct WGInfo *info = get_wg_info();
   __global struct WorkGraphNodeContext *ctx =
       (__global struct WorkGraphNodeContext *)(uintptr_t)info->work_graph_ctx;
-  if (ctx == NULL || ctx->workgroups_per_input_record == 0)
+  if (ctx == NULL || ctx->work_items_per_input_record == 0)
     return 1;
-  return ctx->workgroups_per_input_record;
+  return ctx->work_items_per_input_record;
 }
 
 uint formosa_get_current_record_index(void) {
-  uint expansion = formosa_get_record_workgroup_count();
+  uint expansion = formosa_get_record_work_item_count();
   return (uint)get_global_id(0) / expansion;
 }
 
-uint formosa_get_current_record_workgroup_id(void) {
-  uint expansion = formosa_get_record_workgroup_count();
+uint formosa_get_current_record_work_item_id(void) {
+  uint expansion = formosa_get_record_work_item_count();
   return (uint)get_global_id(0) % expansion;
 }
 

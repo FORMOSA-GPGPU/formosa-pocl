@@ -63,7 +63,7 @@ typedef cl_uint cl_work_graph_node_launch_mode_formosa;
 #define CL_NODE_LAUNCH_COALESCING_FORMOSA 1
 #define CL_NODE_LAUNCH_BROADCASTING_FORMOSA 2
 
-#define CL_FORMOSA_WORK_GRAPH_HAS_WORKGROUPS_PER_INPUT_RECORD 1
+#define CL_FORMOSA_WORK_GRAPH_HAS_WORK_ITEMS_PER_INPUT_RECORD 1
 
 /*
  * Node properties.
@@ -75,11 +75,12 @@ typedef cl_uint cl_work_graph_node_launch_mode_formosa;
  * COALESCING nodes, this value must be nonzero and is the maximum number of
  * records visible to one workgroup dispatch.
  *
- * workgroups_per_input_record controls broadcasting-style launch expansion. A
+ * work_items_per_input_record controls broadcasting-style launch expansion. A
  * value of 0 means the default of 1. For broadcasting nodes, each input record
- * in a dispatch is mapped onto K x-dimension execution lanes, and device code
- * can derive the current record index and per-record lane id from the
- * WorkGraph helper APIs.
+ * in a dispatch is mapped onto K logical x-dimension work-items. The local
+ * size determines how those work-items are grouped into physical workgroups.
+ * Device code can derive the current record index and per-record work-item id
+ * from the WorkGraph helper APIs.
  */
 typedef struct _cl_work_graph_node_properties_formosa {
   cl_work_graph_node_flags_formosa flags;
@@ -87,7 +88,7 @@ typedef struct _cl_work_graph_node_properties_formosa {
   cl_work_graph_node_launch_mode_formosa launch_mode;
   cl_uint max_input_records_per_dispatch;
   cl_uint max_active_dispatches;
-  cl_uint workgroups_per_input_record;
+  cl_uint work_items_per_input_record;
 } cl_work_graph_node_properties_formosa;
 
 /*

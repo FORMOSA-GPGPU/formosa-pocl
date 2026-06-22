@@ -11,14 +11,15 @@
  */
 uint formosa_get_record_count(void);
 
-/* Returns the broadcasting expansion factor for the current node dispatch. */
-uint formosa_get_record_workgroup_count(void);
+/* Returns the broadcasting work-item expansion for the current node dispatch.
+ */
+uint formosa_get_record_work_item_count(void);
 
 /* Returns the input record index for this work-item. */
 uint formosa_get_current_record_index(void);
 
 /* Returns this work-item's id within its expanded input record. */
-uint formosa_get_current_record_workgroup_id(void);
+uint formosa_get_current_record_work_item_id(void);
 
 /*
  * Copies the record at 'index' into 'record_out'. COALESCING kernels may use
