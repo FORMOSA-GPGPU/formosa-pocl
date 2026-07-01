@@ -88,12 +88,6 @@ struct pocl_formosa_work_graph_data {
   cl_uint node_state_capacity;
 };
 
-struct pocl_formosa_work_graph_node_data {
-  uint64_t dev_static_kargs;
-  uint32_t static_kernarg_size;
-  uint64_t local_mem_size;
-};
-
 cl_int pocl_formosa_create_work_graph(
     cl_work_graph_formosa graph,
     const cl_work_graph_properties_formosa *properties) {
@@ -114,12 +108,6 @@ cl_int pocl_formosa_create_work_graph_node(
   cl_int err = pocl_formosa_validate_node_properties(node);
   if (err != CL_SUCCESS) return err;
 
-  struct pocl_formosa_work_graph_node_data *bn =
-      (struct pocl_formosa_work_graph_node_data *)calloc(
-          1, sizeof(struct pocl_formosa_work_graph_node_data));
-  if (bn == NULL) return CL_OUT_OF_HOST_MEMORY;
-
-  node->backend_data = bn;
   return CL_SUCCESS;
 }
 
@@ -251,6 +239,7 @@ static cl_int pocl_formosa_pack_kernel_args(cl_device_id device,
 
   const uint32_t ptr_size = 8;
   const uint32_t word_size = 8;
+  /* Graph printf is unsupported; keep this zeroed prefix for trampoline ABI. */
   const uint32_t printf_meta_size = sizeof(formosa_printf_launch_meta_t);
   uint64_t l_mem_size = 0;
 
@@ -380,6 +369,9 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
   NodeRuntimeState *node_states = NULL;
   uint8_t *edge_capacity_resolved = NULL;
   uint32_t *node_unresolved_in_edges = NULL;
+  uint64_t *launch_static_kargs = NULL;
+  uint32_t *launch_static_karg_sizes = NULL;
+  uint64_t *launch_local_mem_sizes = NULL;
   uint64_t dev_root_desc = 0;
   GraphRuntimePool pool = {0};
   cl_int err = CL_SUCCESS;
@@ -449,11 +441,18 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
       edge_count ? (uint8_t *)calloc(edge_count, sizeof(uint8_t)) : NULL;
   node_unresolved_in_edges =
       (uint32_t *)calloc(node_count, sizeof(*node_unresolved_in_edges));
+  launch_static_kargs =
+      (uint64_t *)calloc(node_count, sizeof(*launch_static_kargs));
+  launch_static_karg_sizes =
+      (uint32_t *)calloc(node_count, sizeof(*launch_static_karg_sizes));
+  launch_local_mem_sizes =
+      (uint64_t *)calloc(node_count, sizeof(*launch_local_mem_sizes));
 
   if (!listed_nodes || !ordered_nodes || (edge_count && !ordered_edges) ||
       !node_queue_caps || !node_descs || (edge_count && !edge_descs) ||
       !node_queues || !node_states || (edge_count && !edge_capacity_resolved) ||
-      !node_unresolved_in_edges) {
+      !node_unresolved_in_edges || !launch_static_kargs ||
+      !launch_static_karg_sizes || !launch_local_mem_sizes) {
     POCL_MSG_ERR("formosa: out of host memory while lowering graph\n");
     goto CLEANUP;
   }
@@ -732,8 +731,6 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
 
   for (cl_uint i = 0; i < node_count; i++) {
     struct _cl_work_graph_node_formosa *node = ordered_nodes[i];
-    struct pocl_formosa_work_graph_node_data *bn =
-        (struct pocl_formosa_work_graph_node_data *)node->backend_data;
     NodeDescriptor *nd = &node_descs[i];
 
     char sz_program_fsabin[POCL_MAX_PATHNAME_LENGTH];
@@ -773,35 +770,34 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
         nd->local_work_size[j] = 1;
     }
 
-    if (bn->dev_static_kargs == 0) {
-      uint64_t dev_kargs_addr = 0;
-      uint32_t kargs_size = 0;
-      uint64_t local_mem_size = 0;
+    uint64_t dev_kargs_addr = 0;
+    uint32_t kargs_size = 0;
+    uint64_t local_mem_size = 0;
 
-      cl_int err = pocl_formosa_pack_kernel_args(
-          device, node->kernel, &dev_kargs_addr, &kargs_size, &local_mem_size);
-      if (err != CL_SUCCESS) {
-        POCL_MSG_ERR("formosa: failed to pack kernel args for graph node %u\n",
-                     node->node_id);
-        goto CLEANUP;
-      }
-      if (kargs_size > 256) {
-        POCL_MSG_ERR(
-            "formosa: graph node %u static kernargs exceed static slot size "
-            "(%u > 256)\n",
-            node->node_id, kargs_size);
-        fsa_free((void *)dev_kargs_addr);
-        goto CLEANUP;
-      }
-
-      bn->dev_static_kargs = dev_kargs_addr;
-      bn->static_kernarg_size = kargs_size;
-      bn->local_mem_size = local_mem_size;
+    /* Capture the kernel's current clSetKernelArg state for this launch. */
+    err = pocl_formosa_pack_kernel_args(device, node->kernel, &dev_kargs_addr,
+                                        &kargs_size, &local_mem_size);
+    if (err != CL_SUCCESS) {
+      POCL_MSG_ERR("formosa: failed to pack kernel args for graph node %u\n",
+                   node->node_id);
+      goto CLEANUP;
+    }
+    if (kargs_size > 256) {
+      POCL_MSG_ERR(
+          "formosa: graph node %u static kernargs exceed static slot size "
+          "(%u > 256)\n",
+          node->node_id, kargs_size);
+      fsa_free((void *)dev_kargs_addr);
+      goto CLEANUP;
     }
 
-    nd->static_kernarg_addr = bn->dev_static_kargs;
-    nd->static_kernarg_size = bn->static_kernarg_size;
-    nd->local_mem_size = bn->local_mem_size;
+    launch_static_kargs[i] = dev_kargs_addr;
+    launch_static_karg_sizes[i] = kargs_size;
+    launch_local_mem_sizes[i] = local_mem_size;
+
+    nd->static_kernarg_addr = launch_static_kargs[i];
+    nd->static_kernarg_size = launch_static_karg_sizes[i];
+    nd->local_mem_size = launch_local_mem_sizes[i];
   }
 
   fsa_copy_to_dev(bg->dev_node_descs, node_descs,
@@ -980,6 +976,11 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
   }
 
 CLEANUP:
+  if (launch_static_kargs) {
+    for (cl_uint i = 0; i < node_count; i++) {
+      if (launch_static_kargs[i]) fsa_free((void *)launch_static_kargs[i]);
+    }
+  }
   if (dev_root_desc) fsa_free((void *)dev_root_desc);
   if (pool.ctx_pool_base) fsa_free((void *)pool.ctx_pool_base);
   if (pool.kernarg_pool_base) fsa_free((void *)pool.kernarg_pool_base);
@@ -993,6 +994,9 @@ CLEANUP:
   free(node_states);
   free(edge_capacity_resolved);
   free(node_unresolved_in_edges);
+  free(launch_static_kargs);
+  free(launch_static_karg_sizes);
+  free(launch_local_mem_sizes);
 }
 
 static cl_int pocl_formosa_read_graph_status(
@@ -1051,18 +1055,6 @@ cl_int pocl_formosa_free_work_graph(cl_work_graph_formosa graph) {
     pocl_formosa_free_node_queue_storage(bg);
     if (bg->dev_runtime_pool) fsa_free((void *)bg->dev_runtime_pool);
     free(bg);
-  }
-
-  /* Core will free node wrappers, but we should free backend node data */
-  struct _cl_work_graph_node_formosa *curr_node = graph->nodes;
-  while (curr_node) {
-    struct pocl_formosa_work_graph_node_data *bn =
-        (struct pocl_formosa_work_graph_node_data *)curr_node->backend_data;
-    if (bn) {
-      if (bn->dev_static_kargs) fsa_free((void *)bn->dev_static_kargs);
-      free(bn);
-    }
-    curr_node = curr_node->next;
   }
 
   return CL_SUCCESS;
