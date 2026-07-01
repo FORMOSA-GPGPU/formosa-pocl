@@ -1,0 +1,50 @@
+GITLAB_REPO = "git@git.caslab.ee.ncku.edu.tw:formosa-gpgpu/pocl.git"
+GITHUB_REPO = "git@github.com:FORMOSA-GPGPU/formosa-pocl.git"
+
+INTERNAL_ONLY_EXCLUDES = [
+    ".gitlab-ci.yml",
+    ".gitlab/**",
+    "tools/public_sync/**",
+]
+
+PUBLIC_TRANSFORMATIONS = [
+    core.transform([
+        core.replace(
+            before = "ssh://git@git.caslab.ee.ncku.edu.tw/formosa-gpgpu/formosa-llvm.git",
+            after = "https://github.com/FORMOSA-GPGPU/formosa-llvm.git",
+            paths = glob(["flake.lock"]),
+        ),
+        core.replace(
+            before = "https://git.caslab.ee.ncku.edu.tw/formosa-gpgpu/formosa",
+            after = "https://github.com/FORMOSA-GPGPU/formosa",
+            paths = glob(["README.formosa.md"]),
+        ),
+        core.filter_replace(
+            regex = "[^\\n]*wiki\\.caslab\\.ee\\.ncku\\.edu\\.tw[^\\n]*\\n?",
+            mapping = {
+                "[^\\n]*wiki\\.caslab\\.ee\\.ncku\\.edu\\.tw[^\\n]*\\n?": "",
+            },
+            paths = glob(["lib/kernel/formosa/wg_info.h"]),
+        ),
+    ], noop_behavior = "IGNORE_NOOP"),
+]
+
+core.workflow(
+    name = "public_mirror",
+    mode = "ITERATIVE",
+    origin = git.origin(
+        url = GITLAB_REPO,
+        ref = "refs/heads/formosa/main",
+        first_parent = False,
+        submodules = "NO",
+    ),
+    destination = git.destination(
+        url = GITHUB_REPO,
+        fetch = "main",
+        push = "main",
+    ),
+    origin_files = glob(["**"], exclude = INTERNAL_ONLY_EXCLUDES),
+    destination_files = glob(["**"]),
+    authoring = authoring.pass_thru("Formosa Copybara <copybara@formosa-gpgpu.invalid>"),
+    transformations = PUBLIC_TRANSFORMATIONS,
+)
