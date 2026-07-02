@@ -42,9 +42,15 @@ HOME="$tmpdir/home" git config --global user.email "copybara-test@example.invali
 HOME="$tmpdir/home" copybara migrate "$tmpdir/copy.bara.sky" public_mirror --init-history --force
 
 git clone "$tmpdir/dest.git" "$tmpdir/public-work"
+<<<<<<< Updated upstream
 git -C "$tmpdir/public-work" checkout main
 git -C "$tmpdir/public-work" log --oneline --decorate -5
 git -C "$tmpdir/public-work" rev-list --count main
+=======
+git -C "$tmpdir/public-work" checkout formosa/main
+git -C "$tmpdir/public-work" log --oneline --decorate -5
+git -C "$tmpdir/public-work" rev-list --count formosa/main
+>>>>>>> Stashed changes
 if rg -n "git@git\\.caslab|git\\.caslab|wiki\\.caslab" "$tmpdir/public-work"; then
   echo "private URLs remain in public checkout" >&2
   exit 1

@@ -19,6 +19,7 @@ PUBLIC_TRANSFORMATIONS = [
             after = "https://github.com/FORMOSA-GPGPU/formosa",
             paths = glob(["README.formosa.md"]),
         ),
+<<<<<<< Updated upstream
         core.filter_replace(
             regex = "[^\\n]*wiki\\.caslab\\.ee\\.ncku\\.edu\\.tw[^\\n]*\\n?",
             mapping = {
@@ -27,6 +28,19 @@ PUBLIC_TRANSFORMATIONS = [
             paths = glob(["lib/kernel/formosa/wg_info.h"]),
         ),
     ], noop_behavior = "IGNORE_NOOP"),
+=======
+    ], noop_behavior = "IGNORE_NOOP"),
+    core.transform([
+        core.replace(
+            before = "${internal_wiki_line}",
+            after = "",
+            regex_groups = {
+                "internal_wiki_line": "[^\\n]*wiki\\.caslab\\.ee\\.ncku\\.edu\\.tw[^\\n]*\\n?",
+            },
+            paths = glob(["lib/kernel/formosa/wg_info.h"]),
+        ),
+    ], reversal = [], noop_behavior = "IGNORE_NOOP"),
+>>>>>>> Stashed changes
 ]
 
 core.workflow(
@@ -40,8 +54,13 @@ core.workflow(
     ),
     destination = git.destination(
         url = GITHUB_REPO,
+<<<<<<< Updated upstream
         fetch = "main",
         push = "main",
+=======
+        fetch = "formosa/main",
+        push = "formosa/main",
+>>>>>>> Stashed changes
     ),
     origin_files = glob(["**"], exclude = INTERNAL_ONLY_EXCLUDES),
     destination_files = glob(["**"]),
