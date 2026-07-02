@@ -8,6 +8,14 @@ INTERNAL_ONLY_EXCLUDES = [
 ]
 
 PUBLIC_TRANSFORMATIONS = [
+    metadata.scrubber(
+        "(git@|ssh://git@|https://)([A-Za-z0-9_.-]+\\.)?(caslab|elite)\\.ee\\.ncku\\.edu\\.tw[:/][^\\s)\\]]*",
+        replacement = "FORMOSA internal repository",
+    ),
+    metadata.scrubber(
+        "([A-Za-z0-9_.-]+\\.)?(caslab|elite)\\.ee\\.ncku\\.edu\\.tw[:/][^\\s)\\]]*",
+        replacement = "FORMOSA internal repository",
+    ),
     core.transform([
         core.replace(
             before = "ssh://git@git.caslab.ee.ncku.edu.tw/formosa-gpgpu/formosa-llvm.git",
@@ -15,32 +23,37 @@ PUBLIC_TRANSFORMATIONS = [
             paths = glob(["flake.lock"]),
         ),
         core.replace(
+            before = "${internal_formosa_llvm_url}",
+            after = "https://github.com/FORMOSA-GPGPU/formosa-llvm.git",
+            regex_groups = {
+                "internal_formosa_llvm_url": "(git@|ssh://git@|https://)(git\\.caslab|elite)\\.ee\\.ncku\\.edu\\.tw[:/][^\\s\"')]*formosa-llvm(\\.git)?",
+            },
+            paths = glob(["**"]),
+        ),
+        core.replace(
             before = "https://git.caslab.ee.ncku.edu.tw/formosa-gpgpu/formosa",
             after = "https://github.com/FORMOSA-GPGPU/formosa",
             paths = glob(["README.formosa.md"]),
         ),
-<<<<<<< Updated upstream
-        core.filter_replace(
-            regex = "[^\\n]*wiki\\.caslab\\.ee\\.ncku\\.edu\\.tw[^\\n]*\\n?",
-            mapping = {
-                "[^\\n]*wiki\\.caslab\\.ee\\.ncku\\.edu\\.tw[^\\n]*\\n?": "",
-            },
-            paths = glob(["lib/kernel/formosa/wg_info.h"]),
-        ),
-    ], noop_behavior = "IGNORE_NOOP"),
-=======
-    ], noop_behavior = "IGNORE_NOOP"),
-    core.transform([
         core.replace(
-            before = "${internal_wiki_line}",
-            after = "",
+            before = "${internal_formosa_url}",
+            after = "https://github.com/FORMOSA-GPGPU/formosa",
             regex_groups = {
-                "internal_wiki_line": "[^\\n]*wiki\\.caslab\\.ee\\.ncku\\.edu\\.tw[^\\n]*\\n?",
+                "internal_formosa_url": "(git@|ssh://git@|https://)(git\\.caslab|elite)\\.ee\\.ncku\\.edu\\.tw[:/][^\\s\"')]*formosa(\\.git)?",
             },
-            paths = glob(["lib/kernel/formosa/wg_info.h"]),
+            paths = glob(["**"]),
         ),
     ], reversal = [], noop_behavior = "IGNORE_NOOP"),
->>>>>>> Stashed changes
+    core.transform([
+        core.replace(
+            before = "${internal_url_line}",
+            after = "",
+            regex_groups = {
+                "internal_url_line": "[^\\n]*(git\\.caslab|elite|wiki\\.caslab)\\.ee\\.ncku\\.edu\\.tw[^\\n]*\\n?",
+            },
+            paths = glob(["**"]),
+        ),
+    ], reversal = [], noop_behavior = "IGNORE_NOOP"),
 ]
 
 core.workflow(
@@ -54,16 +67,11 @@ core.workflow(
     ),
     destination = git.destination(
         url = GITHUB_REPO,
-<<<<<<< Updated upstream
-        fetch = "main",
-        push = "main",
-=======
         fetch = "formosa/main",
         push = "formosa/main",
->>>>>>> Stashed changes
     ),
     origin_files = glob(["**"], exclude = INTERNAL_ONLY_EXCLUDES),
     destination_files = glob(["**"]),
-    authoring = authoring.pass_thru("Formosa Copybara <copybara@formosa-gpgpu.invalid>"),
+    authoring = authoring.pass_thru("FORMOSA Copybara <copybara@formosa-gpgpu.invalid>"),
     transformations = PUBLIC_TRANSFORMATIONS,
 )
