@@ -57,11 +57,30 @@ typedef cl_bitfield cl_work_graph_node_flags_formosa;
 typedef cl_uint cl_work_graph_node_launch_mode_formosa;
 
 #define CL_NODE_LAUNCH_THREAD_FORMOSA 0
+/* COALESCING launches one fixed-size workgroup over a batch of input records.
+ * The node's max_input_records_per_dispatch is the maximum batch size.
+ */
 #define CL_NODE_LAUNCH_COALESCING_FORMOSA 1
 #define CL_NODE_LAUNCH_BROADCASTING_FORMOSA 2
 
+#define CL_FORMOSA_WORK_GRAPH_HAS_WORK_ITEMS_PER_INPUT_RECORD 1
+
 /*
  * Node properties.
+ *
+ * max_input_records_per_dispatch caps how many input records one dispatch may
+ * consume. For THREAD and BROADCASTING nodes, 0 means adaptive runtime
+ * batching: firmware chooses a dispatch size from queue readiness, ring
+ * contiguity, WGI availability, packet limits, and output admission. For
+ * COALESCING nodes, this value must be nonzero and is the maximum number of
+ * records visible to one workgroup dispatch.
+ *
+ * work_items_per_input_record controls broadcasting-style launch expansion. A
+ * value of 0 means the default of 1. For broadcasting nodes, each input record
+ * in a dispatch is mapped onto K logical x-dimension work-items. The local
+ * size determines how those work-items are grouped into physical workgroups.
+ * Device code can derive the current record index and per-record work-item id
+ * from the WorkGraph helper APIs.
  */
 typedef struct _cl_work_graph_node_properties_formosa {
   cl_work_graph_node_flags_formosa flags;
@@ -69,6 +88,7 @@ typedef struct _cl_work_graph_node_properties_formosa {
   cl_work_graph_node_launch_mode_formosa launch_mode;
   cl_uint max_input_records_per_dispatch;
   cl_uint max_active_dispatches;
+  cl_uint work_items_per_input_record;
 } cl_work_graph_node_properties_formosa;
 
 /*
@@ -84,8 +104,16 @@ typedef cl_bitfield cl_work_graph_edge_flags_formosa;
 typedef struct _cl_work_graph_edge_properties_formosa {
   cl_work_graph_edge_flags_formosa flags;
   size_t record_size;
+  /* Destination queue capacity hint, in records. This is storage capacity, not
+   * a dispatch batch size. A value of 0 asks PoCL to infer a conservative
+   * capacity from the source queue capacity and max_records_per_src_record.
+   */
   cl_uint queue_capacity;
-  cl_uint max_records_per_src_dispatch;
+  /* Maximum number of records emitted through this edge per source input
+   * record. Firmware scales this by the actual source dispatch record count
+   * for admission. A value of 0 defaults to 1.
+   */
+  cl_uint max_records_per_src_record;
 } cl_work_graph_edge_properties_formosa;
 
 /*
@@ -110,6 +138,8 @@ typedef struct _cl_work_graph_root_input_formosa {
 #define CL_GRAPH_INFO_MAX_ROOT_RECORDS_FORMOSA 0x5005
 #define CL_GRAPH_INFO_STATUS_FORMOSA 0x5006
 #define CL_GRAPH_INFO_LAST_ERROR_FORMOSA 0x5007
+#define CL_GRAPH_INFO_MAX_ACTIVE_DISPATCHES_FORMOSA 0x5008
+#define CL_GRAPH_INFO_MAX_NODE_ACTIVE_DISPATCHES_FORMOSA 0x5009
 
 /*
  * Command type for graph launch.
