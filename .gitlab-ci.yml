@@ -23,14 +23,23 @@ stages:
 
 publish-github-formosa-main:
   stage: public-sync
-  image: nixos/nix:2.31.2
+  image: eclipse-temurin:21-jre-alpine
   rules:
     - if: $CI_COMMIT_BRANCH == "formosa/main"
       when: manual
       allow_failure: false
+  variables:
+    COPYBARA_VERSION: "v20260601"
   before_script:
-    - echo "experimental-features = nix-command flakes" >> /etc/nix/nix.conf
-    - nix profile install nixpkgs#bash nixpkgs#copybara nixpkgs#git nixpkgs#openssh
+    - apk add --no-cache bash curl git openssh-client
+    - mkdir -p /usr/local/lib
+    - curl -fsSL -o /usr/local/lib/copybara_deploy.jar "https://github.com/google/copybara/releases/download/${COPYBARA_VERSION}/copybara_deploy.jar"
+    - |
+      cat > /usr/local/bin/copybara <<'EOF'
+      #!/bin/sh
+      exec /opt/java/openjdk/bin/java -jar /usr/local/lib/copybara_deploy.jar "$@"
+      EOF
+    - chmod +x /usr/local/bin/copybara
     - eval $(ssh-agent -s)
     - test -n "$GITHUB_SSH_PRIVATE_KEY"
     - chmod 400 "$GITHUB_SSH_PRIVATE_KEY"
