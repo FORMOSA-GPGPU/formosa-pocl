@@ -17,10 +17,10 @@ sudo cmake --build build --target install
 ```
 
 ## Examine the installation
-1. Start the casvp server
+1. Start the lv server
 2. Export the socket path
 ```bash
-export AGENT_SOCKET_PATH=/tmp/casvp-ipc
+export AGENT_SOCKET_PATH=/tmp/lv-ipc
 ```
 3. Run clinfo to check if the FORMOSA device is available
 ```bash
@@ -30,8 +30,8 @@ clinfo -l
 ## Running PoCL with FORMOSA
 1. Set the environment variable
 ```bash
-export AGENT_SOCKET_PATH=<path-to-casvp-ipc>
-export POCL_FORMOSA_CFLAGS=<kernel-compiler-flags>  # default: "-O1 -mllvm -fsa-pdom-level"
+export AGENT_SOCKET_PATH=<path-to-lv-ipc-socket>
+export POCL_FORMOSA_CFLAGS=<kernel-compiler-flags>  # default: "-O2" (no PRI insertion); for PRI, use: -fsa-ics-first, -mllvm -fsa-ipdom-like, or -mllvm -fsa-post-topo
 export POCL_FORMOSA_LDFLAGS=<kernel-linker-flags>  # default: "-fuse-ld=lld -nostartfiles"
 ```
 2. Run the OpenCL program
