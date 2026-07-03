@@ -18,4 +18,31 @@ include:
 
 stages:
   - review
+  - public-sync
   - test
+
+publish-github-formosa-main:
+  stage: public-sync
+  image: nixos/nix:2.31.2
+  rules:
+    - if: $CI_COMMIT_BRANCH == "formosa/main"
+      when: manual
+      allow_failure: false
+  before_script:
+    - echo "experimental-features = nix-command flakes" >> /etc/nix/nix.conf
+    - nix profile install nixpkgs#bash nixpkgs#copybara nixpkgs#git nixpkgs#openssh
+    - eval $(ssh-agent -s)
+    - test -n "$GITHUB_SSH_PRIVATE_KEY"
+    - chmod 400 "$GITHUB_SSH_PRIVATE_KEY"
+    - ssh-add "$GITHUB_SSH_PRIVATE_KEY"
+    - if [ -n "${SSH_PRIVATE_KEY:-}" ]; then chmod 400 "$SSH_PRIVATE_KEY"; ssh-add "$SSH_PRIVATE_KEY"; fi
+    - mkdir -p /etc/ssh
+    - chmod 700 /etc/ssh
+    - ssh-keyscan -H github.com >> /etc/ssh/ssh_known_hosts
+    - ssh-keyscan -H "$CI_SERVER_FQDN" >> /etc/ssh/ssh_known_hosts
+    - chmod 644 /etc/ssh/ssh_known_hosts
+  script:
+    - tmp_home="$(mktemp -d)"
+    - git config --file "$tmp_home/.gitconfig" user.name "FORMOSA Copybara Bot"
+    - git config --file "$tmp_home/.gitconfig" user.email "copybara@formosa-gpgpu.invalid"
+    - HOME="$tmp_home" copybara migrate tools/public_sync/copy.bara.sky public_mirror
