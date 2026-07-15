@@ -23,6 +23,7 @@
 #include <llvm/Linker/Linker.h>
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Object/SymbolicFile.h>
+#include <llvm/Support/Error.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
@@ -221,6 +222,7 @@ uint64_t pocl_fsa_get_symbol_pc(const char *ELFPath, const char *SymbolName) {
   if (!ObjOrError) {
     POCL_MSG_ERR("pocl_fsa_get_symbol_pc: failed to parse ELF file %s\n",
                  ELFPath);
+    llvm::consumeError(ObjOrError.takeError());
     return UINT64_MAX;
   }
 
@@ -230,12 +232,14 @@ uint64_t pocl_fsa_get_symbol_pc(const char *ELFPath, const char *SymbolName) {
         Symbol.getType();
     if (!TypeOrError) {
       POCL_MSG_ERR("pocl_fsa_get_symbol_pc: failed to get symbol type\n");
+      llvm::consumeError(TypeOrError.takeError());
       return UINT64_MAX;
     }
 
     llvm::Expected<llvm::StringRef> NameOrError = Symbol.getName();
     if (!NameOrError) {
       POCL_MSG_ERR("pocl_fsa_get_symbol_pc: failed to get symbol name\n");
+      llvm::consumeError(NameOrError.takeError());
       return UINT64_MAX;
     }
     if (NameOrError.get().str() == SymbolName) {
@@ -244,6 +248,7 @@ uint64_t pocl_fsa_get_symbol_pc(const char *ELFPath, const char *SymbolName) {
         POCL_MSG_ERR(
             "pocl_fsa_get_symbol_pc: failed to get address for symbol %s\n",
             SymbolName);
+        llvm::consumeError(AddrOrError.takeError());
         return UINT64_MAX;
       }
       POCL_MSG_PRINT_LLVM("Found symbol %s at 0x%lx\n", SymbolName,
