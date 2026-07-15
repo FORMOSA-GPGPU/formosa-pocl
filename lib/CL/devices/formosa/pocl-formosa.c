@@ -232,6 +232,7 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
   void *device_kernel_status_addr = NULL;
   void *device_printf_buffer_addr = NULL;
   void *device_printf_position_addr = NULL;
+  void *device_kernel_addr = NULL;
   char *trampoline_name = NULL;
   char *host_printf_buffer = NULL;
 
@@ -456,12 +457,15 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
       goto FAIL;
     }
     POCL_MSG_PRINT_INFO("elf path: %s\n", sz_program_fsabin);
-    uint64_t dev_kernel_addr = 0;
-    err = pocl_fsa_upload_kernel(sz_program_fsabin, dd, &dev_kernel_addr);
-    if (err != 0) {
-      POCL_MSG_ERR("pocl_formosa_run: kernel upload failed\n");
-      errcode = CL_OUT_OF_RESOURCES;
-      goto FAIL;
+    {
+      uint64_t kernel_dev_addr = 0;
+      err = pocl_fsa_upload_kernel(sz_program_fsabin, dd, &kernel_dev_addr);
+      if (err != 0) {
+        POCL_MSG_ERR("pocl_formosa_run: kernel upload failed\n");
+        errcode = CL_OUT_OF_RESOURCES;
+        goto FAIL;
+      }
+      device_kernel_addr = (void *)(uintptr_t)kernel_dev_addr;
     }
 
     /* _start is placed at .org 0x0 — address 0 is valid. UINT64_MAX means
@@ -472,7 +476,7 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
       errcode = CL_INVALID_PROGRAM_EXECUTABLE;
       goto FAIL;
     }
-    entry_pc = start_off + dev_kernel_addr;
+    entry_pc = start_off + (uintptr_t)device_kernel_addr;
     POCL_MSG_PRINT_INFO("entry_pc: %lx\n", entry_pc);
 
     trampoline_name = malloc(strlen(kernel->name) + 13);
@@ -489,7 +493,7 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
       errcode = CL_INVALID_PROGRAM_EXECUTABLE;
       goto FAIL;
     }
-    trampoline_pc = tramp_off + dev_kernel_addr;
+    trampoline_pc = tramp_off + (uintptr_t)device_kernel_addr;
     POCL_MSG_PRINT_INFO("trampoline_pc: %lx\n", trampoline_pc);
     free(trampoline_name);
     trampoline_name = NULL;
@@ -573,6 +577,7 @@ FAIL:
   if (device_kernel_status_addr) fsa_free(device_kernel_status_addr);
   if (device_printf_buffer_addr) fsa_free(device_printf_buffer_addr);
   if (device_printf_position_addr) fsa_free(device_printf_position_addr);
+  if (device_kernel_addr) fsa_free(device_kernel_addr);
   return errcode;
 }
 
