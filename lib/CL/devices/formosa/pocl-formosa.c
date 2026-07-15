@@ -171,6 +171,7 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
 
   pocl_setup_extensions_with_version(device);
   pocl_setup_ils_with_version(device);
+  pocl_setup_builtin_kernels_with_version(device);
   pocl_setup_spirv_queries(device);
 
   dd->context_ref_count = 0;
