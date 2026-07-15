@@ -91,8 +91,8 @@ int apply_kernel_relocations(FILE *elf, const Elf64_Ehdr &ehdr,
           case R_RISCV_NONE:
             break;
           default:
-            POCL_MSG_ERR("Unsupported kernel relocation type %u in kernel ELF\n",
-                         type);
+            POCL_MSG_ERR(
+                "Unsupported kernel relocation type %u in kernel ELF\n", type);
             return -1;
         }
       }
@@ -191,13 +191,23 @@ int pocl_fsa_get_elf_name(cl_program program, cl_uint device_i,
 
 int pocl_fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
                            uint64_t *kernel_dev_addr) {
-  if (elf_file == nullptr || dd == nullptr) return -1;
+  if (elf_file == nullptr || dd == nullptr || kernel_dev_addr == nullptr)
+    return -1;
   uint64_t kernel_size = 0;
   FILE *elf = fopen(elf_file, "rb");
-  rewind(elf);
+  if (elf == nullptr) {
+    POCL_MSG_ERR("pocl_fsa_upload_kernel: failed to open ELF %s\n", elf_file);
+    return -1;
+  }
   Elf64_Ehdr ehdr;
   [[maybe_unused]] size_t read_size;
   read_size = fread(&ehdr, sizeof(ehdr), 1, elf);
+  if (read_size != 1) {
+    POCL_MSG_ERR("pocl_fsa_upload_kernel: failed to read ELF header from %s\n",
+                 elf_file);
+    fclose(elf);
+    return -1;
+  }
   // 1st pass, iterate all program headers to find the minimum base address
   for (int i = 0; i < ehdr.e_phnum; i++) {
     fseek(elf, ehdr.e_phoff + i * (ehdr.e_phentsize), SEEK_SET);
@@ -274,6 +284,9 @@ int pocl_fsa_wait_ack(pocl_formosa_data_t *dd, uintptr_t completion_signal,
   // polling the completion_signal until it is set to non-zero value
   fsa_wait_for_completion(completion_signal,
                           0);  // blocking wait
+
+  /* Graph launch may not provide a KernelStatus buffer. */
+  if (device_kernel_status_addr == 0) return 0;
 
   uint8_t status_raw[sizeof(KernelStatus)];
   int err = fsa_copy_from_dev(device_kernel_status_addr, status_raw,

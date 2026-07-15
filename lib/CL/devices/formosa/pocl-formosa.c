@@ -1,5 +1,4 @@
 #include "pocl-formosa.h"
-#include "pocl-formosa-graph.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -13,6 +12,7 @@
 #include "formosa-hal/formosa-hal.h"
 #include "formosa-llvm-util.h"
 #include "formosa-util.h"
+#include "pocl-formosa-graph.h"
 #include "pocl_llvm.h"
 #include "pocl_util.h"
 #include "spirv_queries.h"
@@ -113,7 +113,6 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
                                 CL_DEVICE_KERNEL_CLOCK_SCOPE_SUB_GROUP_KHR;
   }
 
-
   SETUP_DEVICE_CL_VERSION(device, FORMOSA_DEVICE_CL_VERSION_MAJOR,
                           FORMOSA_DEVICE_CL_VERSION_MINOR);
 
@@ -188,7 +187,12 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   int err = fsa_hal_init();
   if (err != 0) {
     formosa_available = CL_FALSE;
-    POCL_ABORT("ERROR (pocl_formosa_init): Driver initialization failed\n");
+    POCL_DESTROY_LOCK(dd->compile_lock);
+    POCL_DESTROY_LOCK(dd->cq_lock);
+    POCL_MEM_FREE(dd);
+    device->data = NULL;
+    POCL_MSG_ERR("pocl_formosa_init: HAL initialization failed (%d)\n", err);
+    return CL_DEVICE_NOT_AVAILABLE;
   }
 
   return CL_SUCCESS;
@@ -201,7 +205,7 @@ cl_int pocl_formosa_uninit(unsigned j, cl_device_id device) {
   POCL_DESTROY_LOCK(dd->compile_lock);
   POCL_DESTROY_LOCK(dd->cq_lock);
   if (fsa_hal_cleanup() != 0) {
-    POCL_ABORT("ERROR (pocl_formosa_uninit): Driver uninitialization failed\n");
+    POCL_MSG_ERR("pocl_formosa_uninit: HAL cleanup failed\n");
   }
   if (dd->kernel_buffer != NULL) {
     POCL_MEM_FREE(dd->kernel_buffer);
@@ -211,18 +215,25 @@ cl_int pocl_formosa_uninit(unsigned j, cl_device_id device) {
   return CL_SUCCESS;
 }
 
-void pocl_formosa_run(void *data, _cl_command_node *cmd) {
+/* Execute an NDRange on Formosa. Returns an OpenCL error code; does not
+ * update the command event (the Formosa scheduler does that). */
+static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
   pocl_formosa_data_t *dd;
-  struct pocl_argument *al;
   cl_uint device_i = cmd->program_device_i;
   cl_kernel kernel = cmd->command.run.kernel;
   cl_program program = kernel->program;
   pocl_kernel_metadata_t *meta = kernel->meta;
-  formosa_program_data_t *pdata =
-      (formosa_program_data_t *)program->data[device_i];
-  formosa_kernel_data_t *kdata = (formosa_kernel_data_t *)meta->data[device_i];
   struct pocl_context *pc = &cmd->command.run.pc;
+  cl_int errcode = CL_SUCCESS;
   int err = 0;
+
+  uint8_t *host_kargs_base_ptr = NULL;
+  void *device_args_buffer_addr = NULL;
+  void *device_kernel_status_addr = NULL;
+  void *device_printf_buffer_addr = NULL;
+  void *device_printf_position_addr = NULL;
+  char *trampoline_name = NULL;
+  char *host_printf_buffer = NULL;
 
   uint32_t num_groups = 1;
   uint32_t group_size = 1;
@@ -230,7 +241,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     num_groups *= pc->num_groups[i];
     group_size *= pc->local_size[i];
   }
-  if (num_groups == 0 || group_size == 0) return;
+  if (num_groups == 0 || group_size == 0) return CL_SUCCESS;
 
   assert(data != NULL);
   dd = (pocl_formosa_data_t *)data;
@@ -276,37 +287,43 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   err = pocl_fsa_check_occupancy(group_size, local_mem_size,
                                  &available_local_mem);
   if (err != 0) {
-    POCL_ABORT(
-        "ERROR (pocl_formosa_run): Check occupancy failed "
+    POCL_MSG_ERR(
+        "pocl_formosa_run: occupancy check failed "
         "(group_size=%" PRIu32 ", local_mem_size=%" PRIu64
         ", available_local_mem=%" PRIu64 ")\n",
         group_size, local_mem_size, available_local_mem);
+    errcode = CL_INVALID_WORK_GROUP_SIZE;
+    goto FAIL;
   }
 
   // allocate arguments host buffer
-  uint8_t *const host_kargs_base_ptr = malloc(kargs_buffer_size);
-  assert(host_kargs_base_ptr);
+  host_kargs_base_ptr = (uint8_t *)malloc(kargs_buffer_size);
+  if (host_kargs_base_ptr == NULL) {
+    errcode = CL_OUT_OF_HOST_MEMORY;
+    goto FAIL;
+  }
   memset(host_kargs_base_ptr, 0, kargs_buffer_size);
 
   // allocate kernel arguments buffer
   formosa_buffer_data_t fsa_kargs_buffer;
   memset(&fsa_kargs_buffer, 0, sizeof(formosa_buffer_data_t));
-  void *device_args_buffer_addr, *device_kernel_status_addr;
-  void *device_printf_buffer_addr = NULL, *device_printf_position_addr = NULL;
   err = fsa_malloc(&device_args_buffer_addr, kargs_buffer_size);
   if (err != 0) {
-    POCL_ABORT("ERROR (pocl_formosa_run): Device memory allocation failed\n");
+    POCL_MSG_ERR("pocl_formosa_run: device kargs allocation failed\n");
+    errcode = CL_OUT_OF_RESOURCES;
+    goto FAIL;
   }
   err = fsa_malloc(&device_kernel_status_addr, sizeof(KernelStatus));
   if (err != 0) {
-    POCL_ABORT(
-        "ERROR (pocl_formosa_run): Device kernel status allocation failed\n");
+    POCL_MSG_ERR("pocl_formosa_run: device kernel status allocation failed\n");
+    errcode = CL_OUT_OF_RESOURCES;
+    goto FAIL;
   }
   err = fsa_malloc(&device_printf_buffer_addr, cmd->device->printf_buffer_size);
   if (err != 0) {
-    POCL_ABORT(
-        "ERROR (pocl_formosa_run): Device printf buffer allocation "
-        "failed\n");
+    POCL_MSG_ERR("pocl_formosa_run: device printf buffer allocation failed\n");
+    errcode = CL_OUT_OF_RESOURCES;
+    goto FAIL;
   }
   POCL_MSG_PRINT_INFO(
       "Device printf buffer allocated at address %p with size %zu "
@@ -314,9 +331,10 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
       device_printf_buffer_addr, cmd->device->printf_buffer_size);
   err = fsa_malloc(&device_printf_position_addr, sizeof(uint32_t));
   if (err != 0) {
-    POCL_ABORT(
-        "ERROR (pocl_formosa_run): Device printf position allocation "
-        "failed\n");
+    POCL_MSG_ERR(
+        "pocl_formosa_run: device printf position allocation failed\n");
+    errcode = CL_OUT_OF_RESOURCES;
+    goto FAIL;
   }
   fsa_kargs_buffer.buf_address = (uint64_t)device_args_buffer_addr;
   fsa_kargs_buffer.buf_size = kargs_buffer_size;
@@ -325,7 +343,7 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   formosa_printf_launch_meta_t printf_meta = {
       .printf_buffer = (uint64_t)device_printf_buffer_addr,
       .printf_buffer_position = (uint64_t)device_printf_position_addr,
-      .printf_buffer_capacity = cmd->device->printf_buffer_size,
+      .printf_buffer_capacity = (uint32_t)cmd->device->printf_buffer_size,
       .reserved = 0,
   };
   memcpy(host_kargs_base_ptr, &printf_meta, sizeof(printf_meta));
@@ -334,8 +352,9 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   err = fsa_copy_to_dev((uintptr_t)device_printf_position_addr,
                         &zero_printf_position, sizeof(zero_printf_position));
   if (err != 0) {
-    POCL_ABORT(
-        "ERROR (pocl_formosa_run): Device printf position reset failed\n");
+    POCL_MSG_ERR("pocl_formosa_run: device printf position reset failed\n");
+    errcode = CL_OUT_OF_RESOURCES;
+    goto FAIL;
   }
 
   uint32_t host_args_offset = printf_meta_size;
@@ -347,7 +366,8 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
     host_args_offset += word_size;
   } else {
     // if no local memory, write 0
-    memset(host_kargs_base_ptr + host_args_offset, 0, word_size);  // local size
+    memset(host_kargs_base_ptr + host_args_offset, 0,
+           word_size);  // local size
     host_args_offset += word_size;
   }
 
@@ -370,6 +390,12 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
         formosa_buffer_data_t *buf_data =
             (formosa_buffer_data_t *)m->device_ptrs[cmd->device->global_mem_id]
                 .mem_ptr;
+        if (buf_data == NULL) {
+          POCL_MSG_ERR(
+              "pocl_formosa_run: buffer argument has no device allocation\n");
+          errcode = CL_INVALID_MEM_OBJECT;
+          goto FAIL;
+        }
         uint64_t dev_mem_addr = buf_data->buf_address + al->offset;
         host_args_offset = align(host_args_offset, word_size);
         memcpy(host_kargs_base_ptr + host_args_offset, &dev_mem_addr,
@@ -377,11 +403,20 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
         host_args_offset += ptr_size;
       }
     } else if (meta->arg_info[i].type == POCL_ARG_TYPE_IMAGE) {
-      POCL_ABORT("ERROR (pocl_formosa_run): Image argument not supported\n");
+      POCL_MSG_ERR("pocl_formosa_run: image arguments are not supported\n");
+      errcode = CL_INVALID_KERNEL_ARGS;
+      goto FAIL;
     } else if (meta->arg_info[i].type == POCL_ARG_TYPE_SAMPLER) {
-      POCL_ABORT("ERROR (pocl_formosa_run): Sampler argument not supported\n");
+      POCL_MSG_ERR("pocl_formosa_run: sampler arguments are not supported\n");
+      errcode = CL_INVALID_KERNEL_ARGS;
+      goto FAIL;
     } else {
       // scalar argument
+      if (al->value == NULL) {
+        POCL_MSG_ERR("pocl_formosa_run: missing scalar kernel argument\n");
+        errcode = CL_INVALID_KERNEL_ARGS;
+        goto FAIL;
+      }
       host_args_offset = align(host_args_offset, al->size);
       memcpy(host_kargs_base_ptr + host_args_offset, al->value,
              al->size);  // scalar value
@@ -401,39 +436,67 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
   err = fsa_copy_to_dev(fsa_kargs_buffer.buf_address, host_kargs_base_ptr,
                         kargs_buffer_size);
   if (err != 0) {
-    POCL_ABORT(
-        "ERROR (pocl_formosa_run): Kernel argument copy to device failed\n");
+    POCL_MSG_ERR("pocl_formosa_run: kernel argument copy to device failed\n");
+    errcode = CL_OUT_OF_RESOURCES;
+    goto FAIL;
   }
 
   // release argument host buffer
   free(host_kargs_base_ptr);
+  host_kargs_base_ptr = NULL;
 
   // upload kernel to device
   uintptr_t entry_pc = 0, trampoline_pc = 0;
   if (dd->kernel_buffer == NULL) {
     char sz_program_fsabin[POCL_MAX_PATHNAME_LENGTH];
     err = pocl_fsa_get_elf_name(program, device_i, sz_program_fsabin);
+    if (err != 0) {
+      POCL_MSG_ERR("pocl_formosa_run: failed to resolve kernel ELF path\n");
+      errcode = CL_INVALID_PROGRAM_EXECUTABLE;
+      goto FAIL;
+    }
     POCL_MSG_PRINT_INFO("elf path: %s\n", sz_program_fsabin);
     uint64_t dev_kernel_addr = 0;
-    err |= pocl_fsa_upload_kernel(sz_program_fsabin, dd, &dev_kernel_addr);
+    err = pocl_fsa_upload_kernel(sz_program_fsabin, dd, &dev_kernel_addr);
     if (err != 0) {
-      POCL_ABORT("ERROR (pocl_formosa_run): Kernel upload failed\n");
+      POCL_MSG_ERR("pocl_formosa_run: kernel upload failed\n");
+      errcode = CL_OUT_OF_RESOURCES;
+      goto FAIL;
     }
 
-    entry_pc =
-        pocl_fsa_get_symbol_pc(sz_program_fsabin, "_start") + dev_kernel_addr;
+    /* _start is placed at .org 0x0 — address 0 is valid. UINT64_MAX means
+     * lookup failure. */
+    uint64_t start_off = pocl_fsa_get_symbol_pc(sz_program_fsabin, "_start");
+    if (start_off == UINT64_MAX) {
+      POCL_MSG_ERR("pocl_formosa_run: _start symbol not found in kernel ELF\n");
+      errcode = CL_INVALID_PROGRAM_EXECUTABLE;
+      goto FAIL;
+    }
+    entry_pc = start_off + dev_kernel_addr;
     POCL_MSG_PRINT_INFO("entry_pc: %lx\n", entry_pc);
 
-    char *trampoline_name = malloc(strlen(kernel->name) + 13);
+    trampoline_name = malloc(strlen(kernel->name) + 13);
+    if (trampoline_name == NULL) {
+      errcode = CL_OUT_OF_HOST_MEMORY;
+      goto FAIL;
+    }
     sprintf(trampoline_name, "%s_trampolined", kernel->name);
-    trampoline_pc = pocl_fsa_get_symbol_pc(sz_program_fsabin, trampoline_name) +
-                    dev_kernel_addr;
+    uint64_t tramp_off =
+        pocl_fsa_get_symbol_pc(sz_program_fsabin, trampoline_name);
+    if (tramp_off == UINT64_MAX) {
+      POCL_MSG_ERR("pocl_formosa_run: trampoline symbol %s not found\n",
+                   trampoline_name);
+      errcode = CL_INVALID_PROGRAM_EXECUTABLE;
+      goto FAIL;
+    }
+    trampoline_pc = tramp_off + dev_kernel_addr;
     POCL_MSG_PRINT_INFO("trampoline_pc: %lx\n", trampoline_pc);
-    POCL_MEM_FREE(trampoline_name);
+    free(trampoline_name);
+    trampoline_name = NULL;
   }
 
   // launch kernel execution
-  uintptr_t completion_signal;
+  uintptr_t completion_signal = 0;
   err = fsa_cmd_start_kernel(
       pc->work_dim | FSA_KERNEL_DISPATCH_HAS_PRINTF_META, pc->local_size,
       pc->num_groups, pc->global_offset, local_mem_size, entry_pc,
@@ -441,64 +504,85 @@ void pocl_formosa_run(void *data, _cl_command_node *cmd) {
       (uintptr_t)device_kernel_status_addr, &completion_signal);
 
   if (err != 0) {
-    POCL_ABORT("ERROR (pocl_formosa_run): Kernel launch failed\n");
+    POCL_MSG_ERR("pocl_formosa_run: kernel launch failed\n");
+    errcode = CL_OUT_OF_RESOURCES;
+    goto FAIL;
   }
 
   // wait for the execution to complete
   err = pocl_fsa_wait_ack(dd, completion_signal,
                           (uintptr_t)device_kernel_status_addr);
   if (err != 0) {
-    POCL_ABORT("ERROR (pocl_formosa_run): Kernel execution failed\n");
+    POCL_MSG_ERR("pocl_formosa_run: kernel execution failed\n");
+    errcode = CL_FAILED;
+    goto FAIL;
   }
 
   uint32_t printf_position = 0;
   err = fsa_copy_from_dev((uintptr_t)device_printf_position_addr,
                           &printf_position, sizeof(printf_position));
   if (err != 0) {
-    POCL_ABORT(
-        "ERROR (pocl_formosa_run): Reading printf position from device "
-        "failed\n");
+    POCL_MSG_ERR(
+        "pocl_formosa_run: reading printf position from device failed\n");
+    errcode = CL_OUT_OF_RESOURCES;
+    goto FAIL;
   }
   if (printf_position > cmd->device->printf_buffer_size) {
-    POCL_ABORT(
-        "ERROR (pocl_formosa_run): Invalid printf buffer position %u "
-        "(capacity %zu)\n",
+    POCL_MSG_ERR(
+        "pocl_formosa_run: invalid printf buffer position %u (capacity %zu)\n",
         printf_position, cmd->device->printf_buffer_size);
+    errcode = CL_OUT_OF_RESOURCES;
+    goto FAIL;
   }
   if (printf_position > 0) {
-    char *host_printf_buffer = (char *)malloc(printf_position);
-    assert(host_printf_buffer);
+    host_printf_buffer = (char *)malloc(printf_position);
+    if (host_printf_buffer == NULL) {
+      errcode = CL_OUT_OF_HOST_MEMORY;
+      goto FAIL;
+    }
     err = fsa_copy_from_dev((uintptr_t)device_printf_buffer_addr,
                             host_printf_buffer, printf_position);
     if (err != 0) {
-      POCL_ABORT(
-          "ERROR (pocl_formosa_run): Reading printf buffer from device "
-          "failed\n");
+      POCL_MSG_ERR(
+          "pocl_formosa_run: reading printf buffer from device failed\n");
+      errcode = CL_OUT_OF_RESOURCES;
+      goto FAIL;
     }
     pocl_write_printf_buffer(host_printf_buffer, printf_position);
     free(host_printf_buffer);
+    host_printf_buffer = NULL;
   }
 
   // release arguments device buffer
-  err = fsa_free((void *)fsa_kargs_buffer.buf_address);
-  if (err != 0) {
-    POCL_ABORT("ERROR (pocl_formosa_run): Kernel argument free failed\n");
-  }
-
+  if (device_args_buffer_addr && fsa_free(device_args_buffer_addr) != 0)
+    POCL_MSG_ERR("pocl_formosa_run: kernel argument free failed\n");
   // release kernel status device buffer
-  err = fsa_free((void *)device_kernel_status_addr);
-  if (err != 0) {
-    POCL_ABORT("ERROR (pocl_formosa_run): Kernel status free failed\n");
-  }
-  err = fsa_free(device_printf_buffer_addr);
-  if (err != 0) {
-    POCL_ABORT("ERROR (pocl_formosa_run): Device printf buffer free failed\n");
-  }
-  err = fsa_free(device_printf_position_addr);
-  if (err != 0) {
-    POCL_ABORT(
-        "ERROR (pocl_formosa_run): Device printf position free failed\n");
-  }
+  if (device_kernel_status_addr && fsa_free(device_kernel_status_addr) != 0)
+    POCL_MSG_ERR("pocl_formosa_run: kernel status free failed\n");
+  if (device_printf_buffer_addr && fsa_free(device_printf_buffer_addr) != 0)
+    POCL_MSG_ERR("pocl_formosa_run: printf buffer free failed\n");
+  if (device_printf_position_addr && fsa_free(device_printf_position_addr) != 0)
+    POCL_MSG_ERR("pocl_formosa_run: printf position free failed\n");
+  return CL_SUCCESS;
+
+FAIL:
+  free(host_kargs_base_ptr);
+  free(trampoline_name);
+  free(host_printf_buffer);
+  if (device_args_buffer_addr) fsa_free(device_args_buffer_addr);
+  if (device_kernel_status_addr) fsa_free(device_kernel_status_addr);
+  if (device_printf_buffer_addr) fsa_free(device_printf_buffer_addr);
+  if (device_printf_position_addr) fsa_free(device_printf_position_addr);
+  return errcode;
+}
+
+void pocl_formosa_run(void *data, _cl_command_node *cmd) {
+  /* Prefer formosa_command_scheduler for NDRange (it fails/completes the
+   * event). This ops entry is only used if something calls ops->run directly.
+   */
+  cl_int err = formosa_run_kernel(data, cmd);
+  if (err != CL_SUCCESS)
+    POCL_MSG_ERR("pocl_formosa_run: kernel execution failed (%d)\n", err);
 }
 
 /**************************
@@ -668,14 +752,14 @@ cl_int pocl_formosa_alloc_mem_obj(cl_device_id device, cl_mem mem_obj,
 
   formosa_buffer_data_t *temp = malloc(sizeof(formosa_buffer_data_t));
   if (temp == NULL) {
-    err = fsa_free((void *)addr);
-    if (err != 0) {
-      POCL_ABORT("ERROR (pocl_formosa_alloc_mem_obj): Memory free failed\n");
+    if (fsa_free((void *)addr) != 0) {
+      POCL_MSG_ERR(
+          "pocl_formosa_alloc_mem_obj: failed to free device memory after "
+          "host allocation failure\n");
     }
     return CL_OUT_OF_HOST_MEMORY;
   }
   memset(temp, 0, sizeof(formosa_buffer_data_t));
-  pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
   if (host_ptr) {  // READ_WRITE, WRITE_ONLY
     temp->buf_address = (uint64_t)addr;
     temp->buf_size = mem_obj->size;
@@ -701,12 +785,16 @@ void pocl_formosa_free(cl_device_id device, cl_mem mem_obj) {
   cl_mem_flags flags = mem_obj->flags;
   formosa_buffer_data_t *fb = (formosa_buffer_data_t *)p->mem_ptr;
   if (!fb) {
-    POCL_ABORT("ERROR (pocl_formosa_free): Memory flag not supported\n");
+    POCL_MSG_ERR("pocl_formosa_free: buffer has no device allocation\n");
+    return;
   }
   if (flags & CL_MEM_ALLOC_HOST_PTR) {
     pocl_release_mem_host_ptr(mem_obj);
   }
-  fsa_free((void *)fb->buf_address);
+  if (fsa_free((void *)fb->buf_address) != 0) {
+    POCL_MSG_ERR("pocl_formosa_free: device free failed for buffer %p\n",
+                 (void *)fb->buf_address);
+  }
   POCL_MEM_FREE(fb);
   p->mem_ptr = NULL;
 }
@@ -714,6 +802,64 @@ void pocl_formosa_free(cl_device_id device, cl_mem mem_obj) {
 /**************************
  * Event Handling         *
  **************************/
+
+static cl_int formosa_read_buf(void *data, void *__restrict__ host_ptr,
+                               pocl_mem_identifier *src_mem_id, cl_mem src_buf,
+                               size_t offset, size_t size) {
+  formosa_buffer_data_t *buffer_data =
+      (formosa_buffer_data_t *)src_mem_id->mem_ptr;
+  if (buffer_data == NULL) {
+    POCL_MSG_ERR("pocl_formosa_read: memory buffer not found\n");
+    return CL_INVALID_MEM_OBJECT;
+  }
+  if (offset + size > buffer_data->buf_size) {
+    POCL_MSG_ERR(
+        "pocl_formosa_read: out of buffer range (offset=%zu size=%zu "
+        "buf_size=%" PRIu64 ")\n",
+        offset, size, buffer_data->buf_size);
+    return CL_INVALID_VALUE;
+  }
+  if (fsa_copy_from_dev(buffer_data->buf_address + offset, host_ptr, size) !=
+      0) {
+    POCL_MSG_ERR("pocl_formosa_read: copy from device failed\n");
+    return CL_OUT_OF_RESOURCES;
+  }
+  return CL_SUCCESS;
+}
+
+static cl_int formosa_write_buf(void *data, const void *__restrict__ host_ptr,
+                                pocl_mem_identifier *dst_mem_id, cl_mem dst_buf,
+                                size_t offset, size_t size) {
+  formosa_buffer_data_t *buffer_data =
+      (formosa_buffer_data_t *)dst_mem_id->mem_ptr;
+  if (buffer_data == NULL) {
+    POCL_MSG_ERR("pocl_formosa_write: memory buffer not found\n");
+    return CL_INVALID_MEM_OBJECT;
+  }
+  if (offset + size > buffer_data->buf_size) {
+    POCL_MSG_ERR(
+        "pocl_formosa_write: out of buffer range (offset=%zu size=%zu "
+        "buf_size=%" PRIu64 ")\n",
+        offset, size, buffer_data->buf_size);
+    return CL_INVALID_VALUE;
+  }
+  if (fsa_copy_to_dev(buffer_data->buf_address + offset, host_ptr, size) != 0) {
+    POCL_MSG_ERR("pocl_formosa_write: copy to device failed\n");
+    return CL_OUT_OF_RESOURCES;
+  }
+  return CL_SUCCESS;
+}
+
+/* Formosa-local finish: on error mark the event failed (negative OpenCL
+ * status) instead of completing as success. Do not use pocl_exec_command for
+ * these types — it always COMPLETE after ops->run/read/write. */
+static void formosa_finish_command(cl_event event, cl_int err,
+                                   const char *ok_msg, const char *fail_msg) {
+  if (err != CL_SUCCESS)
+    POCL_UPDATE_EVENT_FAILED_MSG(err, event, fail_msg);
+  else
+    POCL_UPDATE_EVENT_COMPLETE_MSG(event, ok_msg);
+}
 
 static void formosa_command_scheduler(pocl_formosa_data_t *dd) {
   _cl_command_node *node;
@@ -724,7 +870,45 @@ static void formosa_command_scheduler(pocl_formosa_data_t *dd) {
     assert(node->sync.event.event->status == CL_SUBMITTED);
     CDL_DELETE(dd->ready_list, node);
     POCL_UNLOCK(dd->cq_lock);
-    pocl_exec_command(node);
+
+    cl_event event = node->sync.event.event;
+    cl_device_id dev = node->device;
+    _cl_command_t *cmd = &node->command;
+    cl_int err = CL_SUCCESS;
+
+    switch (node->type) {
+      case CL_COMMAND_NDRANGE_KERNEL:
+        pocl_update_event_running(event);
+        err = formosa_run_kernel(dd, node);
+        formosa_finish_command(event, err, "Event Enqueue NDRange       ",
+                               "Formosa NDRange Kernel");
+        break;
+
+      case CL_COMMAND_READ_BUFFER:
+        pocl_update_event_running(event);
+        err = formosa_read_buf(
+            dd, cmd->read.dst_host_ptr,
+            &POCL_MEM_BS(cmd->read.src)->device_ptrs[dev->global_mem_id],
+            cmd->read.src, cmd->read.offset, cmd->read.size);
+        formosa_finish_command(event, err, "Event Read Buffer           ",
+                               "Formosa Read Buffer");
+        break;
+
+      case CL_COMMAND_WRITE_BUFFER:
+        pocl_update_event_running(event);
+        err = formosa_write_buf(
+            dd, cmd->write.src_host_ptr,
+            &POCL_MEM_BS(cmd->write.dst)->device_ptrs[dev->global_mem_id],
+            cmd->write.dst, cmd->write.offset, cmd->write.size);
+        formosa_finish_command(event, err, "Event Write Buffer          ",
+                               "Formosa Write Buffer");
+        break;
+
+      default:
+        pocl_exec_command(node);
+        break;
+    }
+
     POCL_LOCK(dd->cq_lock);
   }
 }
@@ -808,35 +992,15 @@ void pocl_formosa_notify(cl_device_id device, cl_event event,
 void pocl_formosa_read(void *data, void *__restrict__ host_ptr,
                        pocl_mem_identifier *src_mem_id, cl_mem src_buf,
                        size_t offset, size_t size) {
-  formosa_buffer_data_t *buffer_data =
-      (formosa_buffer_data_t *)src_mem_id->mem_ptr;
-  if (buffer_data == NULL) {
-    POCL_ABORT("ERROR (pocl_formosa_read): Memory buffer not found\n");
-  }
-  if (offset + size > buffer_data->buf_size) {
-    POCL_ABORT("ERROR (pocl_formosa_read): Out of buffer size\n");
-  }
-  int err =
-      fsa_copy_from_dev(buffer_data->buf_address + offset, host_ptr, size);
-  if (err != 0) {
-    POCL_ABORT("ERROR (pocl_formosa_read): Copy from device failed\n");
-  }
+  cl_int err =
+      formosa_read_buf(data, host_ptr, src_mem_id, src_buf, offset, size);
+  if (err != CL_SUCCESS) POCL_MSG_ERR("pocl_formosa_read: failed (%d)\n", err);
 }
 
 void pocl_formosa_write(void *data, const void *__restrict__ host_ptr,
                         pocl_mem_identifier *dst_mem_id, cl_mem dst_buf,
                         size_t offset, size_t size) {
-  formosa_buffer_data_t *buffer_data =
-      (formosa_buffer_data_t *)dst_mem_id->mem_ptr;
-  if (buffer_data == NULL) {
-    POCL_ABORT("ERROR (pocl_formosa_write): Memory buffer not found\n");
-  }
-  if (offset + size > buffer_data->buf_size) {
-    POCL_ABORT("ERROR (pocl_formosa_write): Out of buffer size\n");
-  }
-
-  int err = fsa_copy_to_dev(buffer_data->buf_address + offset, host_ptr, size);
-  if (err != 0) {
-    POCL_ABORT("ERROR (pocl_formosa_write): Copy to device failed\n");
-  }
+  cl_int err =
+      formosa_write_buf(data, host_ptr, dst_mem_id, dst_buf, offset, size);
+  if (err != CL_SUCCESS) POCL_MSG_ERR("pocl_formosa_write: failed (%d)\n", err);
 }
