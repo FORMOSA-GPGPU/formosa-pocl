@@ -1,9 +1,6 @@
-/* Verify Formosa driver error paths fail the event (not abort, not fake COMPLETE).
- *
- * CASE1: Huge __local → occupancy check fails → event status == CL_INVALID_WORK_GROUP_SIZE
- * Process must remain alive.
- *
- * Requires a live FORMOSA daemon (AGENT_SOCKET_PATH) and installed PoCL ICD.
+/* Verify Formosa error paths fail the event (not abort / fake COMPLETE).
+ * CASE1: huge __local → occupancy fail → negative event status; process alive.
+ * Requires live FORMOSA daemon (AGENT_SOCKET_PATH) and installed PoCL ICD.
  */
 
 #include <CL/cl.h>
@@ -57,11 +54,9 @@ int main() {
   cl_ulong local_mem = 0;
   clGetDeviceInfo(device, CL_DEVICE_LOCAL_MEM_SIZE, sizeof(local_mem),
                   &local_mem, nullptr);
-  std::printf("CL_DEVICE_LOCAL_MEM_SIZE=%llu\n",
-              (unsigned long long)local_mem);
+  std::printf("CL_DEVICE_LOCAL_MEM_SIZE=%llu\n", (unsigned long long)local_mem);
 
-  cl_context ctx =
-      clCreateContext(nullptr, 1, &device, nullptr, nullptr, &err);
+  cl_context ctx = clCreateContext(nullptr, 1, &device, nullptr, nullptr, &err);
   if (check_api(err, "clCreateContext"))
     return 2;
 
@@ -71,8 +66,7 @@ int main() {
 
   /* ---------- CASE1: occupancy failure must fail the event ---------- */
   const char *src = kLocalKernel;
-  cl_program prog =
-      clCreateProgramWithSource(ctx, 1, &src, nullptr, &err);
+  cl_program prog = clCreateProgramWithSource(ctx, 1, &src, nullptr, &err);
   if (check_api(err, "clCreateProgramWithSource"))
     return 2;
   err = clBuildProgram(prog, 1, &device, nullptr, nullptr, nullptr);
@@ -98,8 +92,8 @@ int main() {
   if (check_api(err, "clSetKernelArg local"))
     return 2;
 
-  cl_mem out = clCreateBuffer(ctx, CL_MEM_WRITE_ONLY, sizeof(int) * 4, nullptr,
-                              &err);
+  cl_mem out =
+      clCreateBuffer(ctx, CL_MEM_WRITE_ONLY, sizeof(int) * 4, nullptr, &err);
   if (check_api(err, "clCreateBuffer"))
     return 2;
   err = clSetKernelArg(kernel, 1, sizeof(cl_mem), &out);
@@ -113,6 +107,16 @@ int main() {
   err = clEnqueueNDRangeKernel(q, kernel, 1, nullptr, &gws, &lws, 0, nullptr,
                                &ev);
   std::printf("CASE1: clEnqueueNDRangeKernel returned %d\n", err);
+  if (err != CL_SUCCESS || ev == nullptr) {
+    std::fprintf(stderr,
+                 "FAIL: expected enqueue to succeed and produce an event "
+                 "(err=%d, ev=%p); Formosa defers occupancy failure to "
+                 "event status\n",
+                 err, (void *)ev);
+    if (ev)
+      clReleaseEvent(ev);
+    return 2;
+  }
 
   err = clFinish(q);
   std::printf("CASE1: clFinish returned %d\n", err);
@@ -131,9 +135,9 @@ int main() {
         ev_status);
     case1_ok = 1;
   } else {
-    std::printf(
-        "CASE1: FAIL — expected negative event status, got %d (fake COMPLETE?)\n",
-        ev_status);
+    std::printf("CASE1: FAIL — expected negative event status, got %d (fake "
+                "COMPLETE?)\n",
+                ev_status);
   }
 
   clReleaseEvent(ev);
@@ -141,7 +145,7 @@ int main() {
   clReleaseKernel(kernel);
   clReleaseProgram(prog);
 
-  /* ---------- CASE2: a good kernel still works after a failed command ---------- */
+  /* ---------- CASE2: good kernel still works after failed command ---------- */
   src = kOkKernel;
   prog = clCreateProgramWithSource(ctx, 1, &src, nullptr, &err);
   if (check_api(err, "clCreateProgramWithSource ok"))
@@ -163,11 +167,20 @@ int main() {
   err = clEnqueueNDRangeKernel(q, kernel, 1, nullptr, &gws, &lws, 0, nullptr,
                                &ev2);
   std::printf("CASE2: clEnqueueNDRangeKernel returned %d\n", err);
+  if (err != CL_SUCCESS || ev2 == nullptr) {
+    std::fprintf(stderr, "CASE2: FAIL enqueue (err=%d, ev=%p)\n", err,
+                 (void *)ev2);
+    if (ev2)
+      clReleaseEvent(ev2);
+    return 2;
+  }
   err = clFinish(q);
   std::printf("CASE2: clFinish returned %d\n", err);
   cl_int ev2_status = 0;
-  clGetEventInfo(ev2, CL_EVENT_COMMAND_EXECUTION_STATUS, sizeof(ev2_status),
-                 &ev2_status, nullptr);
+  err = clGetEventInfo(ev2, CL_EVENT_COMMAND_EXECUTION_STATUS,
+                       sizeof(ev2_status), &ev2_status, nullptr);
+  if (check_api(err, "clGetEventInfo case2"))
+    return 2;
   std::printf("CASE2: event execution status = %d\n", ev2_status);
 
   int case2_ok = (ev2_status == CL_COMPLETE);
