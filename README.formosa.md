@@ -2,32 +2,64 @@
 
 ## Building PoCL
 
-1. Configure
+### Option A: direnv (recommended)
 
-Use the Nix dev shell provided by the [formosa](https://git.caslab.ee.ncku.edu.tw/formosa-gpgpu/formosa) project.
+If this `pocl` checkout sits next to a `formosa` clone:
+
+```text
+<formosa-gpgpu>/
+  formosa/
+  pocl/        # you are here
+```
+
+then:
+
+```bash
+# once per clone
+direnv allow
+
+# entering pocl/ loads formosa#formosa-pocl automatically
+cmake -B build -G Ninja $(echo $cmakeFlags)
+cmake --build build --target install
+```
+
+`direnv` only auto-discovers **sibling** `../formosa` (same parent directory as `pocl`).
+
+If formosa is elsewhere, set an absolute path once:
+
+```bash
+export FORMOSA_FLAKE=/absolute/path/to/formosa
+direnv allow   # re-enter pocl/ after setting
+```
+
+Requires [direnv](https://direnv.net/) with [nix-direnv](https://github.com/nix-community/nix-direnv), same as the formosa monorepo.
+
+### Option B: manual nix develop
 
 ```bash
 nix develop /path/to/formosa#formosa-pocl
-cmake -B build -G Ninja `echo $cmakeFlags`
-```
-
-2. Build & Install
-```bash
-sudo cmake --build build --target install
+cmake -B build -G Ninja $(echo $cmakeFlags)
+cmake --build build --target install
 ```
 
 ## Examine the installation
-1. Start the lv server
-2. Export the socket path
+
+1. Start the lv server (from the formosa monorepo)
+2. Export the socket path (direnv defaults to `/tmp/casvp-ipc`)
 ```bash
-export AGENT_SOCKET_PATH=/tmp/lv-ipc
+export AGENT_SOCKET_PATH=/tmp/casvp-ipc
 ```
-3. Run clinfo to check if the FORMOSA device is available
+3. Point ICD at your local install if needed
+```bash
+export OCL_ICD_VENDORS=$CMAKE_INSTALL_PREFIX/etc/OpenCL/vendors/pocl.icd
+```
+4. Run clinfo to check if the FORMOSA device is available
 ```bash
 clinfo -l
 ```
 
 ## Running PoCL with FORMOSA
+
 1. Set the environment variable
 ```bash
 export AGENT_SOCKET_PATH=<path-to-lv-ipc-socket>
