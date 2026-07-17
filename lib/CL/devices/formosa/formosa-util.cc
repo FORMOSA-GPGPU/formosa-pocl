@@ -91,8 +91,8 @@ int apply_kernel_relocations(FILE *elf, const Elf64_Ehdr &ehdr,
           case R_RISCV_NONE:
             break;
           default:
-            POCL_MSG_ERR("Unsupported kernel relocation type %u in kernel ELF\n",
-                         type);
+            POCL_MSG_ERR(
+                "Unsupported kernel relocation type %u in kernel ELF\n", type);
             return -1;
         }
       }
@@ -191,24 +191,42 @@ int pocl_fsa_get_elf_name(cl_program program, cl_uint device_i,
 
 int pocl_fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
                            uint64_t *kernel_dev_addr) {
-  if (elf_file == nullptr || dd == nullptr) return -1;
+  if (elf_file == nullptr || dd == nullptr || kernel_dev_addr == nullptr)
+    return -1;
   uint64_t kernel_size = 0;
   FILE *elf = fopen(elf_file, "rb");
-  rewind(elf);
+  if (elf == nullptr) {
+    POCL_MSG_ERR("pocl_fsa_upload_kernel: failed to open ELF %s\n", elf_file);
+    return -1;
+  }
   Elf64_Ehdr ehdr;
   [[maybe_unused]] size_t read_size;
   read_size = fread(&ehdr, sizeof(ehdr), 1, elf);
+  if (read_size != 1) {
+    POCL_MSG_ERR("pocl_fsa_upload_kernel: failed to read ELF header from %s\n",
+                 elf_file);
+    fclose(elf);
+    return -1;
+  }
   // 1st pass, iterate all program headers to find the minimum base address
   for (int i = 0; i < ehdr.e_phnum; i++) {
-    fseek(elf, ehdr.e_phoff + i * (ehdr.e_phentsize), SEEK_SET);
+    if (fseek(elf, ehdr.e_phoff + i * (ehdr.e_phentsize), SEEK_SET) != 0) {
+      POCL_MSG_ERR("pocl_fsa_upload_kernel: fseek program header failed\n");
+      fclose(elf);
+      return -1;
+    }
     Elf64_Phdr phdr;
     // read prog header from elf
-    read_size = fread(&phdr, sizeof(phdr), 1, elf);
+    if (fread(&phdr, sizeof(phdr), 1, elf) != 1) {
+      POCL_MSG_ERR("pocl_fsa_upload_kernel: fread program header failed\n");
+      fclose(elf);
+      return -1;
+    }
     if (phdr.p_type != PT_LOAD) continue;
     uint64_t addr = phdr.p_paddr;
     if (addr + phdr.p_memsz > kernel_size) kernel_size = addr + phdr.p_memsz;
   }
-  void *kernel_start_addr;
+  void *kernel_start_addr = nullptr;
   if (fsa_malloc(&kernel_start_addr, kernel_size)) {
     POCL_MSG_ERR(
         "Failed to allocate FSA device side memory in fsa_upload_kernel");
@@ -221,36 +239,55 @@ int pocl_fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
   rewind(elf);
   uint8_t *host_ptr = (uint8_t *)calloc(1, sizeof(uint8_t) * kernel_size);
   if (host_ptr == nullptr) {
+    POCL_MSG_ERR("pocl_fsa_upload_kernel: host image allocation failed\n");
+    fsa_free(kernel_start_addr);
+    *kernel_dev_addr = 0;
     fclose(elf);
     return -1;
   }
 
   // 2nd pass, load all PT_LOAD segments into the host-side image.
   for (int i = 0; i < ehdr.e_phnum; i++) {
-    fseek(elf, ehdr.e_phoff + i * (ehdr.e_phentsize), SEEK_SET);
+    if (fseek(elf, ehdr.e_phoff + i * (ehdr.e_phentsize), SEEK_SET) != 0) {
+      POCL_MSG_ERR("pocl_fsa_upload_kernel: fseek program header failed\n");
+      goto FAIL;
+    }
     Elf64_Phdr phdr;
-    read_size = fread(&phdr, sizeof(phdr), 1, elf);
+    if (fread(&phdr, sizeof(phdr), 1, elf) != 1) {
+      POCL_MSG_ERR("pocl_fsa_upload_kernel: fread program header failed\n");
+      goto FAIL;
+    }
     if (phdr.p_type != PT_LOAD) continue;
     uint64_t size = phdr.p_filesz;
     uint64_t offset = phdr.p_paddr;  // ORIGIN in link.ld is zero
-    fseek(elf, phdr.p_offset, SEEK_SET);
+    if (fseek(elf, phdr.p_offset, SEEK_SET) != 0) {
+      POCL_MSG_ERR("pocl_fsa_upload_kernel: fseek segment failed\n");
+      goto FAIL;
+    }
     if (size) {
-      read_size = fread(host_ptr + offset, size, 1, elf);
+      if (fread(host_ptr + offset, size, 1, elf) != 1) {
+        POCL_MSG_ERR("pocl_fsa_upload_kernel: fread segment failed\n");
+        goto FAIL;
+      }
     }
   }
 
   if (apply_kernel_relocations(elf, ehdr, host_ptr, kernel_size,
                                *kernel_dev_addr) != 0) {
-    free(host_ptr);
-    fclose(elf);
-    return -1;
+    goto FAIL;
   }
 
   // 3rd pass, copy the relocated loadable image to device memory.
   for (int i = 0; i < ehdr.e_phnum; i++) {
-    fseek(elf, ehdr.e_phoff + i * (ehdr.e_phentsize), SEEK_SET);
+    if (fseek(elf, ehdr.e_phoff + i * (ehdr.e_phentsize), SEEK_SET) != 0) {
+      POCL_MSG_ERR("pocl_fsa_upload_kernel: fseek program header failed\n");
+      goto FAIL;
+    }
     Elf64_Phdr phdr;
-    read_size = fread(&phdr, sizeof(phdr), 1, elf);
+    if (fread(&phdr, sizeof(phdr), 1, elf) != 1) {
+      POCL_MSG_ERR("pocl_fsa_upload_kernel: fread program header failed\n");
+      goto FAIL;
+    }
     if (phdr.p_type != PT_LOAD) continue;
 
     uint64_t size = phdr.p_memsz;
@@ -266,6 +303,13 @@ int pocl_fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
   free(host_ptr);
   fclose(elf);
   return 0;
+
+FAIL:
+  free(host_ptr);
+  fsa_free(kernel_start_addr);
+  *kernel_dev_addr = 0;
+  fclose(elf);
+  return -1;
 }
 
 int pocl_fsa_wait_ack(pocl_formosa_data_t *dd, uintptr_t completion_signal,
@@ -274,6 +318,9 @@ int pocl_fsa_wait_ack(pocl_formosa_data_t *dd, uintptr_t completion_signal,
   // polling the completion_signal until it is set to non-zero value
   fsa_wait_for_completion(completion_signal,
                           0);  // blocking wait
+
+  /* Graph launch may not provide a KernelStatus buffer. */
+  if (device_kernel_status_addr == 0) return 0;
 
   uint8_t status_raw[sizeof(KernelStatus)];
   int err = fsa_copy_from_dev(device_kernel_status_addr, status_raw,

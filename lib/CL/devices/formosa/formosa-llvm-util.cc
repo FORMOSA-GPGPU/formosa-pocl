@@ -23,6 +23,7 @@
 #include <llvm/Linker/Linker.h>
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Object/SymbolicFile.h>
+#include <llvm/Support/Error.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
@@ -99,9 +100,10 @@ bool createTrampolineFunction(llvm::Function *F, llvm::Module *M,
     }
   }
 
-  // Call the target function with the extracted arguments and finish the wrapper
-  // CFG before inlining. InlineFunction rewrites the call site and may split
-  // blocks, so appending the return after inlining can leave malformed CFG.
+  // Call the target function with the extracted arguments and finish the
+  // wrapper CFG before inlining. InlineFunction rewrites the call site and may
+  // split blocks, so appending the return after inlining can leave malformed
+  // CFG.
   auto CallInst = Builder.CreateCall(F, ExtractedArgs);
 
   if (FuncType->getReturnType()->isVoidTy()) {
@@ -201,18 +203,27 @@ void pocl_fsa_build_kernel(void *LLVMModule, char *BitcodePath,
 }
 
 uint64_t pocl_fsa_get_symbol_pc(const char *ELFPath, const char *SymbolName) {
-  auto BufferOrError = llvm::MemoryBuffer::getFile(std::string(ELFPath));
-  if (!BufferOrError) {
-    POCL_ABORT("ERROR (pocl_fsa_get_symbol_pc): Failed to open ELF file %s\n",
-               ELFPath);
+  /* 0 is a valid symbol address (Formosa kernels place _start at .org 0x0).
+   * Use UINT64_MAX as the not-found / error sentinel. */
+  if (ELFPath == nullptr || SymbolName == nullptr) {
+    POCL_MSG_ERR("pocl_fsa_get_symbol_pc: invalid arguments\n");
+    return UINT64_MAX;
   }
 
-  // Parse ELF file
+  auto BufferOrError = llvm::MemoryBuffer::getFile(std::string(ELFPath));
+  if (!BufferOrError) {
+    POCL_MSG_ERR("pocl_fsa_get_symbol_pc: failed to open ELF file %s\n",
+                 ELFPath);
+    return UINT64_MAX;
+  }
+
   auto ObjOrError = llvm::object::ObjectFile::createELFObjectFile(
       BufferOrError.get()->getMemBufferRef());
   if (!ObjOrError) {
-    POCL_ABORT("ERROR (pocl_fsa_get_symbol_pc): Failed to parse ELF file %s\n",
-               ELFPath);
+    POCL_MSG_ERR("pocl_fsa_get_symbol_pc: failed to parse ELF file %s\n",
+                 ELFPath);
+    llvm::consumeError(ObjOrError.takeError());
+    return UINT64_MAX;
   }
 
   std::unique_ptr<llvm::object::ObjectFile> Obj = std::move(ObjOrError.get());
@@ -220,25 +231,32 @@ uint64_t pocl_fsa_get_symbol_pc(const char *ELFPath, const char *SymbolName) {
     llvm::Expected<llvm::object::SymbolRef::Type> TypeOrError =
         Symbol.getType();
     if (!TypeOrError) {
-      POCL_ABORT("ERROR (pocl_fsa_get_symbol_pc): Failed to get symbol type\n");
+      POCL_MSG_ERR("pocl_fsa_get_symbol_pc: failed to get symbol type\n");
+      llvm::consumeError(TypeOrError.takeError());
+      return UINT64_MAX;
     }
 
     llvm::Expected<llvm::StringRef> NameOrError = Symbol.getName();
     if (!NameOrError) {
-      POCL_ABORT("ERROR (pocl_fsa_get_symbol_pc): Failed to get symbol name\n");
+      POCL_MSG_ERR("pocl_fsa_get_symbol_pc: failed to get symbol name\n");
+      llvm::consumeError(NameOrError.takeError());
+      return UINT64_MAX;
     }
     if (NameOrError.get().str() == SymbolName) {
       llvm::Expected<uint64_t> AddrOrError = Symbol.getAddress();
       if (!AddrOrError) {
-        POCL_ABORT(
-            "ERROR (pocl_fsa_get_symbol_pc): Failed to get symbol address\n");
+        POCL_MSG_ERR(
+            "pocl_fsa_get_symbol_pc: failed to get address for symbol %s\n",
+            SymbolName);
+        llvm::consumeError(AddrOrError.takeError());
+        return UINT64_MAX;
       }
       POCL_MSG_PRINT_LLVM("Found symbol %s at 0x%lx\n", SymbolName,
                           AddrOrError.get());
       return AddrOrError.get();
     }
   }
-  POCL_ABORT("ERROR (pocl_fsa_get_symbol_pc): Failed to find symbol %s\n",
-             SymbolName);
-  return 0;
+  POCL_MSG_ERR("pocl_fsa_get_symbol_pc: symbol %s not found in %s\n",
+               SymbolName, ELFPath);
+  return UINT64_MAX;
 }

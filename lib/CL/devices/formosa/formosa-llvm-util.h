@@ -24,7 +24,9 @@ void pocl_fsa_build_kernel(void *LLVMModule, char *BitcodePath,
  * Get the address of a symbol in the ELF file.
  * @param ELFPath The path to the ELF file.
  * @param SymbolName The name of the symbol to find.
- * @return The address of the symbol in the ELF file, or 0 if not found.
+ * @return The symbol's address on success. Note that 0 can be a valid
+ *         address (e.g. _start is at .org 0x0). On failure returns
+ *         UINT64_MAX.
  */
 uint64_t pocl_fsa_get_symbol_pc(const char *ELFPath, const char *SymbolName);
 

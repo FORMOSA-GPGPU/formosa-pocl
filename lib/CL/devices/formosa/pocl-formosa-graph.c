@@ -737,16 +737,35 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
     pocl_fsa_get_elf_name(node->kernel->program, 0, sz_program_fsabin);
 
     uint64_t dev_kernel_addr = 0;
-    pocl_fsa_upload_kernel(sz_program_fsabin, dd, &dev_kernel_addr);
+    if (pocl_fsa_upload_kernel(sz_program_fsabin, dd, &dev_kernel_addr) != 0) {
+      POCL_MSG_ERR("formosa: failed to upload kernel for graph node %u\n",
+                   node->node_id);
+      goto CLEANUP;
+    }
 
-    uint64_t entry_pc =
-        pocl_fsa_get_symbol_pc(sz_program_fsabin, "_start") + dev_kernel_addr;
+    /* _start may legitimately be at offset 0; UINT64_MAX is the error
+     * sentinel from pocl_fsa_get_symbol_pc. */
+    uint64_t entry_pc = pocl_fsa_get_symbol_pc(sz_program_fsabin, "_start");
+    if (entry_pc == UINT64_MAX) {
+      POCL_MSG_ERR("formosa: _start not found for graph node %u\n",
+                   node->node_id);
+      fsa_free((void *)dev_kernel_addr);
+      goto CLEANUP;
+    }
+    entry_pc += dev_kernel_addr;
+
     char trampoline_name[256];
     snprintf(trampoline_name, sizeof(trampoline_name), "%s_trampolined",
              node->kernel->name);
     uint64_t trampoline_pc =
-        pocl_fsa_get_symbol_pc(sz_program_fsabin, trampoline_name) +
-        dev_kernel_addr;
+        pocl_fsa_get_symbol_pc(sz_program_fsabin, trampoline_name);
+    if (trampoline_pc == UINT64_MAX) {
+      POCL_MSG_ERR("formosa: trampoline %s not found for graph node %u\n",
+                   trampoline_name, node->node_id);
+      fsa_free((void *)dev_kernel_addr);
+      goto CLEANUP;
+    }
+    trampoline_pc += dev_kernel_addr;
 
     nd->node_id = node->node_id;
     nd->flags = node->properties.flags;
