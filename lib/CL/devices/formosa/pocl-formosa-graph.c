@@ -35,6 +35,36 @@ static int pocl_formosa_mul_u32_overflow(uint32_t a, uint32_t b,
   return 0;
 }
 
+static cl_int pocl_formosa_add_graph_cache_range(
+    GraphCacheRange **ranges, uint32_t *count, uint32_t *capacity,
+    uint64_t addr, uint64_t size, uint32_t flags, uint32_t node_id) {
+  if (addr == 0 || size == 0 || addr > UINT64_MAX - size)
+    return CL_INVALID_VALUE;
+
+  for (uint32_t i = 0; i < *count; i++) {
+    if ((*ranges)[i].addr == addr && (*ranges)[i].size == size &&
+        (*ranges)[i].flags == flags && (*ranges)[i].node_id == node_id)
+      return CL_SUCCESS;
+  }
+
+  if (*count == *capacity) {
+    if (*capacity > UINT32_MAX / 2) return CL_OUT_OF_HOST_MEMORY;
+    uint32_t new_capacity = *capacity == 0 ? 8 : *capacity * 2;
+    GraphCacheRange *new_ranges = (GraphCacheRange *)realloc(
+        *ranges, (size_t)new_capacity * sizeof(**ranges));
+    if (new_ranges == NULL) return CL_OUT_OF_HOST_MEMORY;
+    *ranges = new_ranges;
+    *capacity = new_capacity;
+  }
+
+  (*ranges)[*count].addr = addr;
+  (*ranges)[*count].size = size;
+  (*ranges)[*count].flags = flags;
+  (*ranges)[*count].node_id = node_id;
+  (*count)++;
+  return CL_SUCCESS;
+}
+
 static cl_int pocl_formosa_validate_node_properties(
     const struct _cl_work_graph_node_formosa *node) {
   uint32_t launch_mode = node->properties.launch_mode;
@@ -226,11 +256,11 @@ static cl_int pocl_formosa_prepare_mem_arg(
   return CL_SUCCESS;
 }
 
-static cl_int pocl_formosa_pack_kernel_args(cl_device_id device,
-                                            cl_kernel kernel,
-                                            uint64_t *dev_kernarg_addr,
-                                            uint32_t *kernarg_size,
-                                            uint64_t *local_mem_size) {
+static cl_int pocl_formosa_pack_kernel_args(
+    cl_device_id device, cl_kernel kernel, uint32_t node_id,
+    uint32_t node_flags, uint64_t *dev_kernarg_addr, uint32_t *kernarg_size,
+    uint64_t *local_mem_size, GraphCacheRange **cache_ranges,
+    uint32_t *cache_range_count, uint32_t *cache_range_capacity) {
   if (kernel == NULL) return CL_INVALID_KERNEL;
   if (kernel->dyn_arguments == NULL) return CL_INVALID_KERNEL_ARGS;
 
@@ -297,6 +327,25 @@ static cl_int pocl_formosa_pack_kernel_args(cl_device_id device,
           return err;
         }
         dev_addr = buf_data->buf_address + arg->offset;
+        uint32_t range_flags = 0;
+        uint32_t range_node_id = FORMOSA_GRAPH_CACHE_RANGE_ALL_NODES;
+        if ((meta->arg_info[i].type_qualifier & CL_KERNEL_ARG_TYPE_CONST) ==
+            0) {
+          range_flags = FORMOSA_GRAPH_CACHE_RANGE_COMPLETION;
+        } else if ((node_flags & CL_NODE_GLOBAL_CACHE_BEFORE_FORMOSA) != 0) {
+          range_flags = FORMOSA_GRAPH_CACHE_RANGE_NODE_BEFORE;
+          range_node_id = node_id;
+        }
+        if (range_flags != 0) {
+          err = pocl_formosa_add_graph_cache_range(
+              cache_ranges, cache_range_count, cache_range_capacity,
+              buf_data->buf_address, buf_data->buf_size, range_flags,
+              range_node_id);
+        }
+        if (err != CL_SUCCESS) {
+          free(host_kargs);
+          return err;
+        }
       }
 
       memcpy(host_kargs + host_args_offset, &dev_addr, ptr_size);
@@ -372,6 +421,10 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
   uint64_t *launch_static_kargs = NULL;
   uint32_t *launch_static_karg_sizes = NULL;
   uint64_t *launch_local_mem_sizes = NULL;
+  GraphCacheRange *cache_ranges = NULL;
+  uint32_t cache_range_count = 0;
+  uint32_t cache_range_capacity = 0;
+  uint64_t dev_cache_ranges = 0;
   uint64_t dev_root_desc = 0;
   GraphRuntimePool pool = {0};
   cl_int err = CL_SUCCESS;
@@ -775,8 +828,10 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
     uint64_t local_mem_size = 0;
 
     /* Capture the kernel's current clSetKernelArg state for this launch. */
-    err = pocl_formosa_pack_kernel_args(device, node->kernel, &dev_kargs_addr,
-                                        &kargs_size, &local_mem_size);
+    err = pocl_formosa_pack_kernel_args(
+        device, node->kernel, node->node_id, node->properties.flags,
+        &dev_kargs_addr, &kargs_size, &local_mem_size, &cache_ranges,
+        &cache_range_count, &cache_range_capacity);
     if (err != CL_SUCCESS) {
       POCL_MSG_ERR("formosa: failed to pack kernel args for graph node %u\n",
                    node->node_id);
@@ -807,17 +862,34 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
     fsa_copy_to_dev(bg->dev_edge_descs, edge_descs,
                     sizeof(EdgeDescriptor) * edge_count);
 
+  if (cache_range_count > 0) {
+    size_t cache_ranges_size =
+        (size_t)cache_range_count * sizeof(GraphCacheRange);
+    if (fsa_malloc((void **)&dev_cache_ranges, cache_ranges_size) ||
+        fsa_copy_to_dev(dev_cache_ranges, cache_ranges, cache_ranges_size)) {
+      POCL_MSG_ERR("formosa: failed to upload graph cache ranges\n");
+      goto CLEANUP;
+    }
+  }
+
   for (cl_uint i = 0; i < node_count; i++) {
-    uint32_t record_size =
-        (uint32_t)ordered_nodes[i]->properties.input_record_size;
+    size_t input_record_size = ordered_nodes[i]->properties.input_record_size;
+    if (input_record_size > UINT32_MAX - 15u) {
+      POCL_MSG_ERR("formosa: graph node %u record size is too large\n",
+                   ordered_nodes[i]->node_id);
+      goto CLEANUP;
+    }
+    uint32_t record_size = (uint32_t)input_record_size;
+    uint32_t record_stride = (record_size + 15u) & ~15u;
+    if ((int)i == root_idx) record_stride = record_size;
     uint32_t capacity = node_queue_caps[i];
-    if (record_size != 0 && capacity > SIZE_MAX / record_size) {
+    if (record_stride != 0 && capacity > SIZE_MAX / record_stride) {
       POCL_MSG_ERR(
           "formosa: graph node %u queue records allocation overflows size_t\n",
           ordered_nodes[i]->node_id);
       goto CLEANUP;
     }
-    size_t records_size = (size_t)record_size * capacity;
+    size_t records_size = (size_t)record_stride * capacity;
     size_t ready_sequences_size = sizeof(uint32_t) * capacity;
     uint32_t *ready_sequences =
         (uint32_t *)calloc(capacity, sizeof(*ready_sequences));
@@ -833,7 +905,7 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
     node_queues[i].admission_reserved = 0;
     node_queues[i].capacity = capacity;
     node_queues[i].record_size = record_size;
-    node_queues[i].reserved0 = 0;
+    node_queues[i].record_stride = record_stride;
 
     if ((int)i == root_idx) {
       if (bg->dev_node_queue_records[i]) {
@@ -944,6 +1016,8 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
   pool.node_state_addr = bg->dev_node_states;
   pool.node_state_stride = sizeof(NodeRuntimeState);
   pool.node_state_count = node_count;
+  pool.cache_range_count = cache_range_count;
+  pool.cache_range_addr = dev_cache_ranges;
   fsa_copy_to_dev(bg->dev_runtime_pool, &pool, sizeof(GraphRuntimePool));
 
   /* Launch */
@@ -974,6 +1048,10 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
     fsa_free((void *)pool.kernarg_pool_base);
     pool.kernarg_pool_base = 0;
   }
+  if (dev_cache_ranges) {
+    fsa_free((void *)dev_cache_ranges);
+    dev_cache_ranges = 0;
+  }
 
 CLEANUP:
   if (launch_static_kargs) {
@@ -984,6 +1062,7 @@ CLEANUP:
   if (dev_root_desc) fsa_free((void *)dev_root_desc);
   if (pool.ctx_pool_base) fsa_free((void *)pool.ctx_pool_base);
   if (pool.kernarg_pool_base) fsa_free((void *)pool.kernarg_pool_base);
+  if (dev_cache_ranges) fsa_free((void *)dev_cache_ranges);
   free(listed_nodes);
   free(ordered_nodes);
   free(ordered_edges);
@@ -997,6 +1076,7 @@ CLEANUP:
   free(launch_static_kargs);
   free(launch_static_karg_sizes);
   free(launch_local_mem_sizes);
+  free(cache_ranges);
 }
 
 static cl_int pocl_formosa_read_graph_status(

@@ -20,8 +20,8 @@ struct WorkGraphNodeContext {
   uint32_t edge_count;
   uint32_t dispatch_id;
 
-  /* Reserved ABI slots; keep input_record_head at offset 52. */
-  uint32_t reserved0;
+  /* Physical input-record stride; keep input_record_head at offset 52. */
+  uint32_t input_record_stride;
   uint32_t input_record_head;
   uint32_t work_items_per_input_record;
   uint32_t reserved1;
@@ -35,8 +35,8 @@ _Static_assert(offsetof(struct WorkGraphNodeContext, graph_runtime) == 24,
                "WorkGraphNodeContext.graph_runtime offset mismatch");
 _Static_assert(offsetof(struct WorkGraphNodeContext, edge_table) == 32,
                "WorkGraphNodeContext.edge_table offset mismatch");
-_Static_assert(offsetof(struct WorkGraphNodeContext, reserved0) == 48,
-               "WorkGraphNodeContext.reserved0 offset mismatch");
+_Static_assert(offsetof(struct WorkGraphNodeContext, input_record_stride) == 48,
+               "WorkGraphNodeContext.input_record_stride offset mismatch");
 _Static_assert(offsetof(struct WorkGraphNodeContext, input_record_head) == 52,
                "WorkGraphNodeContext.input_record_head offset mismatch");
 _Static_assert(
