@@ -97,3 +97,6 @@ CMakeUserPresets.json
 # nix generated files
 outputs/*
 result
+
+# direnv
+.direnv/
