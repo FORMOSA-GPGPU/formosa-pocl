@@ -1,7 +1,7 @@
 #include "formosa-util.h"
 
+#include <elf.h>
 #include <inttypes.h>
-#include <linux/elf.h>
 #include <unistd.h>
 
 #include <iostream>

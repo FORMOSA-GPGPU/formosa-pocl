@@ -51,6 +51,8 @@ extern CL_API_ENTRY
     cl_int CL_API_CALL POname(clRetainWorkGraphFORMOSA)(cl_work_graph_formosa);
 extern CL_API_ENTRY
     cl_int CL_API_CALL POname(clReleaseWorkGraphFORMOSA)(cl_work_graph_formosa);
+extern CL_API_ENTRY cl_int CL_API_CALL
+    POname(clSetKernelStackRemapFORMOSA)(cl_kernel, cl_bool);
 
 CL_API_ENTRY void * CL_API_CALL
 POname (clGetExtensionFunctionAddressForPlatform) (cl_platform_id  platform,
@@ -270,6 +272,8 @@ CL_API_SUFFIX__VERSION_1_2
     return (void *)&POname(clRetainWorkGraphFORMOSA);
   if (strcmp(func_name, "clReleaseWorkGraphFORMOSA") == 0)
     return (void *)&POname(clReleaseWorkGraphFORMOSA);
+  if (strcmp(func_name, "clSetKernelStackRemapFORMOSA") == 0)
+    return (void *)&POname(clSetKernelStackRemapFORMOSA);
 
   POCL_MSG_ERR ("unknown platform extension requested: %s\n", func_name);
   return NULL;

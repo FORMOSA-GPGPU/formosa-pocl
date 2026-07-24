@@ -1,0 +1,31 @@
+#include "CL/cl_formosa_stack_remap.h"
+#include "pocl_cl.h"
+#include "pocl_util.h"
+
+static cl_int pocl_set_kernel_stack_remap(cl_kernel kernel, cl_bool designate) {
+  cl_bool supported = CL_FALSE;
+
+  for (cl_uint i = 0; i < kernel->program->num_devices; ++i) {
+    cl_device_id device = pocl_real_dev(kernel->program->devices[i]);
+    if (device == NULL || device->ops == NULL ||
+        device->ops->set_kernel_stack_remap_formosa == NULL)
+      continue;
+
+    supported = CL_TRUE;
+    cl_int err = device->ops->set_kernel_stack_remap_formosa(device, i, kernel,
+                                                             designate);
+    if (err != CL_SUCCESS) return err;
+  }
+
+  return supported ? CL_SUCCESS : CL_INVALID_OPERATION;
+}
+
+CL_API_ENTRY cl_int CL_API_CALL
+POname(clSetKernelStackRemapFORMOSA)(cl_kernel kernel, cl_bool designate) {
+  POCL_RETURN_ERROR_COND((!IS_CL_OBJECT_VALID(kernel)), CL_INVALID_KERNEL);
+  POCL_RETURN_ERROR_ON((designate != CL_FALSE && designate != CL_TRUE),
+                       CL_INVALID_VALUE,
+                       "designate must be CL_FALSE or CL_TRUE\n");
+  return pocl_set_kernel_stack_remap(kernel, designate);
+}
+POsym(clSetKernelStackRemapFORMOSA)

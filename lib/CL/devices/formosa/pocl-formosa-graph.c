@@ -769,6 +769,8 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
 
     nd->node_id = node->node_id;
     nd->flags = node->properties.flags;
+    if (pocl_formosa_kernel_stack_remap_enabled(node->kernel, device))
+      nd->flags |= FORMOSA_NODE_FLAG_STACK_REMAP;
     nd->launch_mode = node->properties.launch_mode;
     nd->input_record_size = node->properties.input_record_size;
     nd->max_input_records_per_dispatch =

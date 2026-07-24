@@ -39,6 +39,7 @@ if(INSTALL_OPENCL_HEADERS)
                 cl_ext_pocl.h
                 cl_formosa_work_graph.h
                 cl_formosa_work_graph_device.h
+                cl_formosa_stack_remap.h
                 cl_gl.h
                 cl_gl_ext.h
                 cl_half.h
