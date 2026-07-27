@@ -65,7 +65,7 @@ message(STATUS "FORMOSA_PLATFORM: ${FORMOSA_PLATFORM}")
 
 if(CMAKE_BUILD_TYPE STREQUAL Release)
   find_package(Formosa REQUIRED)
-  target_link_libraries(pocl-devices-formosa PUBLIC Formosa::formosa-hal.${FORMOSA_PLATFORM})
+  set(FORMOSA_HAL_TARGET Formosa::formosa-hal.${FORMOSA_PLATFORM})
 else()
   if(NOT FORMOSA_SOURCE_DIR)
     message(FATAL_ERROR "FORMOSA_SOURCE_DIR is not set.\nUse -D FORMOSA_SOURCE_DIR=/absolute/path/to/formosa to define the path.")
@@ -78,8 +78,11 @@ else()
                              "${FORMOSA_SOURCE_DIR}/hal/include"
                              "${FORMOSA_SOURCE_DIR}/fw")
 
-  target_link_libraries(pocl-devices-formosa PUBLIC formosa-hal.${FORMOSA_PLATFORM})
+  set(FORMOSA_HAL_TARGET formosa-hal.${FORMOSA_PLATFORM})
 endif()
+
+target_link_libraries(pocl-devices-formosa PUBLIC ${FORMOSA_HAL_TARGET})
+set(FORMOSA_LIBS ${FORMOSA_HAL_TARGET} PARENT_SCOPE)
 
 target_include_directories(pocl-devices-formosa PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../llvmopencl)
 target_compile_options(pocl-devices-formosa PRIVATE -I${LLVM_INCLUDE_DIRS})

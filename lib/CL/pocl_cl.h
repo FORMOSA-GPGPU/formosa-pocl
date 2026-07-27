@@ -1054,6 +1054,12 @@ struct pocl_device_ops {
                                       size_t param_value_size,
                                       const void *param_value);
 
+  /****** cl_formosa_stack_remap extension APIs (optional). */
+  cl_int (*set_kernel_stack_remap_formosa) (cl_device_id dev,
+                                            unsigned program_device_i,
+                                            cl_kernel kernel,
+                                            cl_bool designate);
+
   /** Optional: Returns synchronized Device & Host timestamps. */
   cl_int (*get_synchronized_timestamps) (cl_device_id dev,
                                          cl_ulong *dev_timestamp,

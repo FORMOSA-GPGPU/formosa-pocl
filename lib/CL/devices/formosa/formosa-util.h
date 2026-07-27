@@ -22,6 +22,10 @@ typedef struct {
 } formosa_kernel_data_t;
 
 typedef struct {
+  cl_bool stack_remap;
+} formosa_kernel_instance_data_t;
+
+typedef struct {
   uint64_t buf_address;
   uint64_t buf_size;
   uint64_t msg_id;

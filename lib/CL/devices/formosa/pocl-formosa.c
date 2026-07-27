@@ -73,6 +73,7 @@ void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
   ops->get_mapping_ptr = pocl_driver_get_mapping_ptr;
   ops->free_mapping_ptr = pocl_driver_free_mapping_ptr;
 
+  ops->set_kernel_stack_remap_formosa = pocl_formosa_set_kernel_stack_remap;
   ops->work_graph_formosa_ops = &pocl_formosa_work_graph_formosa_ops;
 }
 
@@ -502,11 +503,14 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
 
   // launch kernel execution
   uintptr_t completion_signal = 0;
+  uint16_t dispatch_flags = pc->work_dim | FSA_KERNEL_DISPATCH_HAS_PRINTF_META;
+  if (pocl_formosa_kernel_stack_remap_enabled(kernel, cmd->device))
+    dispatch_flags |= FSA_KERNEL_DISPATCH_STACK_REMAP;
   err = fsa_cmd_start_kernel(
-      pc->work_dim | FSA_KERNEL_DISPATCH_HAS_PRINTF_META, pc->local_size,
-      pc->num_groups, pc->global_offset, local_mem_size, entry_pc,
-      (uintptr_t)device_args_buffer_addr, (uintptr_t)trampoline_pc,
-      (uintptr_t)device_kernel_status_addr, &completion_signal);
+      dispatch_flags, pc->local_size, pc->num_groups, pc->global_offset,
+      local_mem_size, entry_pc, (uintptr_t)device_args_buffer_addr,
+      (uintptr_t)trampoline_pc, (uintptr_t)device_kernel_status_addr,
+      &completion_signal);
 
   if (err != 0) {
     POCL_MSG_ERR("pocl_formosa_run: kernel launch failed\n");
@@ -663,6 +667,16 @@ cl_int pocl_formosa_create_kernel(cl_device_id device, cl_program program,
                                   cl_kernel kernel, unsigned program_device_i) {
   pocl_kernel_metadata_t *meta = kernel->meta;
   assert(meta->data != NULL);
+  assert(kernel->data != NULL);
+  assert(kernel->data[program_device_i] == NULL);
+
+  formosa_kernel_instance_data_t *instance_data =
+      (formosa_kernel_instance_data_t *)calloc(1, sizeof(*instance_data));
+  if (instance_data == NULL) return CL_OUT_OF_HOST_MEMORY;
+  /* LSAR is enabled by default; CL_FALSE can opt this kernel out. */
+  instance_data->stack_remap = CL_TRUE;
+  kernel->data[program_device_i] = instance_data;
+
   // device-specific kernel metadata
   formosa_kernel_data_t *kdata =
       (formosa_kernel_data_t *)meta->data[program_device_i];
@@ -688,6 +702,10 @@ cl_int pocl_formosa_create_kernel(cl_device_id device, cl_program program,
   }
   assert(found);
   kdata = (void *)calloc(1, sizeof(formosa_kernel_data_t));
+  if (kdata == NULL) {
+    POCL_MEM_FREE(kernel->data[program_device_i]);
+    return CL_OUT_OF_HOST_MEMORY;
+  }
   kdata->kernel_id = i;
   ++kdata->ref_count;
 
@@ -700,6 +718,9 @@ cl_int pocl_formosa_free_kernel(cl_device_id device, cl_program program,
                                 cl_kernel kernel, unsigned program_device_i) {
   pocl_kernel_metadata_t *meta = kernel->meta;
   assert(meta->data != NULL);
+
+  if (kernel->data != NULL) POCL_MEM_FREE(kernel->data[program_device_i]);
+
   formosa_kernel_data_t *kdata =
       (formosa_kernel_data_t *)meta->data[program_device_i];
   if (kdata == NULL) return CL_SUCCESS;
@@ -711,6 +732,40 @@ cl_int pocl_formosa_free_kernel(cl_device_id device, cl_program program,
   }
 
   return CL_SUCCESS;
+}
+
+cl_int pocl_formosa_set_kernel_stack_remap(cl_device_id device,
+                                           unsigned program_device_i,
+                                           cl_kernel kernel,
+                                           cl_bool designate) {
+  if (device == NULL || kernel == NULL || kernel->program == NULL ||
+      kernel->data == NULL ||
+      program_device_i >= kernel->program->num_devices ||
+      pocl_real_dev(kernel->program->devices[program_device_i]) != device ||
+      kernel->data[program_device_i] == NULL)
+    return CL_INVALID_KERNEL;
+
+  formosa_kernel_instance_data_t *instance_data =
+      (formosa_kernel_instance_data_t *)kernel->data[program_device_i];
+  instance_data->stack_remap = designate;
+  return CL_SUCCESS;
+}
+
+cl_bool pocl_formosa_kernel_stack_remap_enabled(cl_kernel kernel,
+                                                cl_device_id device) {
+  if (kernel == NULL || kernel->program == NULL || kernel->data == NULL ||
+      device == NULL)
+    return CL_FALSE;
+
+  cl_device_id realdev = pocl_real_dev(device);
+  for (cl_uint i = 0; i < kernel->program->num_devices; ++i) {
+    if (pocl_real_dev(kernel->program->devices[i]) != realdev) continue;
+
+    formosa_kernel_instance_data_t *instance_data =
+        (formosa_kernel_instance_data_t *)kernel->data[i];
+    return instance_data != NULL && instance_data->stack_remap;
+  }
+  return CL_FALSE;
 }
 
 /**************************
