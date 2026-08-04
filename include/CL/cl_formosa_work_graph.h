@@ -50,6 +50,7 @@ typedef cl_bitfield cl_work_graph_node_flags_formosa;
 
 #define CL_NODE_ROOT_CAPABLE_FORMOSA (1ull << 0)
 #define CL_NODE_ALLOW_EMIT_FORMOSA (1ull << 1)
+#define CL_NODE_GLOBAL_MEM_SYNC_PRE_EXEC_FORMOSA (1ull << 2)
 
 /*
  * Node launch modes.

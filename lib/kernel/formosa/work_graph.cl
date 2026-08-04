@@ -18,6 +18,7 @@
 #define FORMOSA_WG_ERR_QUEUE_OVERFLOW -15
 #define FORMOSA_WG_ERR_BAD_READY_SEQUENCE -16
 #define FORMOSA_WG_ERR_RECORD_OUT_OF_RANGE -17
+#define FORMOSA_WORK_GRAPH_ABI_VERSION 2
 
 struct EdgeDescriptor {
   uint32_t edge_id;
@@ -38,11 +39,16 @@ struct NodeInputQueue {
 
   uint32_t capacity;
   uint32_t record_size;
-  uint32_t reserved0;
+  uint32_t record_stride;
 
   uint64_t records_addr;
   uint64_t ready_sequence_addr;
 };
+
+_Static_assert(sizeof(struct NodeInputQueue) == 48,
+               "NodeInputQueue size mismatch");
+_Static_assert(offsetof(struct NodeInputQueue, record_stride) == 28,
+               "NodeInputQueue.record_stride offset mismatch");
 
 struct GraphDescriptor {
   uint32_t version;
@@ -73,7 +79,17 @@ struct GraphRuntimePool {
   uint64_t node_state_addr;
   uint32_t node_state_stride;
   uint32_t node_state_count;
+  uint32_t cache_range_count;
+
+  uint64_t cache_range_addr;
 };
+
+_Static_assert(sizeof(struct GraphRuntimePool) == 88,
+               "GraphRuntimePool size mismatch");
+_Static_assert(offsetof(struct GraphRuntimePool, cache_range_count) == 72,
+               "GraphRuntimePool.cache_range_count offset mismatch");
+_Static_assert(offsetof(struct GraphRuntimePool, cache_range_addr) == 80,
+               "GraphRuntimePool.cache_range_addr offset mismatch");
 
 struct NodeDescriptor {
   uint32_t node_id;
@@ -102,6 +118,16 @@ struct NodeDescriptor {
 static inline void formosa_wg_publish_ready(volatile __global uint *ready_slot,
                                             uint value) {
   *ready_slot = value;
+}
+
+static inline uint formosa_wg_reserve_ticket(volatile __global uint *tail) {
+  uint old;
+  uint one = 1;
+  __asm__ volatile("amoadd.w.aqrl %0, %2, (%1)"
+                   : "=r"(old)
+                   : "r"(tail), "r"(one)
+                   : "memory");
+  return old;
 }
 
 uint formosa_get_record_count(void) {
@@ -147,7 +173,11 @@ int formosa_get_record(uint index, __private void *record_out,
   if (record_size != (size_t)ctx->input_record_size)
     return FORMOSA_WG_ERR_RECORD_SIZE_MISMATCH;
 
-  size_t stride = (size_t)ctx->input_record_size;
+  size_t stride = ctx->input_record_stride != 0
+                      ? (size_t)ctx->input_record_stride
+                      : (size_t)ctx->input_record_size;
+  if (stride < record_size)
+    return FORMOSA_WG_ERR_RECORD_SIZE_MISMATCH;
   __global uchar *src = (__global uchar *)(uintptr_t)ctx->input_records +
                         ((size_t)index * stride);
   __private uchar *dst = (__private uchar *)record_out;
@@ -193,7 +223,8 @@ int formosa_emit(uint edge_id, const __private void *record) {
 
   __global struct GraphDescriptor *graph =
       (__global struct GraphDescriptor *)(uintptr_t)pool->graph_desc_addr;
-  if (graph == NULL || graph->node_count == 0 || graph->node_desc_addr == 0) {
+  if (graph == NULL || graph->version != FORMOSA_WORK_GRAPH_ABI_VERSION ||
+      graph->node_count == 0 || graph->node_desc_addr == 0) {
     return FORMOSA_WG_ERR_BAD_GRAPH_DESC;
   }
 
@@ -259,20 +290,25 @@ int formosa_emit(uint edge_id, const __private void *record) {
      range visible to later consumer kernels. */
   volatile __global uint *reserve_tail =
       (volatile __global uint *)&queue->reserve_tail;
-  uint ticket = atomic_inc(reserve_tail);
+  uint ticket = formosa_wg_reserve_ticket(reserve_tail);
   uint slot = ticket % queue->capacity;
+  uint record_stride =
+      queue->record_stride != 0 ? queue->record_stride : record_size;
+  if (record_stride < record_size)
+    return FORMOSA_WG_ERR_RECORD_SIZE_MISMATCH;
   __global uchar *dst = (__global uchar *)(uintptr_t)queue->records_addr +
-                        ((size_t)slot * record_size);
+                        ((size_t)slot * record_stride);
   const __private uchar *src = (const __private uchar *)record;
   if ((((uintptr_t)dst | (uintptr_t)src | record_size) & 3u) == 0) {
-    __global uint *dst_words = (__global uint *)dst;
+    volatile __global uint *dst_words = (volatile __global uint *)dst;
     const __private uint *src_words = (const __private uint *)src;
     for (uint i = 0; i < record_size / sizeof(uint); i++) {
       dst_words[i] = src_words[i];
     }
   } else {
+    volatile __global uchar *volatile_dst = (volatile __global uchar *)dst;
     for (uint i = 0; i < record_size; i++) {
-      dst[i] = src[i];
+      volatile_dst[i] = src[i];
     }
   }
 
@@ -283,6 +319,5 @@ int formosa_emit(uint edge_id, const __private void *record) {
      is still active. WorkGraph record payload rings are also non-cacheable, so
      firmware can advance ready_tail without flushing payload ranges. */
   formosa_wg_publish_ready(&ready_sequence[slot], ticket + 1);
-
   return FORMOSA_WG_SUCCESS;
 }
