@@ -331,9 +331,10 @@ static cl_int pocl_formosa_pack_kernel_args(
         uint32_t range_node_id = FORMOSA_GRAPH_CACHE_RANGE_ALL_NODES;
         if ((meta->arg_info[i].type_qualifier & CL_KERNEL_ARG_TYPE_CONST) ==
             0) {
-          range_flags = FORMOSA_GRAPH_CACHE_RANGE_COMPLETION;
-        } else if ((node_flags & CL_NODE_GLOBAL_CACHE_BEFORE_FORMOSA) != 0) {
-          range_flags = FORMOSA_GRAPH_CACHE_RANGE_NODE_BEFORE;
+          range_flags |= FORMOSA_GRAPH_CACHE_RANGE_COMPLETION;
+        }
+        if ((node_flags & CL_NODE_GLOBAL_MEM_SYNC_PRE_EXEC_FORMOSA) != 0) {
+          range_flags |= FORMOSA_GRAPH_CACHE_RANGE_NODE_BEFORE;
           range_node_id = node_id;
         }
         if (range_flags != 0) {
