@@ -204,6 +204,14 @@ void pocl_formosa_copy(void *data, pocl_mem_identifier *dst_mem_id,
 static cl_bool formosa_available = CL_TRUE;
 static char *formosa_build_hash = "formosa-riscv64-unknown-unknwon-elf";
 
+static cl_int formosa_hal_error(cl_int fallback) {
+  if (!fsa_hal_is_available()) {
+    formosa_available = CL_FALSE;
+    return CL_DEVICE_NOT_AVAILABLE;
+  }
+  return fallback;
+}
+
 unsigned int pocl_formosa_probe(struct pocl_device_ops *ops) {
   int err = fsa_probe();
   if (err != 0) {
@@ -502,7 +510,7 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
                         &zero_printf_position, sizeof(zero_printf_position));
   if (err != 0) {
     POCL_MSG_ERR("pocl_formosa_run: device printf position reset failed\n");
-    errcode = CL_OUT_OF_RESOURCES;
+    errcode = formosa_hal_error(CL_OUT_OF_RESOURCES);
     goto FAIL;
   }
 
@@ -586,7 +594,7 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
                         kargs_buffer_size);
   if (err != 0) {
     POCL_MSG_ERR("pocl_formosa_run: kernel argument copy to device failed\n");
-    errcode = CL_OUT_OF_RESOURCES;
+    errcode = formosa_hal_error(CL_OUT_OF_RESOURCES);
     goto FAIL;
   }
 
@@ -610,7 +618,7 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
       err = pocl_fsa_upload_kernel(sz_program_fsabin, &kernel_dev_addr);
       if (err != 0) {
         POCL_MSG_ERR("pocl_formosa_run: kernel upload failed\n");
-        errcode = CL_OUT_OF_RESOURCES;
+        errcode = formosa_hal_error(CL_OUT_OF_RESOURCES);
         goto FAIL;
       }
       device_kernel_addr = (void *)(uintptr_t)kernel_dev_addr;
@@ -660,7 +668,7 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
 
   if (err != 0) {
     POCL_MSG_ERR("pocl_formosa_run: kernel launch failed\n");
-    errcode = CL_OUT_OF_RESOURCES;
+    errcode = formosa_hal_error(CL_OUT_OF_RESOURCES);
     goto FAIL;
   }
 
@@ -679,7 +687,7 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
   if (err != 0) {
     POCL_MSG_ERR(
         "pocl_formosa_run: reading printf position from device failed\n");
-    errcode = CL_OUT_OF_RESOURCES;
+    errcode = formosa_hal_error(CL_OUT_OF_RESOURCES);
     goto FAIL;
   }
   if (printf_position > cmd->device->printf_buffer_size) {
@@ -700,7 +708,7 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
     if (err != 0) {
       POCL_MSG_ERR(
           "pocl_formosa_run: reading printf buffer from device failed\n");
-      errcode = CL_OUT_OF_RESOURCES;
+      errcode = formosa_hal_error(CL_OUT_OF_RESOURCES);
       goto FAIL;
     }
     pocl_write_printf_buffer(host_printf_buffer, printf_position);
@@ -1225,6 +1233,7 @@ static void *formosa_copy_completion_thread(void *arg) {
         dd->copy_pending = candidate->next;
         if (dd->copy_pending == NULL) dd->copy_pending_tail = NULL;
         finished = candidate;
+        if (poll_status == -2) formosa_available = CL_FALSE;
       }
     }
     POCL_UNLOCK(dd->copy_lock);

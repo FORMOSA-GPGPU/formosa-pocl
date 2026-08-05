@@ -73,9 +73,11 @@ cl_int formosa_memory_submit_copy(MemoryDomain src_domain, uint64_t src_addr,
   if (completion == nullptr) return CL_INVALID_VALUE;
   *completion = (FsaMemoryCopyCompletion){};
   if (size == 0) return CL_SUCCESS;
+  if (!fsa_hal_is_available()) return CL_DEVICE_NOT_AVAILABLE;
   if (fsa_cmd_memory_copy(src_domain, src_addr, dst_domain, dst_addr, size,
                           completion) != 0) {
-    return CL_OUT_OF_RESOURCES;
+    return fsa_hal_is_available() ? CL_OUT_OF_RESOURCES
+                                  : CL_DEVICE_NOT_AVAILABLE;
   }
   return CL_SUCCESS;
 }
