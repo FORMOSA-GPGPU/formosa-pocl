@@ -7,7 +7,7 @@
 #include "formosa-hal/formosa-hal.h"
 #include "formosa-llvm-util.h"
 #include "formosa-util.h"
-#include "pocl-formosa.h"
+#include "pocl-formosa-internal.h"
 #include "pocl_cl.h"
 #include "pocl_util.h"
 
@@ -791,7 +791,7 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
     pocl_fsa_get_elf_name(node->kernel->program, 0, sz_program_fsabin);
 
     uint64_t dev_kernel_addr = 0;
-    if (pocl_fsa_upload_kernel(sz_program_fsabin, dd, &dev_kernel_addr) != 0) {
+    if (pocl_fsa_upload_kernel(sz_program_fsabin, &dev_kernel_addr) != 0) {
       POCL_MSG_ERR("formosa: failed to upload kernel for graph node %u\n",
                    node->node_id);
       goto CLEANUP;
@@ -1052,7 +1052,7 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
 
   /* Wait synchronously for graph completion. */
   if (launch_rc == 0) {
-    pocl_fsa_wait_ack(dd, completion_signal, 0);
+    pocl_fsa_wait_ack(completion_signal, 0);
   } else {
     POCL_MSG_ERR("formosa: graph launch failed\n");
   }

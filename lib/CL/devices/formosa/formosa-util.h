@@ -1,8 +1,9 @@
 #ifndef FORMOSA_UTIL_H
 #define FORMOSA_UTIL_H
 
+#include <formosa-hal/formosa-hal.h>
+
 #include "pocl.h"
-#include "pocl_threads.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -11,75 +12,14 @@ extern "C" {
 #include <stddef.h>
 #include <stdint.h>
 
-typedef struct {
-  int num_kernels;
-  char *kernel_names;
-} formosa_program_data_t;
-
-typedef struct {
-  size_t ref_count;
-  int kernel_id;
-} formosa_kernel_data_t;
-
-typedef struct {
-  cl_bool stack_remap;
-} formosa_kernel_instance_data_t;
-
-typedef struct {
-  uint64_t buf_address;
-  uint64_t buf_size;
-  uint64_t msg_id;
-} formosa_buffer_data_t;
-
-typedef struct {
-  uint64_t printf_buffer;
-  uint64_t printf_buffer_position;
-  uint32_t printf_buffer_capacity;
-  uint32_t reserved;
-} formosa_printf_launch_meta_t;
-
-// device specific data
-typedef struct {
-  /* List of commands ready to be executed */
-  _cl_command_node *ready_list;
-
-  /* List of commands not yet ready to be executed */
-  _cl_command_node *command_list;
-
-  /* Lock for command list related operations */
-  pocl_lock_t cq_lock;
-
-  /* Lock for compile operations */
-  pocl_lock_t compile_lock;
-
-  /* The number of contexts that are currently using this device */
-  size_t context_ref_count;
-
-  /* The kernel data buffer */
-  formosa_buffer_data_t *kernel_buffer;
-
-  /* Message ID */
-  uint64_t msg_id;
-} pocl_formosa_data_t;
-
-typedef struct _pocl_basic_usm_allocation_t {
-  void *ptr;
-  size_t size;
-  cl_mem_alloc_flags_intel flags;
-  unsigned alloc_type;
-
-  struct _pocl_basic_usm_allocation_t *next, *prev;
-} pocl_formosa_usm_allocation_t;
-
 int pocl_fsa_check_occupancy(uint32_t group_size, uint64_t local_mem_per_group,
                              uint64_t *max_local_mem);
 
 int pocl_fsa_get_elf_name(cl_program program, cl_uint device_i, char *elf_name);
 
-int pocl_fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
-                           uint64_t *kernel_dev_addr);
+int pocl_fsa_upload_kernel(const char *elf_file, uint64_t *kernel_dev_addr);
 
-int pocl_fsa_wait_ack(pocl_formosa_data_t *dd, uintptr_t completion_signal,
+int pocl_fsa_wait_ack(uintptr_t completion_signal,
                       uintptr_t device_kernel_status_addr);
 
 int pocl_fsa_compile_program(char **kernel_names, int *num_kernels,

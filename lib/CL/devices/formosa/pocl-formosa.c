@@ -1,5 +1,3 @@
-#include "pocl-formosa.h"
-
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,8 +9,10 @@
 #include "config.h"
 #include "formosa-hal/formosa-hal.h"
 #include "formosa-llvm-util.h"
+#include "formosa-memory.h"
 #include "formosa-util.h"
 #include "pocl-formosa-graph.h"
+#include "pocl-formosa-internal.h"
 #include "pocl_llvm.h"
 #include "pocl_util.h"
 #include "spirv_queries.h"
@@ -27,6 +27,33 @@ static struct pocl_work_graph_formosa_ops pocl_formosa_work_graph_formosa_ops =
      .create_edge = pocl_formosa_create_work_graph_edge,
      .get_info = pocl_formosa_get_work_graph_info,
      .free_graph = pocl_formosa_free_work_graph};
+
+static cl_int formosa_copy_buf(void *data, pocl_mem_identifier *dst_mem_id,
+                               cl_mem dst_buf, pocl_mem_identifier *src_mem_id,
+                               cl_mem src_buf, size_t dst_offset,
+                               size_t src_offset, size_t size);
+cl_int pocl_formosa_alloc_subbuffer(cl_device_id device, cl_mem sub_buf);
+void pocl_formosa_free_subbuffer(cl_device_id device, cl_mem sub_buf);
+static void *formosa_copy_completion_thread(void *arg);
+static cl_int formosa_submit_read_buf(void *data, void *__restrict__ host_ptr,
+                                      pocl_mem_identifier *src_mem_id,
+                                      cl_mem src_buf, size_t offset,
+                                      size_t size,
+                                      FsaMemoryCopyCompletion *completion);
+static cl_int formosa_submit_write_buf(void *data,
+                                       const void *__restrict__ host_ptr,
+                                       pocl_mem_identifier *dst_mem_id,
+                                       cl_mem dst_buf, size_t offset,
+                                       size_t size,
+                                       FsaMemoryCopyCompletion *completion);
+static cl_int formosa_submit_copy_buf(
+    void *data, pocl_mem_identifier *dst_mem_id, cl_mem dst_buf,
+    pocl_mem_identifier *src_mem_id, cl_mem src_buf, size_t dst_offset,
+    size_t src_offset, size_t size, FsaMemoryCopyCompletion *completion);
+
+static cl_int formosa_validate_host_pointer(const void *host_ptr, size_t size) {
+  return host_ptr == NULL && size != 0 ? CL_INVALID_VALUE : CL_SUCCESS;
+}
 
 void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
   ops->device_name = "formosa";
@@ -44,6 +71,8 @@ void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
 
   ops->alloc_mem_obj = pocl_formosa_alloc_mem_obj;
   ops->free = pocl_formosa_free;
+  ops->alloc_subbuffer = pocl_formosa_alloc_subbuffer;
+  ops->free_subbuffer = pocl_formosa_free_subbuffer;
 
   ops->init_build = pocl_formosa_init_build;
   ops->build_source = pocl_driver_build_source;
@@ -68,13 +97,104 @@ void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
 
   ops->read = pocl_formosa_read;
   ops->write = pocl_formosa_write;
-  ops->copy = pocl_driver_copy;
+  ops->copy = pocl_formosa_copy;
 
   ops->get_mapping_ptr = pocl_driver_get_mapping_ptr;
   ops->free_mapping_ptr = pocl_driver_free_mapping_ptr;
 
   ops->set_kernel_stack_remap_formosa = pocl_formosa_set_kernel_stack_remap;
   ops->work_graph_formosa_ops = &pocl_formosa_work_graph_formosa_ops;
+}
+
+/*
+ * Formosa stores an opaque host-side formosa_buffer_data_t in mem_ptr.  The
+ * actual buffer payload lives in device memory at buf_address, so the generic
+ * pocl_driver_copy() (which memcpy()s mem_ptr) cannot be used here.
+ *
+ * The unified HAL command is submitted through the firmware command stream.
+ * The scheduler uses the submit_* variants below so completion is reported
+ * by the event adapter rather than by this low-level callback.
+ */
+static cl_int formosa_copy_buf(void *data, pocl_mem_identifier *dst_mem_id,
+                               cl_mem dst_buf, pocl_mem_identifier *src_mem_id,
+                               cl_mem src_buf, size_t dst_offset,
+                               size_t src_offset, size_t size) {
+  (void)data;
+  (void)dst_buf;
+  (void)src_buf;
+
+  formosa_memory_copy_addresses_t addresses = {};
+  cl_int err = formosa_memory_resolve_copy_addresses(
+      dst_mem_id, src_mem_id, dst_offset, src_offset, size, &addresses);
+  if (err != CL_SUCCESS) return err;
+
+  return formosa_memory_copy(kMemoryDomainDevice, addresses.src_addr,
+                             kMemoryDomainDevice, addresses.dst_addr, size);
+}
+
+static cl_int formosa_submit_copy_buf(
+    void *data, pocl_mem_identifier *dst_mem_id, cl_mem dst_buf,
+    pocl_mem_identifier *src_mem_id, cl_mem src_buf, size_t dst_offset,
+    size_t src_offset, size_t size, FsaMemoryCopyCompletion *completion) {
+  (void)data;
+  (void)dst_buf;
+  (void)src_buf;
+  formosa_memory_copy_addresses_t addresses = {};
+  cl_int err = formosa_memory_resolve_copy_addresses(
+      dst_mem_id, src_mem_id, dst_offset, src_offset, size, &addresses);
+  if (err != CL_SUCCESS) return err;
+  return formosa_memory_submit_copy(kMemoryDomainDevice, addresses.src_addr,
+                                    kMemoryDomainDevice, addresses.dst_addr,
+                                    size, completion);
+}
+
+static cl_int formosa_submit_read_buf(void *data, void *__restrict__ host_ptr,
+                                      pocl_mem_identifier *src_mem_id,
+                                      cl_mem src_buf, size_t offset,
+                                      size_t size,
+                                      FsaMemoryCopyCompletion *completion) {
+  (void)data;
+  (void)src_buf;
+  uint64_t device_addr = 0;
+  cl_int err = formosa_memory_resolve_buffer_address(src_mem_id, offset, size,
+                                                     &device_addr);
+  if (err != CL_SUCCESS) return err;
+  err = formosa_validate_host_pointer(host_ptr, size);
+  if (err != CL_SUCCESS) return err;
+  return formosa_memory_submit_copy(kMemoryDomainDevice, device_addr,
+                                    kMemoryDomainHost, (uintptr_t)host_ptr,
+                                    size, completion);
+}
+
+static cl_int formosa_submit_write_buf(void *data,
+                                       const void *__restrict__ host_ptr,
+                                       pocl_mem_identifier *dst_mem_id,
+                                       cl_mem dst_buf, size_t offset,
+                                       size_t size,
+                                       FsaMemoryCopyCompletion *completion) {
+  (void)data;
+  (void)dst_buf;
+  uint64_t device_addr = 0;
+  cl_int err = formosa_memory_resolve_buffer_address(dst_mem_id, offset, size,
+                                                     &device_addr);
+  if (err != CL_SUCCESS) return err;
+  err = formosa_validate_host_pointer(host_ptr, size);
+  if (err != CL_SUCCESS) return err;
+  return formosa_memory_submit_copy(kMemoryDomainHost, (uintptr_t)host_ptr,
+                                    kMemoryDomainDevice, device_addr, size,
+                                    completion);
+}
+
+/* Keep the generic device-op ABI usable for callers that invoke ops->copy
+ * directly.  The Formosa scheduler uses formosa_copy_buf() so it can report
+ * the error through the command event. */
+void pocl_formosa_copy(void *data, pocl_mem_identifier *dst_mem_id,
+                       cl_mem dst_buf, pocl_mem_identifier *src_mem_id,
+                       cl_mem src_buf, size_t dst_offset, size_t src_offset,
+                       size_t size) {
+  cl_int err = formosa_copy_buf(data, dst_mem_id, dst_buf, src_mem_id, src_buf,
+                                dst_offset, src_offset, size);
+  if (err != CL_SUCCESS) POCL_MSG_ERR("pocl_formosa_copy: failed (%d)\n", err);
 }
 
 /**************************
@@ -179,6 +299,8 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
 
   POCL_INIT_LOCK(dd->compile_lock);
   POCL_INIT_LOCK(dd->cq_lock);
+  POCL_INIT_LOCK(dd->copy_lock);
+  POCL_INIT_COND(dd->copy_cond);
 
   device->data = dd;
   device->available = &formosa_available;
@@ -191,11 +313,17 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
     formosa_available = CL_FALSE;
     POCL_DESTROY_LOCK(dd->compile_lock);
     POCL_DESTROY_LOCK(dd->cq_lock);
+    POCL_DESTROY_COND(dd->copy_cond);
+    POCL_DESTROY_LOCK(dd->copy_lock);
     POCL_MEM_FREE(dd);
     device->data = NULL;
     POCL_MSG_ERR("pocl_formosa_init: HAL initialization failed (%d)\n", err);
     return CL_DEVICE_NOT_AVAILABLE;
   }
+
+  dd->copy_thread_stop = CL_FALSE;
+  dd->copy_thread_started = CL_TRUE;
+  POCL_CREATE_THREAD(dd->copy_thread, formosa_copy_completion_thread, dd);
 
   return CL_SUCCESS;
 }
@@ -204,8 +332,26 @@ cl_int pocl_formosa_uninit(unsigned j, cl_device_id device) {
   pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
   if (dd == NULL) return CL_SUCCESS;
 
+  if (dd->copy_thread_started) {
+    POCL_LOCK(dd->copy_lock);
+    dd->copy_thread_stop = CL_TRUE;
+    POCL_BROADCAST_COND(dd->copy_cond);
+    POCL_UNLOCK(dd->copy_lock);
+    POCL_JOIN_THREAD(dd->copy_thread);
+    dd->copy_thread_started = CL_FALSE;
+  }
+  while (dd->copy_pending != NULL) {
+    formosa_pending_copy_t *pending = dd->copy_pending;
+    dd->copy_pending = pending->next;
+    (void)fsa_release_memory_copy_completion(pending->completion);
+    POCL_MEM_FREE(pending);
+  }
+  dd->copy_pending_tail = NULL;
+
   POCL_DESTROY_LOCK(dd->compile_lock);
   POCL_DESTROY_LOCK(dd->cq_lock);
+  POCL_DESTROY_COND(dd->copy_cond);
+  POCL_DESTROY_LOCK(dd->copy_lock);
   if (fsa_hal_cleanup() != 0) {
     POCL_MSG_ERR("pocl_formosa_uninit: HAL cleanup failed\n");
   }
@@ -461,7 +607,7 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
     POCL_MSG_PRINT_INFO("elf path: %s\n", sz_program_fsabin);
     {
       uint64_t kernel_dev_addr = 0;
-      err = pocl_fsa_upload_kernel(sz_program_fsabin, dd, &kernel_dev_addr);
+      err = pocl_fsa_upload_kernel(sz_program_fsabin, &kernel_dev_addr);
       if (err != 0) {
         POCL_MSG_ERR("pocl_formosa_run: kernel upload failed\n");
         errcode = CL_OUT_OF_RESOURCES;
@@ -519,7 +665,7 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
   }
 
   // wait for the execution to complete
-  err = pocl_fsa_wait_ack(dd, completion_signal,
+  err = pocl_fsa_wait_ack(completion_signal,
                           (uintptr_t)device_kernel_status_addr);
   if (err != 0) {
     POCL_MSG_ERR("pocl_formosa_run: kernel execution failed\n");
@@ -825,7 +971,9 @@ cl_int pocl_formosa_alloc_mem_obj(cl_device_id device, cl_mem mem_obj,
     temp->buf_address = (uint64_t)addr;
     temp->buf_size = mem_obj->size;
     temp->msg_id = 0;
-    err = fsa_copy_to_dev((uintptr_t)addr, host_ptr, mem_obj->size);
+    err =
+        formosa_memory_copy(kMemoryDomainHost, (uintptr_t)host_ptr,
+                            kMemoryDomainDevice, (uint64_t)addr, mem_obj->size);
     if (err != 0) {
       fsa_free((void *)temp->buf_address);
       POCL_MEM_FREE(temp);
@@ -860,6 +1008,39 @@ void pocl_formosa_free(cl_device_id device, cl_mem mem_obj) {
   p->mem_ptr = NULL;
 }
 
+/* A sub-buffer aliases its parent allocation.  PoCL may pre-populate
+ * mem_ptr with parent metadata plus origin, which is not a
+ * formosa_buffer_data_t.  Materialize a small metadata object so every copy
+ * callback receives the same deep representation and no callback has to know
+ * about PoCL's internal pointer encoding. */
+cl_int pocl_formosa_alloc_subbuffer(cl_device_id device, cl_mem sub_buf) {
+  if (sub_buf == NULL || sub_buf->parent == NULL) return CL_INVALID_MEM_OBJECT;
+  pocl_mem_identifier *p = &sub_buf->device_ptrs[device->global_mem_id];
+  pocl_mem_identifier *parent_p =
+      &sub_buf->parent->device_ptrs[device->global_mem_id];
+  formosa_buffer_data_t *parent_data =
+      (formosa_buffer_data_t *)parent_p->mem_ptr;
+  if (parent_data == NULL || sub_buf->origin > parent_data->buf_size ||
+      sub_buf->size > parent_data->buf_size - sub_buf->origin)
+    return CL_INVALID_VALUE;
+
+  formosa_buffer_data_t *sub_data =
+      (formosa_buffer_data_t *)calloc(1, sizeof(*sub_data));
+  if (sub_data == NULL) return CL_OUT_OF_HOST_MEMORY;
+  sub_data->buf_address = parent_data->buf_address + sub_buf->origin;
+  sub_data->buf_size = sub_buf->size;
+  sub_data->msg_id = parent_data->msg_id;
+  p->mem_ptr = sub_data;
+  return CL_SUCCESS;
+}
+
+void pocl_formosa_free_subbuffer(cl_device_id device, cl_mem sub_buf) {
+  if (sub_buf == NULL) return;
+  pocl_mem_identifier *p = &sub_buf->device_ptrs[device->global_mem_id];
+  POCL_MEM_FREE(p->mem_ptr);
+  p->mem_ptr = NULL;
+}
+
 /**************************
  * Event Handling         *
  **************************/
@@ -867,23 +1048,18 @@ void pocl_formosa_free(cl_device_id device, cl_mem mem_obj) {
 static cl_int formosa_read_buf(void *data, void *__restrict__ host_ptr,
                                pocl_mem_identifier *src_mem_id, cl_mem src_buf,
                                size_t offset, size_t size) {
-  formosa_buffer_data_t *buffer_data =
-      (formosa_buffer_data_t *)src_mem_id->mem_ptr;
-  if (buffer_data == NULL) {
-    POCL_MSG_ERR("pocl_formosa_read: memory buffer not found\n");
-    return CL_INVALID_MEM_OBJECT;
-  }
-  if (offset + size > buffer_data->buf_size) {
-    POCL_MSG_ERR(
-        "pocl_formosa_read: out of buffer range (offset=%zu size=%zu "
-        "buf_size=%" PRIu64 ")\n",
-        offset, size, buffer_data->buf_size);
-    return CL_INVALID_VALUE;
-  }
-  if (fsa_copy_from_dev(buffer_data->buf_address + offset, host_ptr, size) !=
-      0) {
+  uint64_t device_addr = 0;
+  cl_int err = formosa_memory_resolve_buffer_address(src_mem_id, offset, size,
+                                                     &device_addr);
+  if (err != CL_SUCCESS) return err;
+  err = formosa_validate_host_pointer(host_ptr, size);
+  if (err != CL_SUCCESS) return err;
+  cl_int copy_status =
+      formosa_memory_copy(kMemoryDomainDevice, device_addr, kMemoryDomainHost,
+                          (uintptr_t)host_ptr, size);
+  if (copy_status != CL_SUCCESS) {
     POCL_MSG_ERR("pocl_formosa_read: copy from device failed\n");
-    return CL_OUT_OF_RESOURCES;
+    return copy_status;
   }
   return CL_SUCCESS;
 }
@@ -891,22 +1067,18 @@ static cl_int formosa_read_buf(void *data, void *__restrict__ host_ptr,
 static cl_int formosa_write_buf(void *data, const void *__restrict__ host_ptr,
                                 pocl_mem_identifier *dst_mem_id, cl_mem dst_buf,
                                 size_t offset, size_t size) {
-  formosa_buffer_data_t *buffer_data =
-      (formosa_buffer_data_t *)dst_mem_id->mem_ptr;
-  if (buffer_data == NULL) {
-    POCL_MSG_ERR("pocl_formosa_write: memory buffer not found\n");
-    return CL_INVALID_MEM_OBJECT;
-  }
-  if (offset + size > buffer_data->buf_size) {
-    POCL_MSG_ERR(
-        "pocl_formosa_write: out of buffer range (offset=%zu size=%zu "
-        "buf_size=%" PRIu64 ")\n",
-        offset, size, buffer_data->buf_size);
-    return CL_INVALID_VALUE;
-  }
-  if (fsa_copy_to_dev(buffer_data->buf_address + offset, host_ptr, size) != 0) {
+  uint64_t device_addr = 0;
+  cl_int err = formosa_memory_resolve_buffer_address(dst_mem_id, offset, size,
+                                                     &device_addr);
+  if (err != CL_SUCCESS) return err;
+  err = formosa_validate_host_pointer(host_ptr, size);
+  if (err != CL_SUCCESS) return err;
+  cl_int copy_status =
+      formosa_memory_copy(kMemoryDomainHost, (uintptr_t)host_ptr,
+                          kMemoryDomainDevice, device_addr, size);
+  if (copy_status != CL_SUCCESS) {
     POCL_MSG_ERR("pocl_formosa_write: copy to device failed\n");
-    return CL_OUT_OF_RESOURCES;
+    return copy_status;
   }
   return CL_SUCCESS;
 }
@@ -920,6 +1092,35 @@ static void formosa_finish_command(cl_event event, cl_int err,
     POCL_UPDATE_EVENT_FAILED_MSG(err, event, fail_msg);
   else
     POCL_UPDATE_EVENT_COMPLETE_MSG(event, ok_msg);
+}
+
+static cl_int formosa_enqueue_pending_copy(pocl_formosa_data_t *dd,
+                                           _cl_command_node *node,
+                                           FsaMemoryCopyCompletion completion) {
+  formosa_pending_copy_t *pending =
+      (formosa_pending_copy_t *)calloc(1, sizeof(*pending));
+  if (pending == NULL) {
+    /* The HAL slot is live as soon as submission succeeds.  Do not leak it
+     * when the PoCL-side event adapter cannot allocate its tracking node. */
+    (void)fsa_release_memory_copy_completion(completion);
+    return CL_OUT_OF_HOST_MEMORY;
+  }
+  pending->node = node;
+  pending->completion = completion;
+  POCL_LOCK(dd->copy_lock);
+  /* The Formosa command stream is globally in-order, so append records in
+   * submission order.  Firmware serializes the actual copy phases, while
+   * PoCL may keep submitting later commands and let the completion worker
+   * retire records independently. */
+  pending->next = NULL;
+  if (dd->copy_pending_tail != NULL)
+    dd->copy_pending_tail->next = pending;
+  else
+    dd->copy_pending = pending;
+  dd->copy_pending_tail = pending;
+  POCL_SIGNAL_COND(dd->copy_cond);
+  POCL_UNLOCK(dd->copy_lock);
+  return CL_SUCCESS;
 }
 
 static void formosa_command_scheduler(pocl_formosa_data_t *dd) {
@@ -945,25 +1146,53 @@ static void formosa_command_scheduler(pocl_formosa_data_t *dd) {
                                "Formosa NDRange Kernel");
         break;
 
-      case CL_COMMAND_READ_BUFFER:
+      case CL_COMMAND_READ_BUFFER: {
         pocl_update_event_running(event);
-        err = formosa_read_buf(
+        FsaMemoryCopyCompletion read_completion = {};
+        err = formosa_submit_read_buf(
             dd, cmd->read.dst_host_ptr,
             &POCL_MEM_BS(cmd->read.src)->device_ptrs[dev->global_mem_id],
-            cmd->read.src, cmd->read.offset, cmd->read.size);
-        formosa_finish_command(event, err, "Event Read Buffer           ",
-                               "Formosa Read Buffer");
+            cmd->read.src, cmd->read.offset, cmd->read.size, &read_completion);
+        if (err == CL_SUCCESS && cmd->read.size != 0)
+          err = formosa_enqueue_pending_copy(dd, node, read_completion);
+        if (err != CL_SUCCESS || cmd->read.size == 0)
+          formosa_finish_command(event, err, "Event Read Buffer           ",
+                                 "Formosa Read Buffer");
         break;
+      }
 
-      case CL_COMMAND_WRITE_BUFFER:
+      case CL_COMMAND_WRITE_BUFFER: {
         pocl_update_event_running(event);
-        err = formosa_write_buf(
+        FsaMemoryCopyCompletion write_completion = {};
+        err = formosa_submit_write_buf(
             dd, cmd->write.src_host_ptr,
             &POCL_MEM_BS(cmd->write.dst)->device_ptrs[dev->global_mem_id],
-            cmd->write.dst, cmd->write.offset, cmd->write.size);
-        formosa_finish_command(event, err, "Event Write Buffer          ",
-                               "Formosa Write Buffer");
+            cmd->write.dst, cmd->write.offset, cmd->write.size,
+            &write_completion);
+        if (err == CL_SUCCESS && cmd->write.size != 0)
+          err = formosa_enqueue_pending_copy(dd, node, write_completion);
+        if (err != CL_SUCCESS || cmd->write.size == 0)
+          formosa_finish_command(event, err, "Event Write Buffer          ",
+                                 "Formosa Write Buffer");
         break;
+      }
+
+      case CL_COMMAND_COPY_BUFFER: {
+        pocl_update_event_running(event);
+        FsaMemoryCopyCompletion copy_completion = {};
+        err = formosa_submit_copy_buf(
+            dd, &POCL_MEM_BS(cmd->copy.dst)->device_ptrs[dev->global_mem_id],
+            cmd->copy.dst,
+            &POCL_MEM_BS(cmd->copy.src)->device_ptrs[dev->global_mem_id],
+            cmd->copy.src, cmd->copy.dst_offset, cmd->copy.src_offset,
+            cmd->copy.size, &copy_completion);
+        if (err == CL_SUCCESS && cmd->copy.size != 0)
+          err = formosa_enqueue_pending_copy(dd, node, copy_completion);
+        if (err != CL_SUCCESS || cmd->copy.size == 0)
+          formosa_finish_command(event, err, "Event Copy Buffer           ",
+                                 "Formosa Copy Buffer");
+        break;
+      }
 
       default:
         pocl_exec_command(node);
@@ -972,6 +1201,54 @@ static void formosa_command_scheduler(pocl_formosa_data_t *dd) {
 
     POCL_LOCK(dd->cq_lock);
   }
+}
+
+static void *formosa_copy_completion_thread(void *arg) {
+  pocl_formosa_data_t *dd = (pocl_formosa_data_t *)arg;
+  while (1) {
+    formosa_pending_copy_t *finished = NULL;
+    MemoryCopyResult copy_result = kMemoryCopyResultPending;
+    int poll_status = 1;
+
+    POCL_LOCK(dd->copy_lock);
+    while (!dd->copy_thread_stop && dd->copy_pending == NULL)
+      POCL_WAIT_COND(dd->copy_cond, dd->copy_lock);
+    if (dd->copy_thread_stop) {
+      POCL_UNLOCK(dd->copy_lock);
+      break;
+    }
+
+    formosa_pending_copy_t *candidate = dd->copy_pending;
+    if (candidate != NULL) {
+      poll_status = fsa_poll_memory_copy(candidate->completion, &copy_result);
+      if (poll_status != 1) {
+        dd->copy_pending = candidate->next;
+        if (dd->copy_pending == NULL) dd->copy_pending_tail = NULL;
+        finished = candidate;
+      }
+    }
+    POCL_UNLOCK(dd->copy_lock);
+
+    if (finished != NULL) {
+      (void)fsa_release_memory_copy_completion(finished->completion);
+      cl_int event_status = poll_status == 0
+                                ? CL_SUCCESS
+                                : formosa_memory_copy_result_to_cl(copy_result);
+      if (poll_status == -1 || poll_status == -2)
+        event_status = CL_DEVICE_NOT_AVAILABLE;
+      formosa_finish_command(finished->node->sync.event.event, event_status,
+                             "Event Memory Copy            ",
+                             "Formosa Memory Copy");
+      POCL_MEM_FREE(finished);
+
+      POCL_LOCK(dd->cq_lock);
+      formosa_command_scheduler(dd);
+      POCL_UNLOCK(dd->cq_lock);
+    } else {
+      usleep(1000);
+    }
+  }
+  return NULL;
 }
 
 void pocl_formosa_submit(_cl_command_node *node, cl_command_queue cq) {
@@ -990,9 +1267,17 @@ void pocl_formosa_join(cl_device_id device, cl_command_queue cq) {
   pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
   if (dd == NULL) return;
 
-  POCL_LOCK(dd->cq_lock);
-  formosa_command_scheduler(dd);
-  POCL_UNLOCK(dd->cq_lock);
+  while (CL_TRUE) {
+    POCL_LOCK(dd->cq_lock);
+    formosa_command_scheduler(dd);
+    POCL_UNLOCK(dd->cq_lock);
+
+    POCL_LOCK_OBJ(cq);
+    const cl_bool done = cq->command_count == 0;
+    POCL_UNLOCK_OBJ(cq);
+    if (done) return;
+    usleep(1000);
+  }
 }
 
 void pocl_formosa_flush(cl_device_id device, cl_command_queue cq) {
