@@ -20,6 +20,9 @@ typedef struct {
   uint64_t dst_addr;
 } formosa_memory_copy_addresses_t;
 
+/* Propagate HAL transport failure to PoCL device availability. */
+void pocl_formosa_mark_unavailable(void);
+
 /* Resolve a PoCL memory identifier into a validated Formosa device range. */
 cl_int formosa_memory_resolve_buffer_address(const pocl_mem_identifier *mem_id,
                                              size_t offset, size_t size,

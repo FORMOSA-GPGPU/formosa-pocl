@@ -204,9 +204,11 @@ void pocl_formosa_copy(void *data, pocl_mem_identifier *dst_mem_id,
 static cl_bool formosa_available = CL_TRUE;
 static char *formosa_build_hash = "formosa-riscv64-unknown-unknwon-elf";
 
+void pocl_formosa_mark_unavailable(void) { formosa_available = CL_FALSE; }
+
 static cl_int formosa_hal_error(cl_int fallback) {
   if (!fsa_hal_is_available()) {
-    formosa_available = CL_FALSE;
+    pocl_formosa_mark_unavailable();
     return CL_DEVICE_NOT_AVAILABLE;
   }
   return fallback;
@@ -215,7 +217,7 @@ static cl_int formosa_hal_error(cl_int fallback) {
 unsigned int pocl_formosa_probe(struct pocl_device_ops *ops) {
   int err = fsa_probe();
   if (err != 0) {
-    formosa_available = CL_FALSE;
+    pocl_formosa_mark_unavailable();
     return 0;
   }
   return strncmp(ops->device_name, "formosa", 7) == 0;
@@ -985,7 +987,7 @@ cl_int pocl_formosa_alloc_mem_obj(cl_device_id device, cl_mem mem_obj,
     if (err != 0) {
       fsa_free((void *)temp->buf_address);
       POCL_MEM_FREE(temp);
-      return CL_OUT_OF_RESOURCES;
+      return err;
     }
   } else {  // READ_ONLY
     temp->buf_address = (uint64_t)addr;
@@ -1233,7 +1235,7 @@ static void *formosa_copy_completion_thread(void *arg) {
         dd->copy_pending = candidate->next;
         if (dd->copy_pending == NULL) dd->copy_pending_tail = NULL;
         finished = candidate;
-        if (poll_status == -2) formosa_available = CL_FALSE;
+        if (poll_status == -2) pocl_formosa_mark_unavailable();
       }
     }
     POCL_UNLOCK(dd->copy_lock);
