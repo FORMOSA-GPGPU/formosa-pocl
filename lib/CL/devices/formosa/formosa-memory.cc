@@ -59,7 +59,7 @@ cl_int formosa_memory_copy_result_to_cl(MemoryCopyResult result) {
     case kMemoryCopyResultInvalidRange:
     case kMemoryCopyResultInvalidDomainPair:
       return CL_INVALID_VALUE;
-    case kMemoryCopyResultDeviceReset:
+    case kMemoryCopyResultFirmwareReboot:
       return CL_DEVICE_NOT_AVAILABLE;
     default:
       return CL_OUT_OF_RESOURCES;
