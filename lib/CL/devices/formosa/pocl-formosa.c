@@ -679,7 +679,7 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
                           (uintptr_t)device_kernel_status_addr);
   if (err != 0) {
     POCL_MSG_ERR("pocl_formosa_run: kernel execution failed\n");
-    errcode = CL_FAILED;
+    errcode = formosa_hal_error(CL_FAILED);
     goto FAIL;
   }
 
@@ -1104,19 +1104,8 @@ static void formosa_finish_command(cl_event event, cl_int err,
     POCL_UPDATE_EVENT_COMPLETE_MSG(event, ok_msg);
 }
 
-static cl_int formosa_enqueue_pending_copy(pocl_formosa_data_t *dd,
-                                           _cl_command_node *node,
-                                           FsaMemoryCopyCompletion completion) {
-  formosa_pending_copy_t *pending =
-      (formosa_pending_copy_t *)calloc(1, sizeof(*pending));
-  if (pending == NULL) {
-    /* The HAL slot is live as soon as submission succeeds.  Do not leak it
-     * when the PoCL-side event adapter cannot allocate its tracking node. */
-    (void)fsa_release_memory_copy_completion(completion);
-    return CL_OUT_OF_HOST_MEMORY;
-  }
-  pending->node = node;
-  pending->completion = completion;
+static void formosa_enqueue_pending_copy(pocl_formosa_data_t *dd,
+                                         formosa_pending_copy_t *pending) {
   POCL_LOCK(dd->copy_lock);
   /* The Formosa command stream is globally in-order, so append records in
    * submission order.  Firmware serializes the actual copy phases, while
@@ -1130,7 +1119,74 @@ static cl_int formosa_enqueue_pending_copy(pocl_formosa_data_t *dd,
   dd->copy_pending_tail = pending;
   POCL_SIGNAL_COND(dd->copy_cond);
   POCL_UNLOCK(dd->copy_lock);
-  return CL_SUCCESS;
+}
+
+static void formosa_submit_memory_copy_command(pocl_formosa_data_t *dd,
+                                               _cl_command_node *node) {
+  cl_event event = node->sync.event.event;
+  cl_device_id dev = node->device;
+  _cl_command_t *cmd = &node->command;
+  size_t size = 0;
+
+  switch (node->type) {
+    case CL_COMMAND_READ_BUFFER:
+      size = cmd->read.size;
+      break;
+    case CL_COMMAND_WRITE_BUFFER:
+      size = cmd->write.size;
+      break;
+    case CL_COMMAND_COPY_BUFFER:
+      size = cmd->copy.size;
+      break;
+    default:
+      assert(0 && "not a Formosa memory-copy command");
+      return;
+  }
+
+  pocl_update_event_running(event);
+  formosa_pending_copy_t *pending =
+      size == 0 ? NULL : (formosa_pending_copy_t *)calloc(1, sizeof(*pending));
+  if (size != 0 && pending == NULL) {
+    formosa_finish_command(event, CL_OUT_OF_HOST_MEMORY, NULL,
+                           "Formosa Memory Copy");
+    return;
+  }
+
+  FsaMemoryCopyCompletion completion = {};
+  cl_int err = CL_SUCCESS;
+  switch (node->type) {
+    case CL_COMMAND_READ_BUFFER:
+      err = formosa_submit_read_buf(
+          dd, cmd->read.dst_host_ptr,
+          &POCL_MEM_BS(cmd->read.src)->device_ptrs[dev->global_mem_id],
+          cmd->read.src, cmd->read.offset, size, &completion);
+      break;
+    case CL_COMMAND_WRITE_BUFFER:
+      err = formosa_submit_write_buf(
+          dd, cmd->write.src_host_ptr,
+          &POCL_MEM_BS(cmd->write.dst)->device_ptrs[dev->global_mem_id],
+          cmd->write.dst, cmd->write.offset, size, &completion);
+      break;
+    case CL_COMMAND_COPY_BUFFER:
+      err = formosa_submit_copy_buf(
+          dd, &POCL_MEM_BS(cmd->copy.dst)->device_ptrs[dev->global_mem_id],
+          cmd->copy.dst,
+          &POCL_MEM_BS(cmd->copy.src)->device_ptrs[dev->global_mem_id],
+          cmd->copy.src, cmd->copy.dst_offset, cmd->copy.src_offset, size,
+          &completion);
+      break;
+  }
+
+  if (err == CL_SUCCESS && size != 0) {
+    pending->node = node;
+    pending->completion = completion;
+    formosa_enqueue_pending_copy(dd, pending);
+    return;
+  }
+
+  free(pending);
+  formosa_finish_command(event, err, "Event Memory Copy            ",
+                         "Formosa Memory Copy");
 }
 
 static void formosa_command_scheduler(pocl_formosa_data_t *dd) {
@@ -1144,8 +1200,6 @@ static void formosa_command_scheduler(pocl_formosa_data_t *dd) {
     POCL_UNLOCK(dd->cq_lock);
 
     cl_event event = node->sync.event.event;
-    cl_device_id dev = node->device;
-    _cl_command_t *cmd = &node->command;
     cl_int err = CL_SUCCESS;
 
     switch (node->type) {
@@ -1156,53 +1210,29 @@ static void formosa_command_scheduler(pocl_formosa_data_t *dd) {
                                "Formosa NDRange Kernel");
         break;
 
-      case CL_COMMAND_READ_BUFFER: {
-        pocl_update_event_running(event);
-        FsaMemoryCopyCompletion read_completion = {};
-        err = formosa_submit_read_buf(
-            dd, cmd->read.dst_host_ptr,
-            &POCL_MEM_BS(cmd->read.src)->device_ptrs[dev->global_mem_id],
-            cmd->read.src, cmd->read.offset, cmd->read.size, &read_completion);
-        if (err == CL_SUCCESS && cmd->read.size != 0)
-          err = formosa_enqueue_pending_copy(dd, node, read_completion);
-        if (err != CL_SUCCESS || cmd->read.size == 0)
-          formosa_finish_command(event, err, "Event Read Buffer           ",
-                                 "Formosa Read Buffer");
+      case CL_COMMAND_READ_BUFFER:
+      case CL_COMMAND_WRITE_BUFFER:
+      case CL_COMMAND_COPY_BUFFER:
+        formosa_submit_memory_copy_command(dd, node);
         break;
-      }
 
-      case CL_COMMAND_WRITE_BUFFER: {
+      case CL_COMMAND_READ_BUFFER_RECT:
+      case CL_COMMAND_WRITE_BUFFER_RECT:
+      case CL_COMMAND_COPY_BUFFER_RECT:
+        /* ponytail: rectangular copies need grouped completions before they
+         * can use the 1D firmware packet. */
         pocl_update_event_running(event);
-        FsaMemoryCopyCompletion write_completion = {};
-        err = formosa_submit_write_buf(
-            dd, cmd->write.src_host_ptr,
-            &POCL_MEM_BS(cmd->write.dst)->device_ptrs[dev->global_mem_id],
-            cmd->write.dst, cmd->write.offset, cmd->write.size,
-            &write_completion);
-        if (err == CL_SUCCESS && cmd->write.size != 0)
-          err = formosa_enqueue_pending_copy(dd, node, write_completion);
-        if (err != CL_SUCCESS || cmd->write.size == 0)
-          formosa_finish_command(event, err, "Event Write Buffer          ",
-                                 "Formosa Write Buffer");
+        formosa_finish_command(event, CL_INVALID_OPERATION, NULL,
+                               "Formosa rectangular buffer transfer");
         break;
-      }
 
-      case CL_COMMAND_COPY_BUFFER: {
+      case CL_COMMAND_GRAPH_LAUNCH_FORMOSA:
         pocl_update_event_running(event);
-        FsaMemoryCopyCompletion copy_completion = {};
-        err = formosa_submit_copy_buf(
-            dd, &POCL_MEM_BS(cmd->copy.dst)->device_ptrs[dev->global_mem_id],
-            cmd->copy.dst,
-            &POCL_MEM_BS(cmd->copy.src)->device_ptrs[dev->global_mem_id],
-            cmd->copy.src, cmd->copy.dst_offset, cmd->copy.src_offset,
-            cmd->copy.size, &copy_completion);
-        if (err == CL_SUCCESS && cmd->copy.size != 0)
-          err = formosa_enqueue_pending_copy(dd, node, copy_completion);
-        if (err != CL_SUCCESS || cmd->copy.size == 0)
-          formosa_finish_command(event, err, "Event Copy Buffer           ",
-                                 "Formosa Copy Buffer");
+        pocl_formosa_run_work_graph(dd, node);
+        err = formosa_hal_error(CL_SUCCESS);
+        formosa_finish_command(event, err, "Event FSA Graph Launch      ",
+                               "Formosa WorkGraph");
         break;
-      }
 
       default:
         pocl_exec_command(node);
@@ -1218,7 +1248,7 @@ static void *formosa_copy_completion_thread(void *arg) {
   while (1) {
     formosa_pending_copy_t *finished = NULL;
     MemoryCopyResult copy_result = kMemoryCopyResultPending;
-    int poll_status = 1;
+    MemoryCopyPollStatus poll_status = kMemoryCopyPollPending;
 
     POCL_LOCK(dd->copy_lock);
     while (!dd->copy_thread_stop && dd->copy_pending == NULL)
@@ -1231,21 +1261,23 @@ static void *formosa_copy_completion_thread(void *arg) {
     formosa_pending_copy_t *candidate = dd->copy_pending;
     if (candidate != NULL) {
       poll_status = fsa_poll_memory_copy(candidate->completion, &copy_result);
-      if (poll_status != 1) {
+      if (poll_status != kMemoryCopyPollPending) {
         dd->copy_pending = candidate->next;
         if (dd->copy_pending == NULL) dd->copy_pending_tail = NULL;
         finished = candidate;
-        if (poll_status == -2) pocl_formosa_mark_unavailable();
+        if (poll_status == kMemoryCopyPollTransportError)
+          pocl_formosa_mark_unavailable();
       }
     }
     POCL_UNLOCK(dd->copy_lock);
 
     if (finished != NULL) {
       (void)fsa_release_memory_copy_completion(finished->completion);
-      cl_int event_status = poll_status == 0
+      cl_int event_status = poll_status == kMemoryCopyPollSuccess
                                 ? CL_SUCCESS
                                 : formosa_memory_copy_result_to_cl(copy_result);
-      if (poll_status == -1 || poll_status == -2)
+      if (poll_status == kMemoryCopyPollInvalidHandle ||
+          poll_status == kMemoryCopyPollTransportError)
         event_status = CL_DEVICE_NOT_AVAILABLE;
       formosa_finish_command(finished->node->sync.event.event, event_status,
                              "Event Memory Copy            ",

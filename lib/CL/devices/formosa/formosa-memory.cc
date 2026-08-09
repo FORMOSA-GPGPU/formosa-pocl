@@ -99,9 +99,9 @@ cl_int formosa_memory_copy(MemoryDomain src_domain, uint64_t src_addr,
 
   MemoryCopyResult result = kMemoryCopyResultPending;
   const int wait_status = fsa_wait_for_memory_copy(completion, 0, &result);
-  if (wait_status == 0) return CL_SUCCESS;
+  if (wait_status == kMemoryCopyPollSuccess) return CL_SUCCESS;
 
-  if (wait_status == -2) {
+  if (wait_status == kMemoryCopyPollTransportError) {
     /* Transport failure makes the device unavailable for this session. */
     pocl_formosa_mark_unavailable();
     return CL_DEVICE_NOT_AVAILABLE;

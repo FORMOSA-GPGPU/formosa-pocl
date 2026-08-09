@@ -314,8 +314,9 @@ int pocl_fsa_wait_ack(uintptr_t completion_signal,
                       uintptr_t device_kernel_status_addr) {
   if (completion_signal == 0) return -1;
   // polling the completion_signal until it is set to non-zero value
-  fsa_wait_for_completion(completion_signal,
-                          0);  // blocking wait
+  const int wait_status =
+      fsa_wait_for_completion(completion_signal, 0);  // blocking wait
+  if (wait_status != 0) return wait_status;
 
   /* Graph launch may not provide a KernelStatus buffer. */
   if (device_kernel_status_addr == 0) return 0;

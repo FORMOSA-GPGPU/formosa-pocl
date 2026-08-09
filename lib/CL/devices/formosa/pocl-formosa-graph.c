@@ -1052,7 +1052,8 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
 
   /* Wait synchronously for graph completion. */
   if (launch_rc == 0) {
-    pocl_fsa_wait_ack(completion_signal, 0);
+    launch_rc = pocl_fsa_wait_ack(completion_signal, 0);
+    if (launch_rc != 0) POCL_MSG_ERR("formosa: graph completion wait failed\n");
   } else {
     POCL_MSG_ERR("formosa: graph launch failed\n");
   }
