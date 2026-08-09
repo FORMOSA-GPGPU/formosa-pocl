@@ -1,5 +1,6 @@
 #include "formosa-memory.h"
 
+#include "pocl-formosa-internal.h"
 #include "pocl_debug.h"
 
 namespace {
@@ -74,13 +75,13 @@ cl_int formosa_memory_submit_copy(MemoryDomain src_domain, uint64_t src_addr,
   *completion = (FsaMemoryCopyCompletion){};
   if (size == 0) return CL_SUCCESS;
   if (!fsa_hal_is_available()) {
-    pocl_formosa_mark_unavailable();
+    formosa_mark_unavailable();
     return CL_DEVICE_NOT_AVAILABLE;
   }
   if (fsa_cmd_memory_copy(src_domain, src_addr, dst_domain, dst_addr, size,
                           completion) != 0) {
     if (!fsa_hal_is_available()) {
-      pocl_formosa_mark_unavailable();
+      formosa_mark_unavailable();
       return CL_DEVICE_NOT_AVAILABLE;
     }
     return CL_OUT_OF_RESOURCES;
@@ -103,7 +104,7 @@ cl_int formosa_memory_copy(MemoryDomain src_domain, uint64_t src_addr,
 
   if (wait_status == kMemoryCopyPollTransportError) {
     /* Transport failure makes the device unavailable for this session. */
-    pocl_formosa_mark_unavailable();
+    formosa_mark_unavailable();
     return CL_DEVICE_NOT_AVAILABLE;
   }
 

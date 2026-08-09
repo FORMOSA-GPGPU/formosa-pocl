@@ -5,6 +5,14 @@
 #include "pocl-formosa.h"
 #include "pocl_threads.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+void formosa_mark_unavailable(void);
+#ifdef __cplusplus
+}
+#endif
+
 typedef struct {
   int num_kernels;
   char *kernel_names;

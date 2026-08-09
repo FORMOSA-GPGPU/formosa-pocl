@@ -204,11 +204,11 @@ void pocl_formosa_copy(void *data, pocl_mem_identifier *dst_mem_id,
 static cl_bool formosa_available = CL_TRUE;
 static char *formosa_build_hash = "formosa-riscv64-unknown-unknwon-elf";
 
-void pocl_formosa_mark_unavailable(void) { formosa_available = CL_FALSE; }
+void formosa_mark_unavailable(void) { formosa_available = CL_FALSE; }
 
 static cl_int formosa_hal_error(cl_int fallback) {
   if (!fsa_hal_is_available()) {
-    pocl_formosa_mark_unavailable();
+    formosa_mark_unavailable();
     return CL_DEVICE_NOT_AVAILABLE;
   }
   return fallback;
@@ -217,7 +217,7 @@ static cl_int formosa_hal_error(cl_int fallback) {
 unsigned int pocl_formosa_probe(struct pocl_device_ops *ops) {
   int err = fsa_probe();
   if (err != 0) {
-    pocl_formosa_mark_unavailable();
+    formosa_mark_unavailable();
     return 0;
   }
   return strncmp(ops->device_name, "formosa", 7) == 0;
@@ -1259,17 +1259,22 @@ static void *formosa_copy_completion_thread(void *arg) {
     }
 
     formosa_pending_copy_t *candidate = dd->copy_pending;
-    if (candidate != NULL) {
+    POCL_UNLOCK(dd->copy_lock);
+
+    if (candidate != NULL)
       poll_status = fsa_poll_memory_copy(candidate->completion, &copy_result);
-      if (poll_status != kMemoryCopyPollPending) {
+
+    if (poll_status != kMemoryCopyPollPending) {
+      POCL_LOCK(dd->copy_lock);
+      if (dd->copy_pending == candidate) {
         dd->copy_pending = candidate->next;
         if (dd->copy_pending == NULL) dd->copy_pending_tail = NULL;
         finished = candidate;
-        if (poll_status == kMemoryCopyPollTransportError)
-          pocl_formosa_mark_unavailable();
       }
+      POCL_UNLOCK(dd->copy_lock);
+      if (poll_status == kMemoryCopyPollTransportError)
+        formosa_mark_unavailable();
     }
-    POCL_UNLOCK(dd->copy_lock);
 
     if (finished != NULL) {
       (void)fsa_release_memory_copy_completion(finished->completion);

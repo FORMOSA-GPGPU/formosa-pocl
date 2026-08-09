@@ -294,8 +294,11 @@ int pocl_fsa_upload_kernel(const char *elf_file, uint64_t *kernel_dev_addr) {
     POCL_MSG_PRINT_INFO("Copy %lx to %lx with size %lx\n",
                         (uint64_t)host_ptr + offset,
                         (uint64_t)kernel_start_addr + offset, size);
-    fsa_copy_to_dev((uint64_t)kernel_start_addr + offset, host_ptr + offset,
-                    size);
+    if (fsa_copy_to_dev((uint64_t)kernel_start_addr + offset, host_ptr + offset,
+                        size) != 0) {
+      POCL_MSG_ERR("pocl_fsa_upload_kernel: device copy failed\n");
+      goto FAIL;
+    }
   }
 
   free(host_ptr);
