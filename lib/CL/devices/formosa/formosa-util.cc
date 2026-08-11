@@ -189,10 +189,8 @@ int pocl_fsa_get_elf_name(cl_program program, cl_uint device_i,
   return 0;
 }
 
-int pocl_fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
-                           uint64_t *kernel_dev_addr) {
-  if (elf_file == nullptr || dd == nullptr || kernel_dev_addr == nullptr)
-    return -1;
+int pocl_fsa_upload_kernel(const char *elf_file, uint64_t *kernel_dev_addr) {
+  if (elf_file == nullptr || kernel_dev_addr == nullptr) return -1;
   uint64_t kernel_size = 0;
   FILE *elf = fopen(elf_file, "rb");
   if (elf == nullptr) {
@@ -296,8 +294,11 @@ int pocl_fsa_upload_kernel(const char *elf_file, pocl_formosa_data_t *dd,
     POCL_MSG_PRINT_INFO("Copy %lx to %lx with size %lx\n",
                         (uint64_t)host_ptr + offset,
                         (uint64_t)kernel_start_addr + offset, size);
-    fsa_copy_to_dev((uint64_t)kernel_start_addr + offset, host_ptr + offset,
-                    size);
+    if (fsa_copy_to_dev((uint64_t)kernel_start_addr + offset, host_ptr + offset,
+                        size) != 0) {
+      POCL_MSG_ERR("pocl_fsa_upload_kernel: device copy failed\n");
+      goto FAIL;
+    }
   }
 
   free(host_ptr);
@@ -312,12 +313,13 @@ FAIL:
   return -1;
 }
 
-int pocl_fsa_wait_ack(pocl_formosa_data_t *dd, uintptr_t completion_signal,
+int pocl_fsa_wait_ack(uintptr_t completion_signal,
                       uintptr_t device_kernel_status_addr) {
-  if (dd == nullptr || completion_signal == 0) return -1;
+  if (completion_signal == 0) return -1;
   // polling the completion_signal until it is set to non-zero value
-  fsa_wait_for_completion(completion_signal,
-                          0);  // blocking wait
+  const int wait_status =
+      fsa_wait_for_completion(completion_signal, 0);  // blocking wait
+  if (wait_status != 0) return wait_status;
 
   /* Graph launch may not provide a KernelStatus buffer. */
   if (device_kernel_status_addr == 0) return 0;
