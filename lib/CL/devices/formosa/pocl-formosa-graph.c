@@ -1042,20 +1042,23 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
   pool.cache_range_addr = dev_cache_ranges;
   fsa_copy_to_dev(bg->dev_runtime_pool, &pool, sizeof(GraphRuntimePool));
 
-  /* Launch */
-  uintptr_t completion_signal = 0;
-
-  int launch_rc = fsa_cmd_launch_graph(
-      0, num_root_inputs, bg->dev_graph_desc, bg->dev_runtime_pool,
-      bg->dev_graph_status, dev_root_desc,
-      rid.records_addr + rid.records_offset, &completion_signal);
-
-  /* Wait synchronously for graph completion (legacy signal until ticket 05). */
-  if (launch_rc == 0) {
-    launch_rc = fsa_wait_for_completion(completion_signal, 0);
-    if (launch_rc != 0) POCL_MSG_ERR("formosa: graph completion wait failed\n");
-  } else {
+  /* Launch + synchronous wait on shared Completion Token. */
+  FsaCompletionToken completion = 0;
+  int launch_rc = -1;
+  if (fsa_cmd_launch_graph(0, num_root_inputs, bg->dev_graph_desc,
+                           bg->dev_runtime_pool, bg->dev_graph_status,
+                           dev_root_desc, rid.records_addr + rid.records_offset,
+                           &completion) != kFsaCompletionSubmitAccepted) {
     POCL_MSG_ERR("formosa: graph launch failed\n");
+  } else {
+    FsaCompletionResult result = FSA_COMPLETION_RESULT_PENDING;
+    if (fsa_wait_completion(completion, 0, &result) !=
+            kFsaCompletionWaitSuccess ||
+        result != FSA_COMPLETION_RESULT_SUCCESS) {
+      POCL_MSG_ERR("formosa: graph completion wait failed\n");
+    } else {
+      launch_rc = 0;
+    }
   }
 
   /* Clean up per-launch allocations. */
