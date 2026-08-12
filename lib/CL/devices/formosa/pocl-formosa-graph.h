@@ -20,6 +20,6 @@ cl_int pocl_formosa_get_work_graph_info(cl_work_graph_formosa graph,
                                         size_t *size_ret);
 cl_int pocl_formosa_free_work_graph(cl_work_graph_formosa graph);
 
-void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd);
+cl_int pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd);
 
 #endif /* POCL_FORMOSA_GRAPH_H */

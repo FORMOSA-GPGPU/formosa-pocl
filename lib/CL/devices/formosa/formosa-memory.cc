@@ -53,17 +53,18 @@ cl_int formosa_memory_resolve_copy_addresses(
 }
 
 cl_int formosa_memory_completion_result_to_cl(FsaCompletionResult result) {
+  if (result == FSA_COMPLETION_RESULT_FIRMWARE_REBOOT)
+    return CL_DEVICE_NOT_AVAILABLE;
+
   switch (result) {
-    case FSA_COMPLETION_RESULT_SUCCESS:
+    case kMemoryCopyResultSuccess:
       return CL_SUCCESS;
-    case (FsaCompletionResult)kMemoryCopyResultOverlap:
+    case kMemoryCopyResultOverlap:
       return CL_MEM_COPY_OVERLAP;
-    case (FsaCompletionResult)kMemoryCopyResultInvalidAddress:
-    case (FsaCompletionResult)kMemoryCopyResultInvalidRange:
-    case (FsaCompletionResult)kMemoryCopyResultInvalidDomainPair:
+    case kMemoryCopyResultInvalidAddress:
+    case kMemoryCopyResultInvalidRange:
+    case kMemoryCopyResultInvalidDomainPair:
       return CL_INVALID_VALUE;
-    case FSA_COMPLETION_RESULT_FIRMWARE_REBOOT:
-      return CL_DEVICE_NOT_AVAILABLE;
     default:
       return CL_OUT_OF_RESOURCES;
   }
@@ -71,7 +72,8 @@ cl_int formosa_memory_completion_result_to_cl(FsaCompletionResult result) {
 
 cl_int formosa_memory_submit_copy(MemoryDomain src_domain, uint64_t src_addr,
                                   MemoryDomain dst_domain, uint64_t dst_addr,
-                                  size_t size, FsaCompletionToken *completion) {
+                                  size_t size,
+                                  FsaCompletionToken *completion) {
   if (completion == nullptr) return CL_INVALID_VALUE;
   *completion = 0;
   if (size == 0) return CL_SUCCESS;
@@ -101,8 +103,6 @@ cl_int formosa_memory_submit_copy(MemoryDomain src_domain, uint64_t src_addr,
        * fail-stop reclaims via reset/uninit rather than caller release. */
       formosa_mark_unavailable();
       return CL_DEVICE_NOT_AVAILABLE;
-    case kFsaCompletionSubmitWouldBlock:
-      break;
   }
   return CL_OUT_OF_RESOURCES;
 }

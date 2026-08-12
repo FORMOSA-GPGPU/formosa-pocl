@@ -362,7 +362,8 @@ int pocl_fsa_wait_ack(FsaCompletionToken completion,
           status.mcause, status.mepc, status.mtval);
   }
 
-  /* Fail if either the shared terminal outcome or KernelStatus reports error. */
+  /* Fail if either the shared terminal outcome or KernelStatus reports
+   * error. */
   if (terminal_ok != 0) return -1;
   return (status.code == kKernelOkay) ? 0 : -1;
 }

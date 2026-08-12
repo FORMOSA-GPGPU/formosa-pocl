@@ -676,8 +676,14 @@ pocl_exec_command (_cl_command_node *node)
     case CL_COMMAND_GRAPH_LAUNCH_FORMOSA:
       pocl_update_event_running (event);
       assert(dev->ops->run_work_graph_formosa);
-      dev->ops->run_work_graph_formosa(dev->data, node);
-      POCL_UPDATE_EVENT_COMPLETE_MSG (event, "Event FSA Graph Launch      ");
+      {
+        cl_int err = dev->ops->run_work_graph_formosa (dev->data, node);
+        if (err != CL_SUCCESS)
+          POCL_UPDATE_EVENT_FAILED_MSG (err, event, "Formosa WorkGraph");
+        else
+          POCL_UPDATE_EVENT_COMPLETE_MSG (event,
+                                          "Event FSA Graph Launch      ");
+      }
       break;
 
     case CL_COMMAND_NATIVE_KERNEL:

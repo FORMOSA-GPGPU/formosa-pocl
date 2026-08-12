@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "formosa-hal/formosa-graph.h"
 #include "formosa-hal/formosa-hal.h"
@@ -395,7 +396,7 @@ static cl_int pocl_formosa_pack_kernel_args(
   return CL_SUCCESS;
 }
 
-void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
+cl_int pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
   cl_work_graph_formosa graph =
       (cl_work_graph_formosa)cmd->command.work_graph_launch_formosa.graph;
   cl_uint num_root_inputs =
@@ -429,6 +430,7 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
   uint64_t dev_root_desc = 0;
   GraphRuntimePool pool = {0};
   cl_int err = CL_SUCCESS;
+  int launch_succeeded = 0;
 
   cl_uint node_count = 0;
   struct _cl_work_graph_node_formosa *curr_node = graph->nodes;
@@ -446,17 +448,17 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
 
   if (node_count == 0) {
     POCL_MSG_ERR("formosa: graph launch requires at least one node\n");
-    return;
+    return CL_INVALID_VALUE;
   }
   if (node_count > FORMOSA_WG_MAX_DISPATCH_SLOTS) {
     POCL_MSG_ERR("formosa: graph has too many nodes (%u > %u)\n", node_count,
                  FORMOSA_WG_MAX_DISPATCH_SLOTS);
-    return;
+    return CL_INVALID_VALUE;
   }
 
   if (num_root_inputs != 1) {
     POCL_MSG_ERR("formosa: graph launch must have exactly 1 root input\n");
-    return;
+    return CL_INVALID_VALUE;
   }
 
   struct _cl_work_graph_node_formosa *root_node = NULL;
@@ -469,12 +471,12 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
 
   if (root_node == NULL) {
     POCL_MSG_ERR("formosa: root target node not found\n");
-    return;
+    return CL_INVALID_VALUE;
   }
   if ((root_node->properties.flags & CL_NODE_ROOT_CAPABLE_FORMOSA) == 0) {
     POCL_MSG_ERR("formosa: root target node %u is not root-capable\n",
                  root_node->node_id);
-    return;
+    return CL_INVALID_VALUE;
   }
 
   listed_nodes = (struct _cl_work_graph_node_formosa **)calloc(
@@ -1043,21 +1045,51 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
   fsa_copy_to_dev(bg->dev_runtime_pool, &pool, sizeof(GraphRuntimePool));
 
   /* Launch + synchronous wait on shared Completion Token. */
+  err = CL_SUCCESS;
   FsaCompletionToken completion = 0;
-  int launch_rc = -1;
-  if (fsa_cmd_launch_graph(0, num_root_inputs, bg->dev_graph_desc,
-                           bg->dev_runtime_pool, bg->dev_graph_status,
-                           dev_root_desc, rid.records_addr + rid.records_offset,
-                           &completion) != kFsaCompletionSubmitAccepted) {
+  FsaCompletionSubmitStatus submit_status;
+  do {
+    submit_status = fsa_cmd_launch_graph(
+        0, num_root_inputs, bg->dev_graph_desc, bg->dev_runtime_pool,
+        bg->dev_graph_status, dev_root_desc,
+        rid.records_addr + rid.records_offset, &completion);
+    if (submit_status != kFsaCompletionSubmitWouldBlock) break;
+    if (!fsa_hal_is_available()) {
+      formosa_mark_unavailable();
+      submit_status = kFsaCompletionSubmitTransportError;
+      break;
+    }
+    usleep(1000);
+  } while (1);
+
+  if (submit_status != kFsaCompletionSubmitAccepted) {
     POCL_MSG_ERR("formosa: graph launch failed\n");
+    if (submit_status == kFsaCompletionSubmitTransportError) {
+      formosa_mark_unavailable();
+      err = CL_DEVICE_NOT_AVAILABLE;
+    }
   } else {
     FsaCompletionResult result = FSA_COMPLETION_RESULT_PENDING;
-    if (fsa_wait_completion(completion, 0, &result) !=
-            kFsaCompletionWaitSuccess ||
+    const FsaCompletionWaitStatus wait_status =
+        fsa_wait_completion(completion, 0, &result);
+    if (wait_status != kFsaCompletionWaitSuccess ||
         result != FSA_COMPLETION_RESULT_SUCCESS) {
       POCL_MSG_ERR("formosa: graph completion wait failed\n");
+      if (wait_status == kFsaCompletionWaitTransportError ||
+          result == FSA_COMPLETION_RESULT_FIRMWARE_REBOOT) {
+        formosa_mark_unavailable();
+        err = CL_DEVICE_NOT_AVAILABLE;
+      } else {
+        err = CL_OUT_OF_RESOURCES;
+      }
+      GraphStatus status = {0};
+      if (fsa_copy_from_dev(bg->dev_graph_status, &status, sizeof(status)) ==
+          0) {
+        POCL_MSG_ERR("formosa: graph status state=%u error=%u\n",
+                     (unsigned)status.state, (unsigned)status.error_code);
+      }
     } else {
-      launch_rc = 0;
+      launch_succeeded = 1;
     }
   }
 
@@ -1080,6 +1112,7 @@ void pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
   }
 
 CLEANUP:
+  if (!launch_succeeded && err == CL_SUCCESS) err = CL_OUT_OF_RESOURCES;
   if (launch_static_kargs) {
     for (cl_uint i = 0; i < node_count; i++) {
       if (launch_static_kargs[i]) fsa_free((void *)launch_static_kargs[i]);
@@ -1103,6 +1136,7 @@ CLEANUP:
   free(launch_static_karg_sizes);
   free(launch_local_mem_sizes);
   free(cache_ranges);
+  return err;
 }
 
 static cl_int pocl_formosa_read_graph_status(
@@ -1114,7 +1148,8 @@ static cl_int pocl_formosa_read_graph_status(
 }
 
 cl_int pocl_formosa_get_work_graph_info(cl_work_graph_formosa graph,
-                                        cl_uint param, size_t size, void *value,
+                                        cl_uint param, size_t size,
+                                        void *value,
                                         size_t *size_ret) {
   if (graph == NULL) return CL_INVALID_VALUE;
 

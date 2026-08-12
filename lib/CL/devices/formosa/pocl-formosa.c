@@ -49,7 +49,8 @@ static cl_int formosa_submit_write_buf(void *data,
 static cl_int formosa_submit_copy_buf(
     void *data, pocl_mem_identifier *dst_mem_id, cl_mem dst_buf,
     pocl_mem_identifier *src_mem_id, cl_mem src_buf, size_t dst_offset,
-    size_t src_offset, size_t size, FsaCompletionToken *completion);
+    size_t src_offset, size_t size,
+    FsaCompletionToken *completion);
 
 static cl_int formosa_validate_host_pointer(const void *host_ptr, size_t size) {
   return host_ptr == NULL && size != 0 ? CL_INVALID_VALUE : CL_SUCCESS;
@@ -135,7 +136,8 @@ static cl_int formosa_copy_buf(void *data, pocl_mem_identifier *dst_mem_id,
 static cl_int formosa_submit_copy_buf(
     void *data, pocl_mem_identifier *dst_mem_id, cl_mem dst_buf,
     pocl_mem_identifier *src_mem_id, cl_mem src_buf, size_t dst_offset,
-    size_t src_offset, size_t size, FsaCompletionToken *completion) {
+    size_t src_offset, size_t size,
+    FsaCompletionToken *completion) {
   (void)data;
   (void)dst_buf;
   (void)src_buf;
@@ -212,6 +214,40 @@ static cl_int formosa_hal_error(cl_int fallback) {
     return CL_DEVICE_NOT_AVAILABLE;
   }
   return fallback;
+}
+
+static cl_int formosa_run_barrier(void) {
+  FsaCompletionToken completion = 0;
+  FsaCompletionSubmitStatus submit_status;
+  do {
+    submit_status = fsa_cmd_barrier(&completion);
+    if (submit_status != kFsaCompletionSubmitWouldBlock) break;
+    if (!fsa_hal_is_available()) {
+      formosa_mark_unavailable();
+      return CL_DEVICE_NOT_AVAILABLE;
+    }
+    usleep(1000);
+  } while (1);
+
+  if (submit_status == kFsaCompletionSubmitTransportError) {
+    formosa_mark_unavailable();
+    return CL_DEVICE_NOT_AVAILABLE;
+  }
+  if (submit_status != kFsaCompletionSubmitAccepted)
+    return CL_OUT_OF_RESOURCES;
+
+  FsaCompletionResult result = FSA_COMPLETION_RESULT_PENDING;
+  const FsaCompletionWaitStatus wait_status =
+      fsa_wait_completion(completion, 0, &result);
+  if (wait_status == kFsaCompletionWaitTransportError ||
+      result == FSA_COMPLETION_RESULT_FIRMWARE_REBOOT) {
+    formosa_mark_unavailable();
+    return CL_DEVICE_NOT_AVAILABLE;
+  }
+  if (wait_status != kFsaCompletionWaitSuccess)
+    return CL_OUT_OF_RESOURCES;
+  return result == FSA_COMPLETION_RESULT_SUCCESS ? CL_SUCCESS
+                                                 : CL_OUT_OF_RESOURCES;
 }
 
 unsigned int pocl_formosa_probe(struct pocl_device_ops *ops) {
@@ -662,11 +698,20 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
   uint16_t dispatch_flags = pc->work_dim | FSA_KERNEL_DISPATCH_HAS_PRINTF_META;
   if (pocl_formosa_kernel_stack_remap_enabled(kernel, cmd->device))
     dispatch_flags |= FSA_KERNEL_DISPATCH_STACK_REMAP;
-  err = fsa_cmd_start_kernel(
-      dispatch_flags, pc->local_size, pc->num_groups, pc->global_offset,
-      local_mem_size, entry_pc, (uintptr_t)device_args_buffer_addr,
-      (uintptr_t)trampoline_pc, (uintptr_t)device_kernel_status_addr,
-      &completion);
+  do {
+    err = fsa_cmd_start_kernel(
+        dispatch_flags, pc->local_size, pc->num_groups, pc->global_offset,
+        local_mem_size, entry_pc, (uintptr_t)device_args_buffer_addr,
+        (uintptr_t)trampoline_pc, (uintptr_t)device_kernel_status_addr,
+        &completion);
+    if (err != kFsaCompletionSubmitWouldBlock) break;
+    if (!fsa_hal_is_available()) {
+      formosa_mark_unavailable();
+      err = kFsaCompletionSubmitTransportError;
+      break;
+    }
+    usleep(1000);
+  } while (1);
 
   if (err != kFsaCompletionSubmitAccepted) {
     POCL_MSG_ERR("pocl_formosa_run: kernel launch failed\n");
@@ -1227,10 +1272,16 @@ static void formosa_command_scheduler(pocl_formosa_data_t *dd) {
 
       case CL_COMMAND_GRAPH_LAUNCH_FORMOSA:
         pocl_update_event_running(event);
-        pocl_formosa_run_work_graph(dd, node);
-        err = formosa_hal_error(CL_SUCCESS);
+        err = pocl_formosa_run_work_graph(dd, node);
         formosa_finish_command(event, err, "Event FSA Graph Launch      ",
                                "Formosa WorkGraph");
+        break;
+
+      case CL_COMMAND_BARRIER:
+        pocl_update_event_running(event);
+        err = formosa_run_barrier();
+        formosa_finish_command(event, err, "Event Barrier              ",
+                               "Formosa Barrier");
         break;
 
       default:
