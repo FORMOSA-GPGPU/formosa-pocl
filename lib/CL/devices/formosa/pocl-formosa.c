@@ -658,7 +658,7 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
   }
 
   // launch kernel execution
-  uintptr_t completion_signal = 0;
+  FsaCompletionToken completion = 0;
   uint16_t dispatch_flags = pc->work_dim | FSA_KERNEL_DISPATCH_HAS_PRINTF_META;
   if (pocl_formosa_kernel_stack_remap_enabled(kernel, cmd->device))
     dispatch_flags |= FSA_KERNEL_DISPATCH_STACK_REMAP;
@@ -666,17 +666,16 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
       dispatch_flags, pc->local_size, pc->num_groups, pc->global_offset,
       local_mem_size, entry_pc, (uintptr_t)device_args_buffer_addr,
       (uintptr_t)trampoline_pc, (uintptr_t)device_kernel_status_addr,
-      &completion_signal);
+      &completion);
 
-  if (err != 0) {
+  if (err != kFsaCompletionSubmitAccepted) {
     POCL_MSG_ERR("pocl_formosa_run: kernel launch failed\n");
     errcode = formosa_hal_error(CL_OUT_OF_RESOURCES);
     goto FAIL;
   }
 
-  // wait for the execution to complete
-  err = pocl_fsa_wait_ack(completion_signal,
-                          (uintptr_t)device_kernel_status_addr);
+  // wait for the execution to complete (auto-releases terminal token)
+  err = pocl_fsa_wait_ack(completion, (uintptr_t)device_kernel_status_addr);
   if (err != 0) {
     POCL_MSG_ERR("pocl_formosa_run: kernel execution failed\n");
     errcode = formosa_hal_error(CL_FAILED);

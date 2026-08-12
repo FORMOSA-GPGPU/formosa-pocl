@@ -19,7 +19,7 @@ int pocl_fsa_get_elf_name(cl_program program, cl_uint device_i, char *elf_name);
 
 int pocl_fsa_upload_kernel(const char *elf_file, uint64_t *kernel_dev_addr);
 
-int pocl_fsa_wait_ack(uintptr_t completion_signal,
+int pocl_fsa_wait_ack(FsaCompletionToken completion,
                       uintptr_t device_kernel_status_addr);
 
 int pocl_fsa_compile_program(char **kernel_names, int *num_kernels,

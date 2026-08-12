@@ -313,16 +313,18 @@ FAIL:
   return -1;
 }
 
-int pocl_fsa_wait_ack(uintptr_t completion_signal,
+int pocl_fsa_wait_ack(FsaCompletionToken completion,
                       uintptr_t device_kernel_status_addr) {
-  if (completion_signal == 0) return -1;
-  // polling the completion_signal until it is set to non-zero value
-  const int wait_status =
-      fsa_wait_for_completion(completion_signal, 0);  // blocking wait
-  if (wait_status != 0) return wait_status;
+  if (completion == 0) return -1;
+  FsaCompletionResult result = FSA_COMPLETION_RESULT_PENDING;
+  const FsaCompletionWaitStatus wait_status =
+      fsa_wait_completion(completion, 0, &result);
+  if (wait_status != kFsaCompletionWaitSuccess) return -1;
 
-  /* Graph launch may not provide a KernelStatus buffer. */
-  if (device_kernel_status_addr == 0) return 0;
+  const int terminal_ok = result == FSA_COMPLETION_RESULT_SUCCESS ? 0 : -1;
+
+  /* No KernelStatus buffer: use the shared terminal result only. */
+  if (device_kernel_status_addr == 0) return terminal_ok;
 
   uint8_t status_raw[sizeof(KernelStatus)];
   int err = fsa_copy_from_dev(device_kernel_status_addr, status_raw,
@@ -360,6 +362,8 @@ int pocl_fsa_wait_ack(uintptr_t completion_signal,
           status.mcause, status.mepc, status.mtval);
   }
 
+  /* Fail if either the shared terminal outcome or KernelStatus reports error. */
+  if (terminal_ok != 0) return -1;
   return (status.code == kKernelOkay) ? 0 : -1;
 }
 
