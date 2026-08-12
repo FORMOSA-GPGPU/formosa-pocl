@@ -36,7 +36,7 @@ typedef struct {
 
 typedef struct formosa_pending_copy {
   _cl_command_node *node;
-  FsaCompletionToken completion;
+  FsaCompletionToken token;
   struct formosa_pending_copy *next;
 } formosa_pending_copy_t;
 

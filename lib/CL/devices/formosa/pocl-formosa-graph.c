@@ -1046,13 +1046,13 @@ cl_int pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
 
   /* Launch + synchronous wait on shared Completion Token. */
   err = CL_SUCCESS;
-  FsaCompletionToken completion = 0;
+  FsaCompletionToken token = 0;
   FsaCompletionSubmitStatus submit_status;
   do {
     submit_status = fsa_cmd_launch_graph(
         0, num_root_inputs, bg->dev_graph_desc, bg->dev_runtime_pool,
         bg->dev_graph_status, dev_root_desc,
-        rid.records_addr + rid.records_offset, &completion);
+        rid.records_addr + rid.records_offset, &token);
     if (submit_status != kFsaCompletionSubmitWouldBlock) break;
     if (!fsa_hal_is_available()) {
       formosa_mark_unavailable();
@@ -1071,7 +1071,7 @@ cl_int pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
   } else {
     FsaCompletionResult result = FSA_COMPLETION_RESULT_PENDING;
     const FsaCompletionWaitStatus wait_status =
-        fsa_wait_completion(completion, 0, &result);
+        fsa_wait_completion(token, 0, &result);
     if (wait_status != kFsaCompletionWaitSuccess ||
         result != FSA_COMPLETION_RESULT_SUCCESS) {
       POCL_MSG_ERR("formosa: graph completion wait failed\n");
@@ -1148,8 +1148,7 @@ static cl_int pocl_formosa_read_graph_status(
 }
 
 cl_int pocl_formosa_get_work_graph_info(cl_work_graph_formosa graph,
-                                        cl_uint param, size_t size,
-                                        void *value,
+                                        cl_uint param, size_t size, void *value,
                                         size_t *size_ret) {
   if (graph == NULL) return CL_INVALID_VALUE;
 

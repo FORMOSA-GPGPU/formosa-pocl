@@ -313,25 +313,27 @@ FAIL:
   return -1;
 }
 
-int pocl_fsa_wait_ack(FsaCompletionToken completion,
-                      uintptr_t device_kernel_status_addr) {
-  if (completion == 0) return -1;
+cl_int pocl_fsa_wait_completion(FsaCompletionToken token,
+                                uintptr_t device_kernel_status_addr) {
+  if (token == 0) return CL_FAILED;
   FsaCompletionResult result = FSA_COMPLETION_RESULT_PENDING;
   const FsaCompletionWaitStatus wait_status =
-      fsa_wait_completion(completion, 0, &result);
-  if (wait_status != kFsaCompletionWaitSuccess) return -1;
+      fsa_wait_completion(token, 0, &result);
+  if (wait_status == kFsaCompletionWaitTransportError ||
+      result == FSA_COMPLETION_RESULT_FIRMWARE_REBOOT)
+    return CL_DEVICE_NOT_AVAILABLE;
+  if (wait_status != kFsaCompletionWaitSuccess ||
+      result != FSA_COMPLETION_RESULT_SUCCESS)
+    return CL_FAILED;
 
-  const int terminal_ok = result == FSA_COMPLETION_RESULT_SUCCESS ? 0 : -1;
-
-  /* No KernelStatus buffer: use the shared terminal result only. */
-  if (device_kernel_status_addr == 0) return terminal_ok;
+  if (device_kernel_status_addr == 0) return CL_SUCCESS;
 
   uint8_t status_raw[sizeof(KernelStatus)];
   int err = fsa_copy_from_dev(device_kernel_status_addr, status_raw,
                               sizeof(status_raw));
   if (err != 0) {
     POCL_MSG_ERR("Failed to read kernel status from device (%d)\n", err);
-    return -1;
+    return fsa_hal_is_available() ? CL_FAILED : CL_DEVICE_NOT_AVAILABLE;
   }
 
   KernelStatus status;
@@ -362,10 +364,7 @@ int pocl_fsa_wait_ack(FsaCompletionToken completion,
           status.mcause, status.mepc, status.mtval);
   }
 
-  /* Fail if either the shared terminal outcome or KernelStatus reports
-   * error. */
-  if (terminal_ok != 0) return -1;
-  return (status.code == kKernelOkay) ? 0 : -1;
+  return status.code == kKernelOkay ? CL_SUCCESS : CL_FAILED;
 }
 
 static int exec(const char *cmd, std::ostream &out) {

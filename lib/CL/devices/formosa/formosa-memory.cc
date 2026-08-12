@@ -52,7 +52,7 @@ cl_int formosa_memory_resolve_copy_addresses(
                                                &addresses->dst_addr);
 }
 
-cl_int formosa_memory_completion_result_to_cl(FsaCompletionResult result) {
+cl_int formosa_memory_copy_result_to_cl(FsaCompletionResult result) {
   if (result == FSA_COMPLETION_RESULT_FIRMWARE_REBOOT)
     return CL_DEVICE_NOT_AVAILABLE;
 
@@ -72,10 +72,9 @@ cl_int formosa_memory_completion_result_to_cl(FsaCompletionResult result) {
 
 cl_int formosa_memory_submit_copy(MemoryDomain src_domain, uint64_t src_addr,
                                   MemoryDomain dst_domain, uint64_t dst_addr,
-                                  size_t size,
-                                  FsaCompletionToken *completion) {
-  if (completion == nullptr) return CL_INVALID_VALUE;
-  *completion = 0;
+                                  size_t size, FsaCompletionToken *token) {
+  if (token == nullptr) return CL_INVALID_VALUE;
+  *token = 0;
   if (size == 0) return CL_SUCCESS;
   if (!fsa_hal_is_available()) {
     formosa_mark_unavailable();
@@ -84,7 +83,7 @@ cl_int formosa_memory_submit_copy(MemoryDomain src_domain, uint64_t src_addr,
   FsaCompletionSubmitStatus submit_status;
   do {
     submit_status = fsa_cmd_memory_copy(src_domain, src_addr, dst_domain,
-                                        dst_addr, size, completion);
+                                        dst_addr, size, token);
     if (submit_status != kFsaCompletionSubmitWouldBlock) break;
     if (!fsa_hal_is_available()) {
       formosa_mark_unavailable();
@@ -110,15 +109,15 @@ cl_int formosa_memory_submit_copy(MemoryDomain src_domain, uint64_t src_addr,
 cl_int formosa_memory_copy(MemoryDomain src_domain, uint64_t src_addr,
                            MemoryDomain dst_domain, uint64_t dst_addr,
                            size_t size) {
-  FsaCompletionToken completion = 0;
+  FsaCompletionToken token = 0;
   cl_int submit_status = formosa_memory_submit_copy(
-      src_domain, src_addr, dst_domain, dst_addr, size, &completion);
+      src_domain, src_addr, dst_domain, dst_addr, size, &token);
   if (submit_status != CL_SUCCESS) return submit_status;
   if (size == 0) return CL_SUCCESS;
 
   FsaCompletionResult result = FSA_COMPLETION_RESULT_PENDING;
   const FsaCompletionWaitStatus wait_status =
-      fsa_wait_completion(completion, 0, &result);
+      fsa_wait_completion(token, 0, &result);
   if (wait_status == kFsaCompletionWaitTransportError) {
     /* Transport failure makes the device unavailable for this session. */
     formosa_mark_unavailable();
@@ -131,5 +130,5 @@ cl_int formosa_memory_copy(MemoryDomain src_domain, uint64_t src_addr,
 
   POCL_MSG_ERR("Formosa memory copy failed (wait=%d, result=%d)\n", wait_status,
                (int)result);
-  return formosa_memory_completion_result_to_cl(result);
+  return formosa_memory_copy_result_to_cl(result);
 }
