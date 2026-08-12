@@ -39,17 +39,17 @@ static cl_int formosa_submit_read_buf(void *data, void *__restrict__ host_ptr,
                                       pocl_mem_identifier *src_mem_id,
                                       cl_mem src_buf, size_t offset,
                                       size_t size,
-                                      FsaMemoryCopyCompletion *completion);
+                                      FsaCompletionToken *completion);
 static cl_int formosa_submit_write_buf(void *data,
                                        const void *__restrict__ host_ptr,
                                        pocl_mem_identifier *dst_mem_id,
                                        cl_mem dst_buf, size_t offset,
                                        size_t size,
-                                       FsaMemoryCopyCompletion *completion);
+                                       FsaCompletionToken *completion);
 static cl_int formosa_submit_copy_buf(
     void *data, pocl_mem_identifier *dst_mem_id, cl_mem dst_buf,
     pocl_mem_identifier *src_mem_id, cl_mem src_buf, size_t dst_offset,
-    size_t src_offset, size_t size, FsaMemoryCopyCompletion *completion);
+    size_t src_offset, size_t size, FsaCompletionToken *completion);
 
 static cl_int formosa_validate_host_pointer(const void *host_ptr, size_t size) {
   return host_ptr == NULL && size != 0 ? CL_INVALID_VALUE : CL_SUCCESS;
@@ -135,7 +135,7 @@ static cl_int formosa_copy_buf(void *data, pocl_mem_identifier *dst_mem_id,
 static cl_int formosa_submit_copy_buf(
     void *data, pocl_mem_identifier *dst_mem_id, cl_mem dst_buf,
     pocl_mem_identifier *src_mem_id, cl_mem src_buf, size_t dst_offset,
-    size_t src_offset, size_t size, FsaMemoryCopyCompletion *completion) {
+    size_t src_offset, size_t size, FsaCompletionToken *completion) {
   (void)data;
   (void)dst_buf;
   (void)src_buf;
@@ -152,7 +152,7 @@ static cl_int formosa_submit_read_buf(void *data, void *__restrict__ host_ptr,
                                       pocl_mem_identifier *src_mem_id,
                                       cl_mem src_buf, size_t offset,
                                       size_t size,
-                                      FsaMemoryCopyCompletion *completion) {
+                                      FsaCompletionToken *completion) {
   (void)data;
   (void)src_buf;
   uint64_t device_addr = 0;
@@ -171,7 +171,7 @@ static cl_int formosa_submit_write_buf(void *data,
                                        pocl_mem_identifier *dst_mem_id,
                                        cl_mem dst_buf, size_t offset,
                                        size_t size,
-                                       FsaMemoryCopyCompletion *completion) {
+                                       FsaCompletionToken *completion) {
   (void)data;
   (void)dst_buf;
   uint64_t device_addr = 0;
@@ -353,7 +353,7 @@ cl_int pocl_formosa_uninit(unsigned j, cl_device_id device) {
   while (dd->copy_pending != NULL) {
     formosa_pending_copy_t *pending = dd->copy_pending;
     dd->copy_pending = pending->next;
-    (void)fsa_release_memory_copy_completion(pending->completion);
+    (void)fsa_release_completion(pending->completion);
     POCL_MEM_FREE(pending);
   }
   dd->copy_pending_tail = NULL;
@@ -1152,7 +1152,7 @@ static void formosa_submit_memory_copy_command(pocl_formosa_data_t *dd,
     return;
   }
 
-  FsaMemoryCopyCompletion completion = {};
+  FsaCompletionToken completion = 0;
   cl_int err = CL_SUCCESS;
   switch (node->type) {
     case CL_COMMAND_READ_BUFFER:
@@ -1247,8 +1247,8 @@ static void *formosa_copy_completion_thread(void *arg) {
   pocl_formosa_data_t *dd = (pocl_formosa_data_t *)arg;
   while (1) {
     formosa_pending_copy_t *finished = NULL;
-    MemoryCopyResult copy_result = kMemoryCopyResultPending;
-    MemoryCopyPollStatus poll_status = kMemoryCopyPollPending;
+    FsaCompletionResult completion_result = FSA_COMPLETION_RESULT_PENDING;
+    FsaCompletionPollStatus poll_status = kFsaCompletionPollPending;
 
     POCL_LOCK(dd->copy_lock);
     while (!dd->copy_thread_stop && dd->copy_pending == NULL)
@@ -1262,9 +1262,10 @@ static void *formosa_copy_completion_thread(void *arg) {
     POCL_UNLOCK(dd->copy_lock);
 
     if (candidate != NULL)
-      poll_status = fsa_poll_memory_copy(candidate->completion, &copy_result);
+      poll_status =
+          fsa_poll_completion(candidate->completion, &completion_result);
 
-    if (poll_status != kMemoryCopyPollPending) {
+    if (poll_status != kFsaCompletionPollPending) {
       POCL_LOCK(dd->copy_lock);
       if (dd->copy_pending == candidate) {
         dd->copy_pending = candidate->next;
@@ -1272,21 +1273,27 @@ static void *formosa_copy_completion_thread(void *arg) {
         finished = candidate;
       }
       POCL_UNLOCK(dd->copy_lock);
-      if (poll_status == kMemoryCopyPollTransportError)
+      if (poll_status == kFsaCompletionPollTransportError)
         formosa_mark_unavailable();
     }
 
     if (finished != NULL) {
-      (void)fsa_release_memory_copy_completion(finished->completion);
-      cl_int event_status = poll_status == kMemoryCopyPollSuccess
-                                ? CL_SUCCESS
-                                : formosa_memory_copy_result_to_cl(copy_result);
-      if (poll_status == kMemoryCopyPollInvalidHandle ||
-          poll_status == kMemoryCopyPollTransportError)
-        event_status = CL_DEVICE_NOT_AVAILABLE;
+      const cl_int event_status =
+          poll_status == kFsaCompletionPollTerminal
+              ? formosa_memory_completion_result_to_cl(completion_result)
+              : CL_DEVICE_NOT_AVAILABLE;
       formosa_finish_command(finished->node->sync.event.event, event_status,
                              "Event Memory Copy            ",
                              "Formosa Memory Copy");
+      if (poll_status == kFsaCompletionPollTerminal) {
+        const FsaCompletionReleaseStatus release_status =
+            fsa_release_completion(finished->completion);
+        if (release_status == kFsaCompletionReleaseTransportError)
+          formosa_mark_unavailable();
+        else if (release_status != kFsaCompletionReleaseAccepted)
+          POCL_MSG_ERR("Formosa completion release failed (%d)\n",
+                       release_status);
+      }
       POCL_MEM_FREE(finished);
 
       POCL_LOCK(dd->cq_lock);

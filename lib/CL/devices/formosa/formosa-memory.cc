@@ -1,5 +1,7 @@
 #include "formosa-memory.h"
 
+#include <unistd.h>
+
 #include "pocl-formosa-internal.h"
 #include "pocl_debug.h"
 
@@ -50,17 +52,17 @@ cl_int formosa_memory_resolve_copy_addresses(
                                                &addresses->dst_addr);
 }
 
-cl_int formosa_memory_copy_result_to_cl(MemoryCopyResult result) {
+cl_int formosa_memory_completion_result_to_cl(FsaCompletionResult result) {
   switch (result) {
-    case kMemoryCopyResultSuccess:
+    case FSA_COMPLETION_RESULT_SUCCESS:
       return CL_SUCCESS;
-    case kMemoryCopyResultOverlap:
+    case (FsaCompletionResult)kMemoryCopyResultOverlap:
       return CL_MEM_COPY_OVERLAP;
-    case kMemoryCopyResultInvalidAddress:
-    case kMemoryCopyResultInvalidRange:
-    case kMemoryCopyResultInvalidDomainPair:
+    case (FsaCompletionResult)kMemoryCopyResultInvalidAddress:
+    case (FsaCompletionResult)kMemoryCopyResultInvalidRange:
+    case (FsaCompletionResult)kMemoryCopyResultInvalidDomainPair:
       return CL_INVALID_VALUE;
-    case kMemoryCopyResultFirmwareReboot:
+    case FSA_COMPLETION_RESULT_FIRMWARE_REBOOT:
       return CL_DEVICE_NOT_AVAILABLE;
     default:
       return CL_OUT_OF_RESOURCES;
@@ -69,46 +71,65 @@ cl_int formosa_memory_copy_result_to_cl(MemoryCopyResult result) {
 
 cl_int formosa_memory_submit_copy(MemoryDomain src_domain, uint64_t src_addr,
                                   MemoryDomain dst_domain, uint64_t dst_addr,
-                                  size_t size,
-                                  FsaMemoryCopyCompletion *completion) {
+                                  size_t size, FsaCompletionToken *completion) {
   if (completion == nullptr) return CL_INVALID_VALUE;
-  *completion = (FsaMemoryCopyCompletion){};
+  *completion = 0;
   if (size == 0) return CL_SUCCESS;
   if (!fsa_hal_is_available()) {
     formosa_mark_unavailable();
     return CL_DEVICE_NOT_AVAILABLE;
   }
-  if (fsa_cmd_memory_copy(src_domain, src_addr, dst_domain, dst_addr, size,
-                          completion) != 0) {
+  FsaCompletionSubmitStatus submit_status;
+  do {
+    submit_status = fsa_cmd_memory_copy(src_domain, src_addr, dst_domain,
+                                        dst_addr, size, completion);
+    if (submit_status != kFsaCompletionSubmitWouldBlock) break;
     if (!fsa_hal_is_available()) {
       formosa_mark_unavailable();
       return CL_DEVICE_NOT_AVAILABLE;
     }
-    return CL_OUT_OF_RESOURCES;
+    usleep(1000);
+  } while (true);
+
+  switch (submit_status) {
+    case kFsaCompletionSubmitAccepted:
+      return CL_SUCCESS;
+    case kFsaCompletionSubmitInvalidArgument:
+      return CL_INVALID_VALUE;
+    case kFsaCompletionSubmitTransportError:
+      /* Token may remain owned after ambiguous wr_ptr publish; session
+       * fail-stop reclaims via reset/uninit rather than caller release. */
+      formosa_mark_unavailable();
+      return CL_DEVICE_NOT_AVAILABLE;
+    case kFsaCompletionSubmitWouldBlock:
+      break;
   }
-  return CL_SUCCESS;
+  return CL_OUT_OF_RESOURCES;
 }
 
 cl_int formosa_memory_copy(MemoryDomain src_domain, uint64_t src_addr,
                            MemoryDomain dst_domain, uint64_t dst_addr,
                            size_t size) {
-  FsaMemoryCopyCompletion completion = {};
+  FsaCompletionToken completion = 0;
   cl_int submit_status = formosa_memory_submit_copy(
       src_domain, src_addr, dst_domain, dst_addr, size, &completion);
   if (submit_status != CL_SUCCESS) return submit_status;
   if (size == 0) return CL_SUCCESS;
 
-  MemoryCopyResult result = kMemoryCopyResultPending;
-  const int wait_status = fsa_wait_for_memory_copy(completion, 0, &result);
-  if (wait_status == kMemoryCopyPollSuccess) return CL_SUCCESS;
-
-  if (wait_status == kMemoryCopyPollTransportError) {
+  FsaCompletionResult result = FSA_COMPLETION_RESULT_PENDING;
+  const FsaCompletionWaitStatus wait_status =
+      fsa_wait_completion(completion, 0, &result);
+  if (wait_status == kFsaCompletionWaitTransportError) {
     /* Transport failure makes the device unavailable for this session. */
     formosa_mark_unavailable();
     return CL_DEVICE_NOT_AVAILABLE;
   }
 
+  if (wait_status != kFsaCompletionWaitSuccess) return CL_OUT_OF_RESOURCES;
+
+  if (result == FSA_COMPLETION_RESULT_SUCCESS) return CL_SUCCESS;
+
   POCL_MSG_ERR("Formosa memory copy failed (wait=%d, result=%d)\n", wait_status,
                (int)result);
-  return formosa_memory_copy_result_to_cl(result);
+  return formosa_memory_completion_result_to_cl(result);
 }
