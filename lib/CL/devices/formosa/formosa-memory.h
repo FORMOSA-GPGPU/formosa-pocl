@@ -41,8 +41,8 @@ cl_int formosa_memory_copy(MemoryDomain src_domain, uint64_t src_addr,
                            MemoryDomain dst_domain, uint64_t dst_addr,
                            size_t size);
 
-/* Convert a terminal memory-copy completion result to an OpenCL status. */
-cl_int formosa_memory_copy_result_to_cl(FsaCompletionResult result);
+/* Convert a terminal memory-copy Completion Outcome to an OpenCL status. */
+cl_int formosa_memory_copy_outcome_to_cl(FsaCompletionResult outcome);
 
 #ifdef __cplusplus
 }

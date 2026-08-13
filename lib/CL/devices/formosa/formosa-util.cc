@@ -13,6 +13,7 @@
 #include "formosa-hal/formosa-hal.h"
 #include "formosa-llvm-util.h"
 #include "formosa-real/formosa-config.h"
+#include "pocl-formosa-internal.h"
 #include "pocl.h"
 #include "pocl_cache.h"
 #include "pocl_debug.h"
@@ -313,20 +314,45 @@ FAIL:
   return -1;
 }
 
+FsaCompletionSubmitStatus pocl_fsa_submit_with_backpressure(
+    pocl_fsa_submit_fn submit, void *context, FsaCompletionToken *token) {
+  if (submit == nullptr || token == nullptr)
+    return kFsaCompletionSubmitInvalidArgument;
+  *token = 0;
+  while (true) {
+    const FsaCompletionSubmitStatus status = submit(context, token);
+    if (status != kFsaCompletionSubmitWouldBlock) return status;
+    if (!fsa_hal_is_available()) {
+      formosa_mark_unavailable();
+      return kFsaCompletionSubmitTransportError;
+    }
+    usleep(1000);
+  }
+}
+
+cl_int pocl_fsa_wait_completion_result(FsaCompletionToken token,
+                                       FsaCompletionResult *result) {
+  if (token == 0) return CL_FAILED;
+  FsaCompletionResult ignored_result = FSA_COMPLETION_RESULT_PENDING;
+  if (result == nullptr) result = &ignored_result;
+  const FsaCompletionWaitStatus wait_status =
+      fsa_wait_completion(token, 0, result);
+  if (wait_status == kFsaCompletionWaitTransportError ||
+      *result == FSA_COMPLETION_RESULT_FIRMWARE_REBOOT) {
+    formosa_mark_unavailable();
+    return CL_DEVICE_NOT_AVAILABLE;
+  }
+  return wait_status == kFsaCompletionWaitSuccess ? CL_SUCCESS : CL_FAILED;
+}
+
 cl_int pocl_fsa_wait_completion(FsaCompletionToken token,
                                 uintptr_t device_kernel_status_addr) {
-  if (token == 0) return CL_FAILED;
   FsaCompletionResult result = FSA_COMPLETION_RESULT_PENDING;
-  const FsaCompletionWaitStatus wait_status =
-      fsa_wait_completion(token, 0, &result);
-  if (wait_status == kFsaCompletionWaitTransportError ||
-      result == FSA_COMPLETION_RESULT_FIRMWARE_REBOOT)
-    return CL_DEVICE_NOT_AVAILABLE;
-  if (wait_status != kFsaCompletionWaitSuccess ||
-      result != FSA_COMPLETION_RESULT_SUCCESS)
-    return CL_FAILED;
+  const cl_int wait_status = pocl_fsa_wait_completion_result(token, &result);
+  if (wait_status != CL_SUCCESS) return wait_status;
 
-  if (device_kernel_status_addr == 0) return CL_SUCCESS;
+  if (device_kernel_status_addr == 0)
+    return result == FSA_COMPLETION_RESULT_SUCCESS ? CL_SUCCESS : CL_FAILED;
 
   uint8_t status_raw[sizeof(KernelStatus)];
   int err = fsa_copy_from_dev(device_kernel_status_addr, status_raw,
@@ -364,6 +390,7 @@ cl_int pocl_fsa_wait_completion(FsaCompletionToken token,
           status.mcause, status.mepc, status.mtval);
   }
 
+  if (result != FSA_COMPLETION_RESULT_SUCCESS) return CL_FAILED;
   return status.code == kKernelOkay ? CL_SUCCESS : CL_FAILED;
 }
 

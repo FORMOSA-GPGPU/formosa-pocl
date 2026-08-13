@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "formosa-hal/formosa-graph.h"
 #include "formosa-hal/formosa-hal.h"
@@ -18,6 +17,26 @@
 #define FORMOSA_WG_EXTRA_DISPATCH_SLOTS 4
 #define FORMOSA_WG_MAX_DISPATCH_SLOTS 64
 #define FORMOSA_WG_DEFAULT_QUEUE_CAPACITY 16
+
+typedef struct {
+  uint16_t graph_flags;
+  uint32_t root_count;
+  uintptr_t graph_descriptor;
+  uintptr_t graph_runtime;
+  uintptr_t graph_status;
+  uintptr_t root_input_descriptor;
+  uintptr_t root_input_data;
+} formosa_graph_submit_args_t;
+
+static FsaCompletionSubmitStatus formosa_submit_graph(
+    void *context, FsaCompletionToken *token) {
+  const formosa_graph_submit_args_t *args =
+      (const formosa_graph_submit_args_t *)context;
+  return fsa_cmd_launch_graph(args->graph_flags, args->root_count,
+                              args->graph_descriptor, args->graph_runtime,
+                              args->graph_status, args->root_input_descriptor,
+                              args->root_input_data, token);
+}
 
 static inline uint64_t pocl_formosa_align(uint64_t n, size_t size) {
   return (n + size - 1) & ~(size - 1);
@@ -1047,37 +1066,33 @@ cl_int pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
   /* Launch + synchronous wait on shared Completion Token. */
   err = CL_SUCCESS;
   FsaCompletionToken token = 0;
-  FsaCompletionSubmitStatus submit_status;
-  do {
-    submit_status = fsa_cmd_launch_graph(
-        0, num_root_inputs, bg->dev_graph_desc, bg->dev_runtime_pool,
-        bg->dev_graph_status, dev_root_desc,
-        rid.records_addr + rid.records_offset, &token);
-    if (submit_status != kFsaCompletionSubmitWouldBlock) break;
-    if (!fsa_hal_is_available()) {
-      formosa_mark_unavailable();
-      submit_status = kFsaCompletionSubmitTransportError;
-      break;
-    }
-    usleep(1000);
-  } while (1);
+  const formosa_graph_submit_args_t submit_args = {
+      0,
+      num_root_inputs,
+      bg->dev_graph_desc,
+      bg->dev_runtime_pool,
+      bg->dev_graph_status,
+      dev_root_desc,
+      rid.records_addr + rid.records_offset};
+  const FsaCompletionSubmitStatus submit_status =
+      pocl_fsa_submit_with_backpressure(formosa_submit_graph,
+                                        (void *)&submit_args, &token);
 
   if (submit_status != kFsaCompletionSubmitAccepted) {
     POCL_MSG_ERR("formosa: graph launch failed\n");
-    if (submit_status == kFsaCompletionSubmitTransportError) {
+    if (submit_status == kFsaCompletionSubmitTransportError &&
+        !fsa_hal_is_available()) {
       formosa_mark_unavailable();
       err = CL_DEVICE_NOT_AVAILABLE;
+    } else if (submit_status == kFsaCompletionSubmitTransportError) {
+      err = CL_OUT_OF_RESOURCES;
     }
   } else {
     FsaCompletionResult result = FSA_COMPLETION_RESULT_PENDING;
-    const FsaCompletionWaitStatus wait_status =
-        fsa_wait_completion(token, 0, &result);
-    if (wait_status != kFsaCompletionWaitSuccess ||
-        result != FSA_COMPLETION_RESULT_SUCCESS) {
+    const cl_int wait_status = pocl_fsa_wait_completion_result(token, &result);
+    if (wait_status != CL_SUCCESS || result != FSA_COMPLETION_RESULT_SUCCESS) {
       POCL_MSG_ERR("formosa: graph completion wait failed\n");
-      if (wait_status == kFsaCompletionWaitTransportError ||
-          result == FSA_COMPLETION_RESULT_FIRMWARE_REBOOT) {
-        formosa_mark_unavailable();
+      if (wait_status == CL_DEVICE_NOT_AVAILABLE) {
         err = CL_DEVICE_NOT_AVAILABLE;
       } else {
         err = CL_OUT_OF_RESOURCES;
