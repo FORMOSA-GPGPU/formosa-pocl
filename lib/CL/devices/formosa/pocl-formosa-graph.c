@@ -28,7 +28,7 @@ typedef struct {
   uintptr_t root_input_data;
 } formosa_graph_submit_args_t;
 
-static FsaCompletionSubmitStatus formosa_submit_graph(
+static FsaCommandSubmitStatus formosa_submit_graph(
     void *context, FsaCompletionToken *token) {
   const formosa_graph_submit_args_t *args =
       (const formosa_graph_submit_args_t *)context;
@@ -1074,17 +1074,17 @@ cl_int pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
       bg->dev_graph_status,
       dev_root_desc,
       rid.records_addr + rid.records_offset};
-  const FsaCompletionSubmitStatus submit_status =
+  const FsaCommandSubmitStatus submit_status =
       pocl_fsa_submit_with_backpressure(formosa_submit_graph,
                                         (void *)&submit_args, &token);
 
-  if (submit_status != kFsaCompletionSubmitAccepted) {
+  if (submit_status != kFsaCommandSubmitAccepted) {
     POCL_MSG_ERR("formosa: graph launch failed\n");
-    if (submit_status == kFsaCompletionSubmitTransportError &&
+    if (submit_status == kFsaCommandSubmitTransportError &&
         !fsa_hal_is_available()) {
       formosa_mark_unavailable();
       err = CL_DEVICE_NOT_AVAILABLE;
-    } else if (submit_status == kFsaCompletionSubmitTransportError) {
+    } else if (submit_status == kFsaCommandSubmitTransportError) {
       err = CL_OUT_OF_RESOURCES;
     }
   } else {

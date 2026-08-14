@@ -314,17 +314,17 @@ FAIL:
   return -1;
 }
 
-FsaCompletionSubmitStatus pocl_fsa_submit_with_backpressure(
+FsaCommandSubmitStatus pocl_fsa_submit_with_backpressure(
     pocl_fsa_submit_fn submit, void *context, FsaCompletionToken *token) {
   if (submit == nullptr || token == nullptr)
-    return kFsaCompletionSubmitInvalidArgument;
+    return kFsaCommandSubmitInvalidArgument;
   *token = 0;
   while (true) {
-    const FsaCompletionSubmitStatus status = submit(context, token);
-    if (status != kFsaCompletionSubmitWouldBlock) return status;
+    const FsaCommandSubmitStatus status = submit(context, token);
+    if (status != kFsaCommandSubmitWouldBlock) return status;
     if (!fsa_hal_is_available()) {
       formosa_mark_unavailable();
-      return kFsaCompletionSubmitTransportError;
+      return kFsaCommandSubmitTransportError;
     }
     usleep(1000);
   }

@@ -19,10 +19,10 @@ int pocl_fsa_get_elf_name(cl_program program, cl_uint device_i, char *elf_name);
 
 int pocl_fsa_upload_kernel(const char *elf_file, uint64_t *kernel_dev_addr);
 
-typedef FsaCompletionSubmitStatus (*pocl_fsa_submit_fn)(
+typedef FsaCommandSubmitStatus (*pocl_fsa_submit_fn)(
     void *context, FsaCompletionToken *token);
 
-FsaCompletionSubmitStatus pocl_fsa_submit_with_backpressure(
+FsaCommandSubmitStatus pocl_fsa_submit_with_backpressure(
     pocl_fsa_submit_fn submit, void *context, FsaCompletionToken *token);
 
 /* Wait for a terminal Completion Outcome and release its slot.  A terminal

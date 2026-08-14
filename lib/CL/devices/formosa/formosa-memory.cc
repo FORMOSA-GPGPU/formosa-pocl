@@ -14,7 +14,7 @@ struct MemoryCopySubmitArgs {
   size_t size;
 };
 
-FsaCompletionSubmitStatus submit_memory_copy(void *context,
+FsaCommandSubmitStatus submit_memory_copy(void *context,
                                              FsaCompletionToken *token) {
   const MemoryCopySubmitArgs *args =
       static_cast<const MemoryCopySubmitArgs *>(context);
@@ -96,16 +96,16 @@ cl_int formosa_memory_submit_copy(MemoryDomain src_domain, uint64_t src_addr,
   }
   const MemoryCopySubmitArgs args = {src_domain, src_addr, dst_domain, dst_addr,
                                      size};
-  const FsaCompletionSubmitStatus submit_status =
+  const FsaCommandSubmitStatus submit_status =
       pocl_fsa_submit_with_backpressure(submit_memory_copy, (void *)&args,
                                         token);
 
   switch (submit_status) {
-    case kFsaCompletionSubmitAccepted:
+    case kFsaCommandSubmitAccepted:
       return CL_SUCCESS;
-    case kFsaCompletionSubmitInvalidArgument:
+    case kFsaCommandSubmitInvalidArgument:
       return CL_INVALID_VALUE;
-    case kFsaCompletionSubmitTransportError:
+    case kFsaCommandSubmitTransportError:
       if (!fsa_hal_is_available()) {
         /* Token may remain owned after ambiguous wr_ptr publish; session
          * fail-stop reclaims via reset/uninit rather than caller release. */

@@ -61,7 +61,7 @@ typedef struct {
   uintptr_t kernel_status;
 } formosa_kernel_submit_args_t;
 
-static FsaCompletionSubmitStatus formosa_submit_kernel(
+static FsaCommandSubmitStatus formosa_submit_kernel(
     void *context, FsaCompletionToken *token) {
   const formosa_kernel_submit_args_t *args =
       (const formosa_kernel_submit_args_t *)context;
@@ -691,11 +691,11 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
       (uintptr_t)device_args_buffer_addr,
       (uintptr_t)trampoline_pc,
       (uintptr_t)device_kernel_status_addr};
-  const FsaCompletionSubmitStatus submit_status =
+  const FsaCommandSubmitStatus submit_status =
       pocl_fsa_submit_with_backpressure(formosa_submit_kernel,
                                         (void *)&submit_args, &token);
 
-  if (submit_status != kFsaCompletionSubmitAccepted) {
+  if (submit_status != kFsaCommandSubmitAccepted) {
     POCL_MSG_ERR("pocl_formosa_run: kernel launch failed\n");
     errcode = formosa_hal_error(CL_OUT_OF_RESOURCES);
     goto FAIL;
