@@ -899,7 +899,7 @@ struct pocl_device_ops {
   void (*run_native) (void *data, _cl_command_node *cmd);
 
   /* For clEnqueueWorkGraphLaunchFORMOSA. May be NULL. */
-  void (*run_work_graph_formosa)(void *data, _cl_command_node *cmd);
+  cl_int (*run_work_graph_formosa)(void *data, _cl_command_node *cmd);
   /** Perform initialization steps and can return additional
    * build options that are required for the device.
    *

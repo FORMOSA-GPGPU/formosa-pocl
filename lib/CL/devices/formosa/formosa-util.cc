@@ -13,6 +13,7 @@
 #include "formosa-hal/formosa-hal.h"
 #include "formosa-llvm-util.h"
 #include "formosa-real/formosa-config.h"
+#include "pocl-formosa-internal.h"
 #include "pocl.h"
 #include "pocl_cache.h"
 #include "pocl_debug.h"
@@ -313,23 +314,52 @@ FAIL:
   return -1;
 }
 
-int pocl_fsa_wait_ack(uintptr_t completion_signal,
-                      uintptr_t device_kernel_status_addr) {
-  if (completion_signal == 0) return -1;
-  // polling the completion_signal until it is set to non-zero value
-  const int wait_status =
-      fsa_wait_for_completion(completion_signal, 0);  // blocking wait
-  if (wait_status != 0) return wait_status;
+FsaCommandSubmitStatus pocl_fsa_submit_with_backpressure(
+    pocl_fsa_submit_fn submit, void *context, FsaCompletionToken *token) {
+  if (submit == nullptr || token == nullptr)
+    return kFsaCommandSubmitInvalidArgument;
+  *token = 0;
+  while (true) {
+    const FsaCommandSubmitStatus status = submit(context, token);
+    if (status != kFsaCommandSubmitWouldBlock) return status;
+    if (!fsa_hal_is_available()) {
+      formosa_mark_unavailable();
+      return kFsaCommandSubmitTransportError;
+    }
+    usleep(1000);
+  }
+}
 
-  /* Graph launch may not provide a KernelStatus buffer. */
-  if (device_kernel_status_addr == 0) return 0;
+cl_int pocl_fsa_wait_completion_result(FsaCompletionToken token,
+                                       FsaCompletionResult *result) {
+  if (token == 0) return CL_FAILED;
+  FsaCompletionResult ignored_result = FSA_COMPLETION_RESULT_PENDING;
+  if (result == nullptr) result = &ignored_result;
+  const FsaCompletionWaitStatus wait_status =
+      fsa_wait_completion(token, 0, result);
+  if (wait_status == kFsaCompletionWaitTransportError ||
+      *result == FSA_COMPLETION_RESULT_FIRMWARE_REBOOT) {
+    formosa_mark_unavailable();
+    return CL_DEVICE_NOT_AVAILABLE;
+  }
+  return wait_status == kFsaCompletionWaitSuccess ? CL_SUCCESS : CL_FAILED;
+}
+
+cl_int pocl_fsa_wait_completion(FsaCompletionToken token,
+                                uintptr_t device_kernel_status_addr) {
+  FsaCompletionResult result = FSA_COMPLETION_RESULT_PENDING;
+  const cl_int wait_status = pocl_fsa_wait_completion_result(token, &result);
+  if (wait_status != CL_SUCCESS) return wait_status;
+
+  if (device_kernel_status_addr == 0)
+    return result == FSA_COMPLETION_RESULT_SUCCESS ? CL_SUCCESS : CL_FAILED;
 
   uint8_t status_raw[sizeof(KernelStatus)];
   int err = fsa_copy_from_dev(device_kernel_status_addr, status_raw,
                               sizeof(status_raw));
   if (err != 0) {
     POCL_MSG_ERR("Failed to read kernel status from device (%d)\n", err);
-    return -1;
+    return fsa_hal_is_available() ? CL_FAILED : CL_DEVICE_NOT_AVAILABLE;
   }
 
   KernelStatus status;
@@ -360,7 +390,8 @@ int pocl_fsa_wait_ack(uintptr_t completion_signal,
           status.mcause, status.mepc, status.mtval);
   }
 
-  return (status.code == kKernelOkay) ? 0 : -1;
+  if (result != FSA_COMPLETION_RESULT_SUCCESS) return CL_FAILED;
+  return status.code == kKernelOkay ? CL_SUCCESS : CL_FAILED;
 }
 
 static int exec(const char *cmd, std::ostream &out) {

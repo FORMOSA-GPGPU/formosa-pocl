@@ -34,16 +34,15 @@ cl_int formosa_memory_resolve_copy_addresses(
 /* Submit an asynchronous copy through the Formosa firmware command stream. */
 cl_int formosa_memory_submit_copy(MemoryDomain src_domain, uint64_t src_addr,
                                   MemoryDomain dst_domain, uint64_t dst_addr,
-                                  size_t size,
-                                  FsaMemoryCopyCompletion *completion);
+                                  size_t size, FsaCompletionToken *token);
 
 /* Submit and wait for a copy, returning the corresponding OpenCL error. */
 cl_int formosa_memory_copy(MemoryDomain src_domain, uint64_t src_addr,
                            MemoryDomain dst_domain, uint64_t dst_addr,
                            size_t size);
 
-/* Convert a HAL copy result to an OpenCL status for asynchronous callers. */
-cl_int formosa_memory_copy_result_to_cl(MemoryCopyResult result);
+/* Convert a terminal memory-copy Completion Outcome to an OpenCL status. */
+cl_int formosa_memory_copy_outcome_to_cl(FsaCompletionResult outcome);
 
 #ifdef __cplusplus
 }
