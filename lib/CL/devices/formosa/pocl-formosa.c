@@ -61,8 +61,8 @@ typedef struct {
   uintptr_t kernel_status;
 } formosa_kernel_submit_args_t;
 
-static FsaCommandSubmitStatus formosa_submit_kernel(
-    void *context, FsaCompletionToken *token) {
+static FsaCommandSubmitStatus formosa_submit_kernel(void *context,
+                                                    FsaCompletionToken *token) {
   const formosa_kernel_submit_args_t *args =
       (const formosa_kernel_submit_args_t *)context;
   return fsa_cmd_start_kernel(args->dispatch_flags, args->local_sizes,
@@ -251,6 +251,7 @@ char *pocl_formosa_build_hash(cl_device_id device) {
 cl_int pocl_formosa_init(unsigned j, cl_device_id device,
                          const char *parameters) {
   pocl_formosa_data_t *dd;
+  FsaDeviceDescription description = {};
 
   assert(device->data == NULL);
 
@@ -302,23 +303,6 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   device->supported_spirv_extensions = "+SPV_KHR_no_integer_wrap_decoration";
 #endif
 
-  size_t num_warps = fsa_warps_per_core();
-  size_t num_threads = fsa_threads_per_warp();
-  uint64_t max_work_group_size = num_warps * num_threads;
-
-  device->global_mem_cache_type = CL_READ_WRITE_CACHE;
-  device->global_mem_cacheline_size = fsa_cache_block_size();
-  device->global_mem_cache_size = fsa_cache_size();
-  device->global_mem_size = fsa_global_mem_size();
-  device->max_mem_alloc_size = fsa_global_mem_size();
-  device->local_mem_size = fsa_local_mem_size();
-  device->max_work_group_size = max_work_group_size;
-  device->max_work_item_sizes[0] = max_work_group_size;
-  device->max_work_item_sizes[1] = max_work_group_size;
-  device->max_work_item_sizes[2] = max_work_group_size;
-  device->max_compute_units = 1;
-  device->mem_base_addr_align = 128;  // TODO: determine this
-
   pocl_setup_extensions_with_version(device);
   pocl_setup_ils_with_version(device);
   pocl_setup_builtin_kernels_with_version(device);
@@ -337,7 +321,7 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   dd->kernel_buffer = NULL;
   formosa_available = CL_TRUE;
 
-  int err = fsa_hal_init();
+  int err = fsa_hal_init(&description);
   if (err != 0) {
     formosa_available = CL_FALSE;
     POCL_DESTROY_LOCK(dd->compile_lock);
@@ -349,6 +333,21 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
     POCL_MSG_ERR("pocl_formosa_init: HAL initialization failed (%d)\n", err);
     return CL_DEVICE_NOT_AVAILABLE;
   }
+
+  const size_t max_work_group_size =
+      (size_t)description.max_threads_per_work_group;
+  device->global_mem_cache_type = CL_READ_WRITE_CACHE;
+  device->global_mem_cacheline_size = description.cache_line_size;
+  device->global_mem_cache_size = description.cache_size;
+  device->global_mem_size = description.global_mem_size;
+  device->max_mem_alloc_size = description.max_allocation_size;
+  device->local_mem_size = description.local_mem_size_per_core;
+  device->max_work_group_size = max_work_group_size;
+  device->max_work_item_sizes[0] = max_work_group_size;
+  device->max_work_item_sizes[1] = max_work_group_size;
+  device->max_work_item_sizes[2] = max_work_group_size;
+  device->max_compute_units = description.num_cores;
+  device->mem_base_addr_align = 128;  // TODO: determine this
 
   dd->copy_thread_stop = CL_FALSE;
   dd->copy_thread_started = CL_TRUE;
@@ -462,15 +461,15 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
 
   // check occupancy
   uint64_t available_local_mem = 0;
-  err = pocl_fsa_check_occupancy(group_size, local_mem_size,
-                                 &available_local_mem);
+  err =
+      fsa_hal_check_occupancy(group_size, local_mem_size, &available_local_mem);
   if (err != 0) {
     POCL_MSG_ERR(
         "pocl_formosa_run: occupancy check failed "
         "(group_size=%" PRIu32 ", local_mem_size=%" PRIu64
         ", available_local_mem=%" PRIu64 ")\n",
         group_size, local_mem_size, available_local_mem);
-    errcode = CL_INVALID_WORK_GROUP_SIZE;
+    errcode = formosa_hal_error(CL_INVALID_WORK_GROUP_SIZE);
     goto FAIL;
   }
 
