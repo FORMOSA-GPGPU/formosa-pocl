@@ -1,7 +1,6 @@
 #include "formosa-util.h"
 
 #include <elf.h>
-#include <inttypes.h>
 #include <unistd.h>
 
 #include <iostream>
@@ -12,7 +11,6 @@
 
 #include "formosa-hal/formosa-hal.h"
 #include "formosa-llvm-util.h"
-#include "formosa-real/formosa-config.h"
 #include "pocl-formosa-internal.h"
 #include "pocl.h"
 #include "pocl_cache.h"
@@ -106,73 +104,6 @@ int apply_kernel_relocations(FILE *elf, const Elf64_Ehdr &ehdr,
   return 0;
 }
 }  // namespace
-
-int pocl_fsa_check_occupancy(uint32_t group_size, uint64_t local_mem_per_group,
-                             uint64_t *max_local_mem) {
-  // Hardware limits
-  uint32_t warps_per_core = fsa_warps_per_core();
-  uint32_t threads_per_warp = fsa_threads_per_warp();
-  uint32_t threads_per_core = warps_per_core * threads_per_warp;
-  uint64_t local_mem_size = fsa_local_mem_size();
-
-  // Sanity check
-  if (group_size == 0) {
-    POCL_MSG_ERR("group_size must be > 0\n");
-    return -1;
-  }
-
-  // Check thread capacity
-  if (group_size > threads_per_core) {
-    POCL_MSG_ERR(
-        "Cannot schedule kernel: group_size (%u) > threads_per_core (%u)\n",
-        group_size, threads_per_core);
-    return -1;
-  }
-
-  // --- Thread-based occupancy ---
-  // ceil(group_size / threads_per_warp)
-  uint32_t warps_per_group =
-      (group_size + threads_per_warp - 1) / threads_per_warp;
-
-  // max groups limited by warp slots
-  uint32_t groups_by_threads = warps_per_core / warps_per_group;
-
-  if (groups_by_threads == 0) {
-    POCL_MSG_ERR("No available slots due to warp/thread constraint\n");
-    return -1;
-  }
-
-  // --- Local memory-based occupancy ---
-  uint32_t groups_by_local_mem;
-
-  if (local_mem_per_group == 0) {
-    // no local memory usage, not a limiting factor
-    groups_by_local_mem = groups_by_threads;
-  } else {
-    if (local_mem_per_group > local_mem_size) {
-      POCL_MSG_ERR("Cannot schedule kernel: local_mem_per_group (%" PRIu64
-                   ") > local_mem_size (%" PRIu64 ")\n",
-                   local_mem_per_group, local_mem_size);
-      return -1;
-    }
-
-    groups_by_local_mem = local_mem_size / local_mem_per_group;
-  }
-
-  // --- Final occupancy (take the bottleneck) ---
-  if (std::min(groups_by_threads, groups_by_local_mem) == 0) {
-    POCL_MSG_ERR("Kernel cannot have any resident workgroups per core\n");
-    return -1;
-  }
-
-  // Output: max local memory per WG to preserve thread-based occupancy
-  if (max_local_mem) {
-    // evenly distribute local memory across thread-limited WG slots
-    *max_local_mem = local_mem_size / groups_by_threads;
-  }
-
-  return 0;
-}
 
 int pocl_fsa_get_elf_name(cl_program program, cl_uint device_i,
                           char *elf_name) {
