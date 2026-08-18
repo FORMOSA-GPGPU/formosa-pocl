@@ -34,8 +34,6 @@ int pocl_fsa_compile_program(char **kernel_names, int *num_kernels,
                              char *str_program_fsa_bin, char *compiler_options,
                              void *llvm_module);
 
-#define FSA_TASK_DISPATCHER_BASE 0x1000
-
 #ifdef __cplusplus
 }
 #endif
