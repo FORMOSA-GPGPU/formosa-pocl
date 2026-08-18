@@ -3,7 +3,7 @@
 
 #include "../wg_info.h"
 
-/* Keep this ABI mirror in sync with formosa-hal/formosa-graph.h. */
+/* Keep this ABI mirror in sync with formosa-hal/graph.h. */
 struct WorkGraphNodeContext {
   uint32_t node_id;
   uint32_t launch_mode;

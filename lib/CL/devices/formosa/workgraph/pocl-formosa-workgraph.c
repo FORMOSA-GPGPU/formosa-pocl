@@ -4,8 +4,8 @@
 #include <string.h>
 
 #include "pocl-formosa-workgraph.h"
-#include "formosa-hal/formosa-graph.h"
-#include "formosa-hal/formosa-hal.h"
+#include "formosa-hal/graph.h"
+#include "formosa-hal/hal.h"
 #include "../formosa-llvm-util.h"
 #include "../formosa-util.h"
 #include "../pocl-formosa-internal.h"
