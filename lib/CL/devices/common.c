@@ -673,19 +673,6 @@ pocl_exec_command (_cl_command_node *node)
       POCL_UPDATE_EVENT_COMPLETE_MSG (event, "Event Enqueue NDRange       ");
       break;
 
-    case CL_COMMAND_GRAPH_LAUNCH_FORMOSA:
-      pocl_update_event_running (event);
-      assert(dev->ops->run_work_graph_formosa);
-      {
-        cl_int err = dev->ops->run_work_graph_formosa (dev->data, node);
-        if (err != CL_SUCCESS)
-          POCL_UPDATE_EVENT_FAILED_MSG (err, event, "Formosa WorkGraph");
-        else
-          POCL_UPDATE_EVENT_COMPLETE_MSG (event,
-                                          "Event FSA Graph Launch      ");
-      }
-      break;
-
     case CL_COMMAND_NATIVE_KERNEL:
       pocl_update_event_running (event);
       assert (dev->ops->run_native);
@@ -827,8 +814,20 @@ pocl_exec_command (_cl_command_node *node)
 
     default:
       pocl_update_event_running (event);
-      POCL_UPDATE_EVENT_FAILED_MSG (
-        CL_FAILED, event, "pocl_exec_command: Unknown command type\n");
+      if (node->is_extension && cmd->extension.run != NULL)
+        {
+          cl_int err = cmd->extension.run (dev->data, node);
+          const char *name = cmd->extension.event_name != NULL
+                               ? cmd->extension.event_name
+                               : "Device extension command";
+          if (err != CL_SUCCESS)
+            POCL_UPDATE_EVENT_FAILED_MSG (err, event, name);
+          else
+            POCL_UPDATE_EVENT_COMPLETE_MSG (event, name);
+        }
+      else
+        POCL_UPDATE_EVENT_FAILED_MSG (
+          CL_FAILED, event, "pocl_exec_command: Unknown command type\n");
       break;
     }
 }

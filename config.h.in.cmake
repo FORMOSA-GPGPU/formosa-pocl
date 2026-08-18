@@ -6,6 +6,7 @@
 #cmakedefine BUILD_HSA
 #cmakedefine BUILD_CUDA
 #cmakedefine BUILD_FORMOSA
+#cmakedefine ENABLE_FORMOSA_WORKGRAPH
 #cmakedefine BUILD_BASIC
 #cmakedefine BUILD_TBB
 #cmakedefine BUILD_PTHREAD

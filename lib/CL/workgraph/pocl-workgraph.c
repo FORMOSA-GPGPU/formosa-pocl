@@ -1,5 +1,4 @@
-#include "CL/cl_formosa_work_graph.h"
-#include "pocl_cl.h"
+#include "pocl-workgraph-private.h"
 #include "pocl_mem_management.h"
 #include "pocl_shared.h"
 #include "pocl_util.h"
@@ -14,8 +13,11 @@ CL_API_ENTRY cl_work_graph_formosa CL_API_CALL POname(clCreateWorkGraphFORMOSA)(
   POCL_GOTO_ERROR_COND((!IS_CL_OBJECT_VALID(context)), CL_INVALID_CONTEXT);
   POCL_GOTO_ERROR_COND((device == NULL), CL_INVALID_DEVICE);
 
-  if (device->ops->work_graph_formosa_ops == NULL ||
-      device->ops->work_graph_formosa_ops->create_graph == NULL) {
+  const struct pocl_work_graph_backend_ops *ops = NULL;
+  if (device->ops->get_extension_ops != NULL)
+    ops = (const struct pocl_work_graph_backend_ops *)
+      device->ops->get_extension_ops (CL_FORMOSA_WORK_GRAPH_EXTENSION_NAME);
+  if (ops == NULL || ops->create_graph == NULL) {
     errcode = CL_INVALID_OPERATION;
     goto ERROR;
   }
@@ -30,7 +32,7 @@ CL_API_ENTRY cl_work_graph_formosa CL_API_CALL POname(clCreateWorkGraphFORMOSA)(
   POCL_INIT_OBJECT(graph, context);
   graph->context = context;
   graph->device = device;
-  graph->ops = device->ops->work_graph_formosa_ops;
+  graph->ops = ops;
 
   POname(clRetainContext)(context);
 
@@ -79,7 +81,9 @@ POsym(clCreateWorkGraphFORMOSA)
     goto ERROR;
   }
 
+#ifdef BUILD_ICD
   POCL_INIT_ICD_OBJECT(node, graph);
+#endif
   node->graph = graph;
   node->kernel = kernel;
   node->node_id = node_id;
@@ -147,7 +151,9 @@ POsym(clCreateWorkGraphKernelNodeFORMOSA)
     goto ERROR;
   }
 
+#ifdef BUILD_ICD
   POCL_INIT_ICD_OBJECT(edge, graph);
+#endif
   edge->graph = graph;
   edge->src_node = src_node;
   edge->dst_node = dst_node;
@@ -185,6 +191,26 @@ POsym(clCreateWorkGraphEdgeFORMOSA)
   return CL_SUCCESS;
 }
 POsym(clRetainWorkGraphFORMOSA)
+
+static void
+pocl_work_graph_launch_cleanup (void *data)
+{
+  struct pocl_work_graph_launch *launch =
+    (struct pocl_work_graph_launch *)data;
+  if (launch == NULL)
+    return;
+
+  if (launch->graph != NULL)
+    pocl_formosa_release_work_graph (launch->graph);
+  if (launch->root_inputs != NULL)
+    {
+      for (cl_uint i = 0; i < launch->num_root_inputs; ++i)
+        if (launch->root_inputs[i].records != NULL)
+          POname(clReleaseMemObject) (launch->root_inputs[i].records);
+      free (launch->root_inputs);
+    }
+  free (launch);
+}
 
     static cl_int pocl_work_graph_formosa_collect_mem_objs(
         cl_device_id realdev, cl_context context, cl_work_graph_formosa graph,
@@ -253,7 +279,7 @@ CL_API_ENTRY cl_int CL_API_CALL POname(clEnqueueWorkGraphLaunchFORMOSA)(
   if (errcode != CL_SUCCESS)
     return errcode;
 
-  if (command_queue->device->ops->run_work_graph_formosa == NULL) {
+  if (graph->ops->run == NULL) {
     return CL_INVALID_OPERATION;
   }
 
@@ -277,8 +303,18 @@ CL_API_ENTRY cl_int CL_API_CALL POname(clEnqueueWorkGraphLaunchFORMOSA)(
     return errcode;
   }
 
-  _cl_command_work_graph_launch_formosa *work_graph_launch =
-      &cmd->command.work_graph_launch_formosa;
+  cmd->command.extension.run = graph->ops->run;
+  cmd->command.extension.cleanup = pocl_work_graph_launch_cleanup;
+  cmd->command.extension.event_name = "Formosa WorkGraph";
+  cmd->is_extension = CL_TRUE;
+
+  struct pocl_work_graph_launch *work_graph_launch =
+      (struct pocl_work_graph_launch *)calloc (1, sizeof (*work_graph_launch));
+  if (work_graph_launch == NULL) {
+    errcode = CL_OUT_OF_HOST_MEMORY;
+    goto ERROR_CLEANUP;
+  }
+  cmd->command.extension.data = work_graph_launch;
   work_graph_launch->graph = graph;
   work_graph_launch->num_root_inputs = num_root_inputs;
   work_graph_launch->root_inputs = NULL;
@@ -376,3 +412,23 @@ POname(clReleaseWorkGraphFORMOSA)(cl_work_graph_formosa graph) {
   return pocl_formosa_release_work_graph(graph);
 }
 POsym(clReleaseWorkGraphFORMOSA)
+
+void *
+pocl_work_graph_get_extension_function_address (const char *func_name)
+{
+  if (strcmp (func_name, "clCreateWorkGraphFORMOSA") == 0)
+    return (void *)&POname(clCreateWorkGraphFORMOSA);
+  if (strcmp (func_name, "clCreateWorkGraphKernelNodeFORMOSA") == 0)
+    return (void *)&POname(clCreateWorkGraphKernelNodeFORMOSA);
+  if (strcmp (func_name, "clCreateWorkGraphEdgeFORMOSA") == 0)
+    return (void *)&POname(clCreateWorkGraphEdgeFORMOSA);
+  if (strcmp (func_name, "clEnqueueWorkGraphLaunchFORMOSA") == 0)
+    return (void *)&POname(clEnqueueWorkGraphLaunchFORMOSA);
+  if (strcmp (func_name, "clGetWorkGraphInfoFORMOSA") == 0)
+    return (void *)&POname(clGetWorkGraphInfoFORMOSA);
+  if (strcmp (func_name, "clRetainWorkGraphFORMOSA") == 0)
+    return (void *)&POname(clRetainWorkGraphFORMOSA);
+  if (strcmp (func_name, "clReleaseWorkGraphFORMOSA") == 0)
+    return (void *)&POname(clReleaseWorkGraphFORMOSA);
+  return NULL;
+}

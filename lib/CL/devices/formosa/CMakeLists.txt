@@ -51,12 +51,19 @@ add_compile_definitions(FORMOSA_LLVM="${LLVM_PREFIX}")
 if(FORMOSA_CLANG_PATH)
   add_compile_definitions(FORMOSA_CLANG_PATH="${FORMOSA_CLANG_PATH}")
 endif()
-add_pocl_device_library(pocl-devices-formosa
-                        pocl-formosa.c pocl-formosa.h pocl-formosa-internal.h
-                        pocl-formosa-graph.c
-                        formosa-llvm-util.cc formosa-llvm-util.h
-                        formosa-util.cc formosa-util.h
-                        formosa-memory.cc formosa-memory.h)
+set(FORMOSA_DEVICE_SOURCES
+    pocl-formosa.c pocl-formosa.h pocl-formosa-internal.h
+    formosa-llvm-util.cc formosa-llvm-util.h
+    formosa-util.cc formosa-util.h
+    formosa-memory.cc formosa-memory.h)
+
+if(ENABLE_FORMOSA_WORKGRAPH)
+  list(APPEND FORMOSA_DEVICE_SOURCES
+       ../../workgraph/formosa/pocl-formosa-workgraph.c
+       ../../workgraph/formosa/pocl-formosa-workgraph.h)
+endif()
+
+add_pocl_device_library(pocl-devices-formosa ${FORMOSA_DEVICE_SOURCES})
 
 if(ENABLE_LOADABLE_DRIVERS)
   # Add runtime library

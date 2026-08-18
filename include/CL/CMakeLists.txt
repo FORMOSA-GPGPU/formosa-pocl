@@ -37,8 +37,6 @@ if(INSTALL_OPENCL_HEADERS)
                 cl_exp_defined_builtin_kernels.h
                 cl_ext_intel.h
                 cl_ext_pocl.h
-                cl_formosa_work_graph.h
-                cl_formosa_work_graph_device.h
                 cl_formosa_stack_remap.h
                 cl_gl.h
                 cl_gl_ext.h
@@ -49,5 +47,11 @@ if(INSTALL_OPENCL_HEADERS)
                 cl_version.h
                 opencl.h
                 cl2.hpp opencl.hpp
+          DESTINATION "${POCL_INSTALL_OPENCL_HEADER_DIR_REL}" COMPONENT "dev")
+endif()
+
+if(INSTALL_OPENCL_HEADERS AND ENABLE_FORMOSA_WORKGRAPH)
+  install(FILES cl_formosa_work_graph.h
+                cl_formosa_work_graph_device.h
           DESTINATION "${POCL_INSTALL_OPENCL_HEADER_DIR_REL}" COMPONENT "dev")
 endif()

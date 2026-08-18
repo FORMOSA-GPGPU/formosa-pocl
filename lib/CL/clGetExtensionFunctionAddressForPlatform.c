@@ -25,32 +25,10 @@
 #include "pocl_cl.h"
 #include <string.h>
 
-/* cl_formosa_work_graph */
-extern CL_API_ENTRY cl_work_graph_formosa CL_API_CALL
-    POname(clCreateWorkGraphFORMOSA)(cl_context, cl_device_id,
-                                     const cl_work_graph_properties_formosa *,
-                                     cl_int *);
-extern CL_API_ENTRY cl_work_graph_node_formosa CL_API_CALL
-    POname(clCreateWorkGraphKernelNodeFORMOSA)(
-        cl_work_graph_formosa, cl_kernel, cl_uint, cl_uint, const size_t *,
-        const size_t *, const size_t *,
-        const cl_work_graph_node_properties_formosa *, cl_int *);
-extern CL_API_ENTRY cl_work_graph_edge_formosa CL_API_CALL POname(
-    clCreateWorkGraphEdgeFORMOSA)(cl_work_graph_formosa,
-                                  cl_work_graph_node_formosa,
-                                  cl_work_graph_node_formosa, cl_uint,
-                                  const cl_work_graph_edge_properties_formosa *,
-                                  cl_int *);
-extern CL_API_ENTRY cl_int CL_API_CALL POname(clEnqueueWorkGraphLaunchFORMOSA)(
-    cl_command_queue, cl_work_graph_formosa, cl_uint,
-    const cl_work_graph_root_input_formosa *, cl_uint, const cl_event *,
-    cl_event *);
-extern CL_API_ENTRY cl_int CL_API_CALL POname(clGetWorkGraphInfoFORMOSA)(
-    cl_work_graph_formosa, cl_uint, size_t, void *, size_t *);
-extern CL_API_ENTRY
-    cl_int CL_API_CALL POname(clRetainWorkGraphFORMOSA)(cl_work_graph_formosa);
-extern CL_API_ENTRY
-    cl_int CL_API_CALL POname(clReleaseWorkGraphFORMOSA)(cl_work_graph_formosa);
+#ifdef ENABLE_FORMOSA_WORKGRAPH
+extern void *pocl_work_graph_get_extension_function_address (
+  const char *func_name);
+#endif
 extern CL_API_ENTRY cl_int CL_API_CALL
     POname(clSetKernelStackRemapFORMOSA)(cl_kernel, cl_bool);
 
@@ -257,21 +235,12 @@ CL_API_SUFFIX__VERSION_1_2
   if (strcmp (func_name, "clCreateProgramWithDefinedBuiltInKernelsEXP") == 0)
     return (void *)&POname (clCreateProgramWithDefinedBuiltInKernelsEXP);
 
-  /* cl_formosa_work_graph */
-  if (strcmp(func_name, "clCreateWorkGraphFORMOSA") == 0)
-    return (void *)&POname(clCreateWorkGraphFORMOSA);
-  if (strcmp(func_name, "clCreateWorkGraphKernelNodeFORMOSA") == 0)
-    return (void *)&POname(clCreateWorkGraphKernelNodeFORMOSA);
-  if (strcmp(func_name, "clCreateWorkGraphEdgeFORMOSA") == 0)
-    return (void *)&POname(clCreateWorkGraphEdgeFORMOSA);
-  if (strcmp(func_name, "clEnqueueWorkGraphLaunchFORMOSA") == 0)
-    return (void *)&POname(clEnqueueWorkGraphLaunchFORMOSA);
-  if (strcmp(func_name, "clGetWorkGraphInfoFORMOSA") == 0)
-    return (void *)&POname(clGetWorkGraphInfoFORMOSA);
-  if (strcmp(func_name, "clRetainWorkGraphFORMOSA") == 0)
-    return (void *)&POname(clRetainWorkGraphFORMOSA);
-  if (strcmp(func_name, "clReleaseWorkGraphFORMOSA") == 0)
-    return (void *)&POname(clReleaseWorkGraphFORMOSA);
+#ifdef ENABLE_FORMOSA_WORKGRAPH
+  void *work_graph_function =
+    pocl_work_graph_get_extension_function_address (func_name);
+  if (work_graph_function != NULL)
+    return work_graph_function;
+#endif
   if (strcmp(func_name, "clSetKernelStackRemapFORMOSA") == 0)
     return (void *)&POname(clSetKernelStackRemapFORMOSA);
 

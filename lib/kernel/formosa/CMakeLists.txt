@@ -35,9 +35,13 @@ endforeach()
 
 foreach(FILE get_local_id.cl get_local_size.cl get_group_id.cl get_global_size.cl
   barrier.cl get_num_groups.cl get_work_dim.cl get_global_id.cl get_global_offset.cl
-  erf.cl erfc.cl subgroup_function.cl kernel_clock.cl work_graph.cl)
+  erf.cl erfc.cl subgroup_function.cl kernel_clock.cl)
   list(APPEND KERNEL_SOURCES "formosa/${FILE}")
 endforeach()
+
+if(ENABLE_FORMOSA_WORKGRAPH)
+  list(APPEND KERNEL_SOURCES "formosa/workgraph/work_graph.cl")
+endif()
 
 list(APPEND KERNEL_SOURCES "formosa/printf_globals.c")
 list(APPEND KERNEL_SOURCES "formosa/printf_alloc.c")

@@ -1,4 +1,4 @@
-#include "wg_info.h"
+#include "work_graph_abi.h"
 
 #define FORMOSA_WG_SUCCESS 0
 #define FORMOSA_WG_ERR_NULL_RECORD -1
@@ -131,7 +131,7 @@ static inline uint formosa_wg_reserve_ticket(volatile __global uint *tail) {
 }
 
 uint formosa_get_record_count(void) {
-  struct WGInfo *info = get_wg_info();
+  struct WorkGraphWGInfo *info = get_work_graph_wg_info();
   __global struct WorkGraphNodeContext *ctx =
       (__global struct WorkGraphNodeContext *)(uintptr_t)info->work_graph_ctx;
   if (ctx == NULL)
@@ -140,7 +140,7 @@ uint formosa_get_record_count(void) {
 }
 
 uint formosa_get_record_work_item_count(void) {
-  struct WGInfo *info = get_wg_info();
+  struct WorkGraphWGInfo *info = get_work_graph_wg_info();
   __global struct WorkGraphNodeContext *ctx =
       (__global struct WorkGraphNodeContext *)(uintptr_t)info->work_graph_ctx;
   if (ctx == NULL || ctx->work_items_per_input_record == 0)
@@ -160,7 +160,7 @@ uint formosa_get_current_record_work_item_id(void) {
 
 int formosa_get_record(uint index, __private void *record_out,
                        size_t record_size) {
-  struct WGInfo *info = get_wg_info();
+  struct WorkGraphWGInfo *info = get_work_graph_wg_info();
   __global struct WorkGraphNodeContext *ctx =
       (__global struct WorkGraphNodeContext *)(uintptr_t)info->work_graph_ctx;
 
@@ -201,7 +201,7 @@ int formosa_emit(uint edge_id, const __private void *record) {
   if (record == NULL)
     return FORMOSA_WG_ERR_NULL_RECORD;
 
-  struct WGInfo *info = get_wg_info();
+  struct WorkGraphWGInfo *info = get_work_graph_wg_info();
   __global struct WorkGraphNodeContext *ctx =
       (__global struct WorkGraphNodeContext *)(uintptr_t)info->work_graph_ctx;
   if (ctx == NULL)
