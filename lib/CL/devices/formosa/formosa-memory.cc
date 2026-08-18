@@ -7,19 +7,14 @@
 namespace {
 
 struct MemoryCopySubmitArgs {
-  MemoryDomain src_domain;
-  uint64_t src_addr;
-  MemoryDomain dst_domain;
-  uint64_t dst_addr;
-  size_t size;
+  FsaMemoryCopyInfo info;
 };
 
 FsaCommandSubmitStatus submit_memory_copy(void *context,
                                              FsaCompletionToken *token) {
   const MemoryCopySubmitArgs *args =
       static_cast<const MemoryCopySubmitArgs *>(context);
-  return fsa_cmd_memory_copy(args->src_domain, args->src_addr, args->dst_domain,
-                             args->dst_addr, args->size, token);
+  return fsa_cmd_memory_copy(&args->info, token);
 }
 
 static cl_bool formosa_memory_get_buffer_device_address(
@@ -94,8 +89,14 @@ cl_int formosa_memory_submit_copy(MemoryDomain src_domain, uint64_t src_addr,
     formosa_mark_unavailable();
     return CL_DEVICE_NOT_AVAILABLE;
   }
-  const MemoryCopySubmitArgs args = {src_domain, src_addr, dst_domain, dst_addr,
-                                     size};
+  MemoryCopySubmitArgs args{};
+  args.info.struct_size = sizeof(args.info);
+  args.info.source.domain = src_domain;
+  args.info.source.range.address = src_addr;
+  args.info.source.range.size = size;
+  args.info.destination.domain = dst_domain;
+  args.info.destination.range.address = dst_addr;
+  args.info.destination.range.size = size;
   const FsaCommandSubmitStatus submit_status =
       pocl_fsa_submit_with_backpressure(submit_memory_copy, (void *)&args,
                                         token);

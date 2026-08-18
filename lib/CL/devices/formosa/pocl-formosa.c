@@ -65,26 +65,14 @@ static cl_int formosa_submit_copy_buf(
     size_t src_offset, size_t size, FsaCompletionToken *token);
 
 typedef struct {
-  uint16_t dispatch_flags;
-  size_t *local_sizes;
-  size_t *num_groups;
-  size_t *global_offsets;
-  size_t local_mem_size;
-  uintptr_t kernel_object;
-  uintptr_t kernarg_address;
-  uintptr_t kernel_trampoline;
-  uintptr_t kernel_status;
+  FsaKernelLaunchInfo info;
 } formosa_kernel_submit_args_t;
 
 static FsaCommandSubmitStatus formosa_submit_kernel(void *context,
                                                     FsaCompletionToken *token) {
   const formosa_kernel_submit_args_t *args =
       (const formosa_kernel_submit_args_t *)context;
-  return fsa_cmd_start_kernel(args->dispatch_flags, args->local_sizes,
-                              args->num_groups, args->global_offsets,
-                              args->local_mem_size, args->kernel_object,
-                              args->kernarg_address, args->kernel_trampoline,
-                              args->kernel_status, token);
+  return fsa_cmd_start_kernel(&args->info, token);
 }
 
 static cl_int formosa_validate_host_pointer(const void *host_ptr, size_t size) {
@@ -690,19 +678,34 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
 
   // launch kernel execution
   FsaCompletionToken token = 0;
-  uint16_t dispatch_flags = pc->work_dim | FSA_KERNEL_DISPATCH_HAS_PRINTF_META;
-  if (pocl_formosa_kernel_stack_remap_enabled(kernel, cmd->device))
-    dispatch_flags |= FSA_KERNEL_DISPATCH_STACK_REMAP;
-  const formosa_kernel_submit_args_t submit_args = {
-      dispatch_flags,
-      pc->local_size,
-      pc->num_groups,
-      pc->global_offset,
-      local_mem_size,
-      entry_pc,
-      (uintptr_t)device_args_buffer_addr,
-      (uintptr_t)trampoline_pc,
-      (uintptr_t)device_kernel_status_addr};
+  formosa_kernel_submit_args_t submit_args;
+  memset(&submit_args, 0, sizeof(submit_args));
+  if (pc->work_dim < 1 || pc->work_dim > 3 || local_mem_size > UINT32_MAX) {
+    POCL_MSG_ERR("pocl_formosa_run: launch geometry does not fit descriptor\n");
+    errcode = CL_INVALID_WORK_DIMENSION;
+    goto FAIL;
+  }
+  submit_args.info.struct_size = sizeof(submit_args.info);
+  submit_args.info.dimensions = pc->work_dim;
+  for (cl_uint dim = 0; dim < pc->work_dim; ++dim) {
+    if (pc->local_size[dim] > UINT32_MAX || pc->num_groups[dim] > UINT32_MAX) {
+      POCL_MSG_ERR("pocl_formosa_run: launch geometry exceeds descriptor\n");
+      errcode = CL_INVALID_WORK_GROUP_SIZE;
+      goto FAIL;
+    }
+    submit_args.info.local_size[dim] = (uint32_t)pc->local_size[dim];
+    submit_args.info.num_groups[dim] = (uint32_t)pc->num_groups[dim];
+    submit_args.info.global_offset[dim] = pc->global_offset[dim];
+  }
+  submit_args.info.local_mem_size = (uint32_t)local_mem_size;
+  submit_args.info.has_printf_meta = 1;
+  submit_args.info.enable_stack_remap =
+      pocl_formosa_kernel_stack_remap_enabled(kernel, cmd->device) ? 1u : 0u;
+  submit_args.info.kernel_entry = entry_pc;
+  submit_args.info.kernarg_address = (FsaDeviceAddress)device_args_buffer_addr;
+  submit_args.info.kernel_trampoline = trampoline_pc;
+  submit_args.info.kernel_status =
+      (FsaDeviceAddress)device_kernel_status_addr;
   const FsaCommandSubmitStatus submit_status =
       pocl_fsa_submit_with_backpressure(formosa_submit_kernel,
                                         (void *)&submit_args, &token);
