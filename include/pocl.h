@@ -495,6 +495,7 @@ typedef struct
 {
   void *data;
   cl_int (*run) (void *device_data, struct _cl_command_node *command);
+  cl_int (*clone) (const void *data, void **cloned_data);
   void (*cleanup) (void *data);
   const char *event_name;
 } _cl_command_extension;

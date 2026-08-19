@@ -1,7 +1,7 @@
 #ifndef POCL_FORMOSA_WORKGRAPH_H
 #define POCL_FORMOSA_WORKGRAPH_H
 
-#include "../pocl-workgraph-private.h"
+#include "pocl-workgraph-private.h"
 
 const void *pocl_formosa_workgraph_get_extension_ops(
     const char *extension_name);

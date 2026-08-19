@@ -212,6 +212,46 @@ pocl_work_graph_launch_cleanup (void *data)
   free (launch);
 }
 
+static cl_int
+pocl_work_graph_launch_clone (const void *data, void **cloned_data)
+{
+  const struct pocl_work_graph_launch *source =
+    (const struct pocl_work_graph_launch *)data;
+  struct pocl_work_graph_launch *clone = NULL;
+  *cloned_data = NULL;
+
+  if (source == NULL)
+    return CL_SUCCESS;
+
+  clone = (struct pocl_work_graph_launch *)calloc (1, sizeof (*clone));
+  if (clone == NULL)
+    return CL_OUT_OF_HOST_MEMORY;
+
+  clone->graph = source->graph;
+  clone->num_root_inputs = source->num_root_inputs;
+  if (clone->graph != NULL)
+    POCL_RETAIN_OBJECT (clone->graph);
+
+  if (clone->num_root_inputs > 0)
+    {
+      clone->root_inputs = (cl_work_graph_root_input_formosa *)malloc (
+        sizeof (*clone->root_inputs) * clone->num_root_inputs);
+      if (clone->root_inputs == NULL)
+        {
+          pocl_work_graph_launch_cleanup (clone);
+          return CL_OUT_OF_HOST_MEMORY;
+        }
+      memcpy (clone->root_inputs, source->root_inputs,
+              sizeof (*clone->root_inputs) * clone->num_root_inputs);
+      for (cl_uint i = 0; i < clone->num_root_inputs; ++i)
+        if (clone->root_inputs[i].records != NULL)
+          POname(clRetainMemObject) (clone->root_inputs[i].records);
+    }
+
+  *cloned_data = clone;
+  return CL_SUCCESS;
+}
+
     static cl_int pocl_work_graph_formosa_collect_mem_objs(
         cl_device_id realdev, cl_context context, cl_work_graph_formosa graph,
         cl_uint num_root_inputs,
@@ -304,40 +344,18 @@ CL_API_ENTRY cl_int CL_API_CALL POname(clEnqueueWorkGraphLaunchFORMOSA)(
   }
 
   cmd->command.extension.run = graph->ops->run;
+  cmd->command.extension.clone = pocl_work_graph_launch_clone;
   cmd->command.extension.cleanup = pocl_work_graph_launch_cleanup;
   cmd->command.extension.event_name = "Formosa WorkGraph";
   cmd->is_extension = CL_TRUE;
 
-  struct pocl_work_graph_launch *work_graph_launch =
-      (struct pocl_work_graph_launch *)calloc (1, sizeof (*work_graph_launch));
-  if (work_graph_launch == NULL) {
-    errcode = CL_OUT_OF_HOST_MEMORY;
+  const struct pocl_work_graph_launch source = {
+    graph, num_root_inputs, (cl_work_graph_root_input_formosa *)root_inputs
+  };
+  errcode = pocl_work_graph_launch_clone (
+      &source, &cmd->command.extension.data);
+  if (errcode != CL_SUCCESS)
     goto ERROR_CLEANUP;
-  }
-  cmd->command.extension.data = work_graph_launch;
-  work_graph_launch->graph = graph;
-  work_graph_launch->num_root_inputs = num_root_inputs;
-  work_graph_launch->root_inputs = NULL;
-
-  POCL_RETAIN_OBJECT(graph);
-
-  if (num_root_inputs > 0) {
-    work_graph_launch->root_inputs = (cl_work_graph_root_input_formosa *)malloc(
-        sizeof(cl_work_graph_root_input_formosa) * num_root_inputs);
-    if (work_graph_launch->root_inputs == NULL) {
-      errcode = CL_OUT_OF_HOST_MEMORY;
-      goto ERROR_CLEANUP;
-    }
-    memcpy(work_graph_launch->root_inputs, root_inputs,
-           sizeof(cl_work_graph_root_input_formosa) * num_root_inputs);
-    for (cl_uint i = 0; i < num_root_inputs; ++i) {
-      cl_work_graph_root_input_formosa *ri =
-          &((cl_work_graph_root_input_formosa *)
-                work_graph_launch->root_inputs)[i];
-      if (ri->records)
-        POname(clRetainMemObject)(ri->records);
-    }
-  }
 
   pocl_command_enqueue(command_queue, cmd);
 

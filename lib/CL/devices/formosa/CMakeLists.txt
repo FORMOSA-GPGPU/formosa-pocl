@@ -59,8 +59,8 @@ set(FORMOSA_DEVICE_SOURCES
 
 if(ENABLE_FORMOSA_WORKGRAPH)
   list(APPEND FORMOSA_DEVICE_SOURCES
-       ../../workgraph/formosa/pocl-formosa-workgraph.c
-       ../../workgraph/formosa/pocl-formosa-workgraph.h)
+       workgraph/pocl-formosa-workgraph.c
+       workgraph/pocl-formosa-workgraph.h)
 endif()
 
 add_pocl_device_library(pocl-devices-formosa ${FORMOSA_DEVICE_SOURCES})

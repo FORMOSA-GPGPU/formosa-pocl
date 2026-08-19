@@ -225,8 +225,8 @@ set(POCL_LIB_SOURCES  "clCreateContextFromType.c"
 
 if(ENABLE_FORMOSA_WORKGRAPH)
   list(APPEND POCL_LIB_SOURCES
-       "workgraph/pocl-workgraph.c"
-       "workgraph/pocl-workgraph-private.h")
+       "devices/formosa/workgraph/pocl-workgraph.c"
+       "devices/formosa/workgraph/pocl-workgraph-private.h")
 endif()
 
 unset(EXTRA_LLVM_SOURCES)

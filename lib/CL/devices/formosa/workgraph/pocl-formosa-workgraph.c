@@ -6,9 +6,9 @@
 #include "pocl-formosa-workgraph.h"
 #include "formosa-hal/formosa-graph.h"
 #include "formosa-hal/formosa-hal.h"
-#include "../../devices/formosa/formosa-llvm-util.h"
-#include "../../devices/formosa/formosa-util.h"
-#include "../../devices/formosa/pocl-formosa-internal.h"
+#include "../formosa-llvm-util.h"
+#include "../formosa-util.h"
+#include "../pocl-formosa-internal.h"
 #include "pocl_util.h"
 
 /* Extra ctx/kernarg slots let firmware keep multiple dispatches active for the

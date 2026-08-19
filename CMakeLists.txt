@@ -95,6 +95,7 @@ endmacro()
 
 include(CheckCCompilerFlag)
 include(CheckCXXCompilerFlag)
+include(CMakeDependentOption)
 include(CPackComponent)
 include(CheckFunctionExists)
 
@@ -278,8 +279,12 @@ option(ENABLE_HSA "Enable the HSA base profile runtime device driver" OFF)
 option(ENABLE_CUDA "Enable the CUDA device driver for NVIDIA devices" OFF)
 
 option(ENABLE_FORMOSA "Enable the Formosa device driver for the Formosa GPGPU" OFF)
-option(ENABLE_FORMOSA_WORKGRAPH
-       "Enable the Formosa WorkGraph extension and device support" ON)
+cmake_dependent_option(
+  ENABLE_FORMOSA_WORKGRAPH
+  "Enable the Formosa WorkGraph extension and device support"
+  ON
+  "ENABLE_FORMOSA"
+  OFF)
 
 option(ENABLE_CUDNN "Enable the CUDNN for the CUDA device driver, requires CUDA" OFF)
 
@@ -2212,6 +2217,9 @@ if(ENABLE_FORMOSA)
   set(BUILD_FORMOSA 1)
 
   set(FORMOSA_DEVICE_EXTENSIONS "cl_khr_byte_addressable_store cl_khr_global_int32_base_atomics cl_khr_global_int32_extended_atomics cl_khr_local_int32_base_atomics cl_khr_local_int32_extended_atomics cl_khr_int64 cl_khr_int64_base_atomics cl_khr_int64_extended_atomics cl_khr_fp64 cl_khr_subgroups cl_khr_kernel_clock cl_formosa_stack_remap")
+  if(ENABLE_FORMOSA_WORKGRAPH)
+    set(FORMOSA_DEVICE_EXTENSIONS "${FORMOSA_DEVICE_EXTENSIONS} cl_formosa_work_graph")
+  endif()
   set(FORMOSA_DEVICE_FEATURES_30 "__opencl_c_fp64 __opencl_c_subgroups __opencl_c_kernel_clock_scope_device __opencl_c_kernel_clock_scope_work_group __opencl_c_kernel_clock_scope_sub_group")
 
   set(FORMOSA_DEVICE_CL_VERSION_MAJOR 3)

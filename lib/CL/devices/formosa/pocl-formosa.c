@@ -17,7 +17,7 @@
 #include "spirv_queries.h"
 
 #ifdef ENABLE_FORMOSA_WORKGRAPH
-#include "../../workgraph/formosa/pocl-formosa-workgraph.h"
+#include "workgraph/pocl-formosa-workgraph.h"
 #endif
 
 static inline uint64_t align(uint64_t n, size_t size) {
