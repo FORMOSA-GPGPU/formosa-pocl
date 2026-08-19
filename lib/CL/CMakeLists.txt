@@ -149,7 +149,6 @@ set(POCL_LIB_SOURCES  "clCreateContextFromType.c"
                    "clSetKernelArgSVMPointer.c" "clSetKernelExecInfo.c"
                    "clSetDefaultDeviceCommandQueue.c"
                    "clSetKernelStackRemapFORMOSA.c"
-                   "clWorkGraphFORMOSA.c"
                    "clCommandBarrierWithWaitListKHR.c"
                    "clCommandCopyBufferKHR.c"
                    "clCommandCopyBufferRectKHR.c"
@@ -223,6 +222,12 @@ set(POCL_LIB_SOURCES  "clCreateContextFromType.c"
                    "dbk/pocl_dbk_set_rows_shared.h"
                    "pocl_raw_ptr_set.c"
 )
+
+if(ENABLE_FORMOSA_WORKGRAPH)
+  list(APPEND POCL_LIB_SOURCES
+       "devices/formosa/workgraph/pocl-workgraph.c"
+       "devices/formosa/workgraph/pocl-workgraph-private.h")
+endif()
 
 unset(EXTRA_LLVM_SOURCES)
 

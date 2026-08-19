@@ -11,22 +11,18 @@
 #include "formosa-llvm-util.h"
 #include "formosa-memory.h"
 #include "formosa-util.h"
-#include "pocl-formosa-graph.h"
 #include "pocl-formosa-internal.h"
 #include "pocl_llvm.h"
 #include "pocl_util.h"
 #include "spirv_queries.h"
 
+#ifdef ENABLE_FORMOSA_WORKGRAPH
+#include "workgraph/pocl-formosa-workgraph.h"
+#endif
+
 static inline uint64_t align(uint64_t n, size_t size) {
   return (n + size - 1) & ~(size - 1);
 }
-
-static struct pocl_work_graph_formosa_ops pocl_formosa_work_graph_formosa_ops =
-    {.create_graph = pocl_formosa_create_work_graph,
-     .create_node = pocl_formosa_create_work_graph_node,
-     .create_edge = pocl_formosa_create_work_graph_edge,
-     .get_info = pocl_formosa_get_work_graph_info,
-     .free_graph = pocl_formosa_free_work_graph};
 
 static cl_int formosa_copy_buf(void *data, pocl_mem_identifier *dst_mem_id,
                                cl_mem dst_buf, pocl_mem_identifier *src_mem_id,
@@ -88,7 +84,6 @@ void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
 
   ops->run = pocl_formosa_run;
   ops->run_native = NULL;
-  ops->run_work_graph_formosa = pocl_formosa_run_work_graph;
 
   ops->alloc_mem_obj = pocl_formosa_alloc_mem_obj;
   ops->free = pocl_formosa_free;
@@ -124,7 +119,9 @@ void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
   ops->free_mapping_ptr = pocl_driver_free_mapping_ptr;
 
   ops->set_kernel_stack_remap_formosa = pocl_formosa_set_kernel_stack_remap;
-  ops->work_graph_formosa_ops = &pocl_formosa_work_graph_formosa_ops;
+#ifdef ENABLE_FORMOSA_WORKGRAPH
+  ops->get_extension_ops = pocl_formosa_workgraph_get_extension_ops;
+#endif
 }
 
 /*
@@ -1250,13 +1247,6 @@ static void formosa_command_scheduler(pocl_formosa_data_t *dd) {
         pocl_update_event_running(event);
         formosa_finish_command(event, CL_INVALID_OPERATION, NULL,
                                "Formosa rectangular buffer transfer");
-        break;
-
-      case CL_COMMAND_GRAPH_LAUNCH_FORMOSA:
-        pocl_update_event_running(event);
-        err = pocl_formosa_run_work_graph(dd, node);
-        formosa_finish_command(event, err, "Event FSA Graph Launch      ",
-                               "Formosa WorkGraph");
         break;
 
       default:

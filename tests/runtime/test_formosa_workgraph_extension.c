@@ -1,11 +1,9 @@
 #include <CL/cl.h>
-#include <CL/cl_ext.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "CL/cl_formosa_stack_remap.h"
-#include "config.h"
+#include "CL/cl_formosa_work_graph.h"
 
 static unsigned count_extension(const char *extensions, const char *name) {
   const size_t name_length = strlen(name);
@@ -33,10 +31,8 @@ static int check_device_extension_strings(cl_platform_id platform) {
     printf("[SKIP] no OpenCL devices available for extension-string check\n");
     return 0;
   }
-  if (err != CL_SUCCESS) {
-    printf("[FAIL] clGetDeviceIDs failed: %d\n", err);
+  if (err != CL_SUCCESS)
     return 1;
-  }
 
   cl_device_id *devices =
       (cl_device_id *)malloc(sizeof(cl_device_id) * num_devices);
@@ -55,8 +51,6 @@ static int check_device_extension_strings(cl_platform_id platform) {
     size_t size = 0;
     err = clGetDeviceInfo(devices[i], CL_DEVICE_EXTENSIONS, 0, NULL, &size);
     if (err != CL_SUCCESS || size == 0) {
-      printf("[FAIL] unable to size device %u extension string: %d\n", i,
-             err);
       failed = 1;
       continue;
     }
@@ -68,28 +62,23 @@ static int check_device_extension_strings(cl_platform_id platform) {
     err = clGetDeviceInfo(devices[i], CL_DEVICE_EXTENSIONS, size, extensions,
                           NULL);
     if (err != CL_SUCCESS) {
-      printf("[FAIL] unable to read device %u extension string: %d\n", i,
-             err);
       free(extensions);
       failed = 1;
       continue;
     }
-
     const unsigned stack_count =
         count_extension(extensions, "cl_formosa_stack_remap");
     const unsigned graph_count =
         count_extension(extensions, "cl_formosa_work_graph");
-    if (stack_count > 0)
+    if (stack_count > 0) {
       ++formosa_devices;
-#ifdef ENABLE_FORMOSA_WORKGRAPH
-    const unsigned expected_graph_count = stack_count > 0 ? 1 : 0;
-#else
-    const unsigned expected_graph_count = 0;
-#endif
-    if (stack_count > 1 || graph_count != expected_graph_count) {
-      printf("[FAIL] device %u extension counts: stack=%u graph=%u expected "
-             "graph=%u\n",
-             i, stack_count, graph_count, expected_graph_count);
+      if (stack_count > 1 || graph_count != 1) {
+        printf("[FAIL] Formosa device %u extension counts: stack=%u graph=%u\n",
+               i, stack_count, graph_count);
+        failed = 1;
+      }
+    } else if (graph_count != 0) {
+      printf("[FAIL] non-Formosa device %u exposes cl_formosa_work_graph\n", i);
       failed = 1;
     }
     free(extensions);
@@ -100,63 +89,41 @@ static int check_device_extension_strings(cl_platform_id platform) {
   return failed;
 }
 
-int main() {
+int main(void) {
   cl_platform_id platform;
   cl_uint num_platforms;
-  cl_int err;
-
-  printf("Starting Formosa extension discovery test...\n");
-
-  err = clGetPlatformIDs(1, &platform, &num_platforms);
+  cl_int err = clGetPlatformIDs(1, &platform, &num_platforms);
   if (err != CL_SUCCESS || num_platforms == 0) {
     printf("Failed to find OpenCL platform. err = %d\n", err);
-    /*
-     * Note: If PoCL is the only platform and it has no drivers enabled,
-     * this might fail with CL_PLATFORM_NOT_FOUND_KHR.
-     */
     return 1;
   }
 
-  clSetKernelStackRemapFORMOSA_fn set_stack_remap =
-      (clSetKernelStackRemapFORMOSA_fn)clGetExtensionFunctionAddressForPlatform(
-          platform, "clSetKernelStackRemapFORMOSA");
-  if (set_stack_remap == NULL) {
-    printf("[FAIL] clSetKernelStackRemapFORMOSA NOT found\n");
-    return 1;
-  }
-  if (set_stack_remap(NULL, CL_TRUE) != CL_INVALID_KERNEL) {
-    printf("[FAIL] clSetKernelStackRemapFORMOSA did not reject NULL kernel\n");
-    return 1;
-  }
-
-  const char *work_graph_names[] = {
+  const char *names[] = {
       "clCreateWorkGraphFORMOSA",     "clCreateWorkGraphKernelNodeFORMOSA",
       "clCreateWorkGraphEdgeFORMOSA", "clEnqueueWorkGraphLaunchFORMOSA",
       "clGetWorkGraphInfoFORMOSA",    "clRetainWorkGraphFORMOSA",
       "clReleaseWorkGraphFORMOSA"};
-  for (unsigned i = 0;
-       i < sizeof(work_graph_names) / sizeof(work_graph_names[0]); ++i) {
-    void *function = clGetExtensionFunctionAddressForPlatform(
-        platform, work_graph_names[i]);
-#ifdef ENABLE_FORMOSA_WORKGRAPH
+
+  int missing = 0;
+  for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
+    void *function =
+        clGetExtensionFunctionAddressForPlatform(platform, names[i]);
     if (function == NULL) {
-      printf("[FAIL] enabled resolver did not expose %s\n",
-             work_graph_names[i]);
-      return 1;
+      printf("[FAIL] %s NOT found\n", names[i]);
+      ++missing;
+    } else {
+      printf("[OK]   %s found at %p\n", names[i], function);
     }
-#else
-    if (function != NULL) {
-      printf("[FAIL] disabled resolver exposed %s\n", work_graph_names[i]);
-      return 1;
-    }
-#endif
+  }
+
+  if (missing != 0) {
+    printf("Test FAILED: %d WorkGraph functions missing\n", missing);
+    return 1;
   }
 
   if (check_device_extension_strings(platform) != 0)
     return 1;
 
-  printf(
-      "Test PASSED: Formosa resolver and device extension discovery are "
-      "consistent\n");
+  printf("Test PASSED: WorkGraph resolver and device extension string agree\n");
   return 0;
 }

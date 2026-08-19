@@ -326,6 +326,9 @@ POCL_EXPORT
 int pocl_copy_command_node (_cl_command_node *dst_node,
                             _cl_command_node *src_node);
 
+POCL_EXPORT
+void pocl_cleanup_command_extension (_cl_command_node *node);
+
 const char*
 pocl_status_to_str (int status);
 

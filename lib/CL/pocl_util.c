@@ -1716,9 +1716,30 @@ pocl_update_event_running (cl_event event)
   POCL_UNLOCK_OBJ (event);
 }
 
+void
+pocl_cleanup_command_extension (_cl_command_node *node)
+{
+  if (!node->is_extension)
+    return;
+
+  void *data = node->command.extension.data;
+  void (*cleanup) (void *) = node->command.extension.cleanup;
+  node->is_extension = CL_FALSE;
+  node->command.extension.data = NULL;
+  if (cleanup != NULL)
+    cleanup (data);
+}
+
 /* Note: this must be kept in sync with pocl_copy_command_node */
 static void pocl_free_event_node (_cl_command_node *node)
 {
+  if (node->is_extension)
+    {
+      pocl_cleanup_command_extension (node);
+      pocl_mem_manager_free_command (node);
+      return;
+    }
+
   switch (node->type)
     {
     case CL_COMMAND_NDRANGE_KERNEL:
@@ -1746,24 +1767,6 @@ static void pocl_free_event_node (_cl_command_node *node)
       pocl_unmap_command_finished (node->device, &node->command);
       break;
 
-    case CL_COMMAND_GRAPH_LAUNCH_FORMOSA: {
-      _cl_command_work_graph_launch_formosa *work_graph_launch =
-          &node->command.work_graph_launch_formosa;
-      if (work_graph_launch->graph)
-        pocl_formosa_release_work_graph(
-            (cl_work_graph_formosa)work_graph_launch->graph);
-      if (work_graph_launch->root_inputs) {
-        cl_work_graph_root_input_formosa *root_inputs =
-            (cl_work_graph_root_input_formosa *)work_graph_launch->root_inputs;
-        for (cl_uint i = 0; i < work_graph_launch->num_root_inputs; ++i) {
-          if (root_inputs[i].records)
-            POname(clReleaseMemObject)(root_inputs[i].records);
-        }
-        free(work_graph_launch->root_inputs);
-      }
-      break;
-    }
-
     case CL_COMMAND_SVM_MIGRATE_MEM:
       POCL_MEM_FREE (node->command.svm_migrate.sizes);
       POCL_MEM_FREE (node->command.svm_migrate.svm_pointers);
@@ -1771,6 +1774,9 @@ static void pocl_free_event_node (_cl_command_node *node)
 
     case CL_COMMAND_SVM_FREE:
       POCL_MEM_FREE (node->command.svm_free.svm_pointers);
+      break;
+
+    default:
       break;
     }
   pocl_mem_manager_free_command (node);
@@ -1790,6 +1796,30 @@ pocl_copy_command_node (_cl_command_node *dst_node, _cl_command_node *src_node)
 {
   memcpy (&dst_node->command, &src_node->command, sizeof (_cl_command_t));
   dst_node->program_device_i = src_node->program_device_i;
+  dst_node->is_extension = CL_FALSE;
+
+  if (src_node->is_extension)
+    {
+      void *cloned_data = NULL;
+      dst_node->command.extension.data = NULL;
+      if (src_node->command.extension.data != NULL)
+        {
+          if (src_node->command.extension.clone == NULL)
+            return CL_INVALID_OPERATION;
+          int errcode = src_node->command.extension.clone (
+              src_node->command.extension.data, &cloned_data);
+          if (errcode != CL_SUCCESS)
+            {
+              if (cloned_data != NULL
+                  && src_node->command.extension.cleanup != NULL)
+                src_node->command.extension.cleanup (cloned_data);
+              return errcode;
+            }
+        }
+      dst_node->command.extension.data = cloned_data;
+      dst_node->is_extension = CL_TRUE;
+      return CL_SUCCESS;
+    }
 
   /* Copy variables that are freed when the command finishes. */
   switch (src_node->type)

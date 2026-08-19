@@ -50,6 +50,10 @@ set(C_PROGRAMS_TO_BUILD test_clFinish test_clGetDeviceInfo test_clGetEventInfo
   test_remote_discovery test_dbk_color_convert
   test_formosa_extension_discovery)
 
+if(ENABLE_FORMOSA_WORKGRAPH)
+  list(APPEND C_PROGRAMS_TO_BUILD test_formosa_workgraph_extension)
+endif()
+
 if(HAVE_ONNXRT)
   list(APPEND C_PROGRAMS_TO_BUILD test_dbk_onnx_inference)
 endif()
@@ -159,6 +163,11 @@ add_test(NAME "runtime/test_large_buf" COMMAND "test_large_buf")
 add_test(NAME "runtime/test_compile_n_link" COMMAND "test_compile_n_link")
 
 add_test(NAME "runtime/test_formosa_extension_discovery" COMMAND "test_formosa_extension_discovery")
+
+if(ENABLE_FORMOSA_WORKGRAPH)
+  add_test(NAME "runtime/test_formosa_workgraph_extension"
+           COMMAND "test_formosa_workgraph_extension")
+endif()
 
 if(HAVE_LIBJPEG_TURBO)
   add_test(NAME "runtime/test_dbk_jpeg"

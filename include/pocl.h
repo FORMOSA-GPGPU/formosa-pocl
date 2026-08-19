@@ -486,12 +486,19 @@ typedef struct
   cl_mem_advice_intel advice;
 } _cl_command_svm_memadvise;
 
+struct _cl_command_node;
+
+/* Opaque storage for device or vendor extension commands. Extension modules
+ * own the payload and callbacks; the generic runtime only drives their
+ * lifetime and execution. */
 typedef struct
 {
-  void *graph; /* cl_work_graph_formosa, retained */
-  unsigned num_root_inputs;
-  void *root_inputs; /* cl_work_graph_root_input_formosa *, deep-copied array */
-} _cl_command_work_graph_launch_formosa;
+  void *data;
+  cl_int (*run) (void *device_data, struct _cl_command_node *command);
+  cl_int (*clone) (const void *data, void **cloned_data);
+  void (*cleanup) (void *data);
+  const char *event_name;
+} _cl_command_extension;
 
 typedef union
 {
@@ -529,7 +536,7 @@ typedef union
   _cl_command_svm_migrate svm_migrate;
 
   _cl_command_svm_memadvise mem_advise;
-  _cl_command_work_graph_launch_formosa work_graph_launch_formosa;
+  _cl_command_extension extension;
 } _cl_command_t;
 
 typedef struct _pocl_buffer_migration_info
@@ -552,6 +559,8 @@ struct _cl_command_node
 {
   _cl_command_t command;
   cl_command_type type;
+  /* True when command.extension owns the otherwise vendor-defined command. */
+  cl_int is_extension;
   _cl_command_node *next; // for linked-list storage
   _cl_command_node *prev;
 

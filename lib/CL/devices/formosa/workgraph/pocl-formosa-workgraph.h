@@ -1,7 +1,10 @@
-#ifndef POCL_FORMOSA_GRAPH_H
-#define POCL_FORMOSA_GRAPH_H
+#ifndef POCL_FORMOSA_WORKGRAPH_H
+#define POCL_FORMOSA_WORKGRAPH_H
 
-#include "pocl_cl.h"
+#include "pocl-workgraph-private.h"
+
+const void *pocl_formosa_workgraph_get_extension_ops(
+    const char *extension_name);
 
 cl_int pocl_formosa_create_work_graph(
     cl_work_graph_formosa graph,
@@ -22,4 +25,4 @@ cl_int pocl_formosa_free_work_graph(cl_work_graph_formosa graph);
 
 cl_int pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd);
 
-#endif /* POCL_FORMOSA_GRAPH_H */
+#endif /* POCL_FORMOSA_WORKGRAPH_H */
