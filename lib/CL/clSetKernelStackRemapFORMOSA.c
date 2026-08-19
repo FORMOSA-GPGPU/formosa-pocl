@@ -41,12 +41,12 @@ POname(clSetKernelStackRemapFORMOSA)(cl_kernel kernel, cl_bool designate) {
 POsym(clSetKernelStackRemapFORMOSA)
 
 void *pocl_formosa_get_extension_function_address(const char *func_name) {
-#ifdef ENABLE_FORMOSA_WORKGRAPH
-  void *work_graph_function =
-      pocl_work_graph_get_extension_function_address(func_name);
-  if (work_graph_function != NULL) return work_graph_function;
-#endif
   if (strcmp(func_name, "clSetKernelStackRemapFORMOSA") == 0)
     return (void *)&POname(clSetKernelStackRemapFORMOSA);
+
+#ifdef ENABLE_FORMOSA_WORKGRAPH
+  return pocl_work_graph_get_extension_function_address(func_name);
+#else
   return NULL;
+#endif
 }

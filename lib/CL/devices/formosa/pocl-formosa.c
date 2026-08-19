@@ -26,13 +26,16 @@ static const struct pocl_stack_remap_ops pocl_formosa_stack_remap_ops = {
 };
 
 static const void *pocl_formosa_get_extension_ops(const char *extension_name) {
-#ifdef ENABLE_FORMOSA_WORKGRAPH
-  const void *workgraph_ops =
-      pocl_formosa_workgraph_get_extension_ops(extension_name);
-  if (workgraph_ops != NULL) return workgraph_ops;
-#endif
+  if (extension_name == NULL) return NULL;
+
   if (strcmp(extension_name, CL_FORMOSA_STACK_REMAP_EXTENSION_NAME) == 0)
     return &pocl_formosa_stack_remap_ops;
+
+#ifdef ENABLE_FORMOSA_WORKGRAPH
+  if (strcmp(extension_name, CL_FORMOSA_WORK_GRAPH_EXTENSION_NAME) == 0)
+    return pocl_formosa_workgraph_get_extension_ops(extension_name);
+#endif
+
   return NULL;
 }
 
