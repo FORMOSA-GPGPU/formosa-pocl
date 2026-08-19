@@ -223,7 +223,9 @@ set(POCL_LIB_SOURCES  "clCreateContextFromType.c"
 )
 
 if(ENABLE_FORMOSA)
-  list(APPEND POCL_LIB_SOURCES "clSetKernelStackRemapFORMOSA.c")
+  list(APPEND POCL_LIB_SOURCES
+       "clSetKernelStackRemapFORMOSA.c"
+       "devices/formosa/pocl-formosa-extensions.c")
 endif()
 
 if(ENABLE_FORMOSA_WORKGRAPH)

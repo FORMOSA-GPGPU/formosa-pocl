@@ -1,13 +1,8 @@
 #include "CL/cl_formosa_stack_remap.h"
-#include "config.h"
 #include "formosa/pocl-formosa.h"
 #include "pocl_util.h"
 
 #include <string.h>
-
-#ifdef ENABLE_FORMOSA_WORKGRAPH
-extern void *pocl_work_graph_get_extension_function_address(const char *func_name);
-#endif
 
 static cl_int pocl_set_kernel_stack_remap(cl_kernel kernel, cl_bool designate) {
   cl_bool supported = CL_FALSE;
@@ -22,8 +17,7 @@ static cl_int pocl_set_kernel_stack_remap(cl_kernel kernel, cl_bool designate) {
     if (ops == NULL || ops->set_kernel_stack_remap == NULL) continue;
 
     supported = CL_TRUE;
-    cl_int err =
-        ops->set_kernel_stack_remap(device, i, kernel, designate);
+    cl_int err = ops->set_kernel_stack_remap(device, i, kernel, designate);
     if (err != CL_SUCCESS) return err;
   }
 
@@ -40,13 +34,9 @@ POname(clSetKernelStackRemapFORMOSA)(cl_kernel kernel, cl_bool designate) {
 }
 POsym(clSetKernelStackRemapFORMOSA)
 
-void *pocl_formosa_get_extension_function_address(const char *func_name) {
+void *pocl_formosa_stack_remap_get_extension_function_address(
+    const char *func_name) {
   if (strcmp(func_name, "clSetKernelStackRemapFORMOSA") == 0)
     return (void *)&POname(clSetKernelStackRemapFORMOSA);
-
-#ifdef ENABLE_FORMOSA_WORKGRAPH
-  return pocl_work_graph_get_extension_function_address(func_name);
-#else
   return NULL;
-#endif
 }
