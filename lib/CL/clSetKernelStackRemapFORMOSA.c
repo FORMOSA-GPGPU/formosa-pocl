@@ -1,19 +1,23 @@
 #include "CL/cl_formosa_stack_remap.h"
-#include "pocl_cl.h"
+#include "formosa/pocl-formosa.h"
 #include "pocl_util.h"
+
+#include <string.h>
 
 static cl_int pocl_set_kernel_stack_remap(cl_kernel kernel, cl_bool designate) {
   cl_bool supported = CL_FALSE;
 
   for (cl_uint i = 0; i < kernel->program->num_devices; ++i) {
     cl_device_id device = pocl_real_dev(kernel->program->devices[i]);
-    if (device == NULL || device->ops == NULL ||
-        device->ops->set_kernel_stack_remap_formosa == NULL)
-      continue;
+    const struct pocl_stack_remap_ops *ops = NULL;
+    if (device != NULL && device->ops != NULL &&
+        device->ops->get_extension_ops != NULL)
+      ops = (const struct pocl_stack_remap_ops *)device->ops->get_extension_ops(
+          CL_FORMOSA_STACK_REMAP_EXTENSION_NAME);
+    if (ops == NULL || ops->set_kernel_stack_remap == NULL) continue;
 
     supported = CL_TRUE;
-    cl_int err = device->ops->set_kernel_stack_remap_formosa(device, i, kernel,
-                                                             designate);
+    cl_int err = ops->set_kernel_stack_remap(device, i, kernel, designate);
     if (err != CL_SUCCESS) return err;
   }
 
@@ -29,3 +33,10 @@ POname(clSetKernelStackRemapFORMOSA)(cl_kernel kernel, cl_bool designate) {
   return pocl_set_kernel_stack_remap(kernel, designate);
 }
 POsym(clSetKernelStackRemapFORMOSA)
+
+void *pocl_formosa_stack_remap_get_extension_function_address(
+    const char *func_name) {
+  if (strcmp(func_name, "clSetKernelStackRemapFORMOSA") == 0)
+    return (void *)&POname(clSetKernelStackRemapFORMOSA);
+  return NULL;
+}
