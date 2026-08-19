@@ -25,12 +25,10 @@
 #include "pocl_cl.h"
 #include <string.h>
 
-#ifdef ENABLE_FORMOSA_WORKGRAPH
-extern void *pocl_work_graph_get_extension_function_address (
+#ifdef BUILD_FORMOSA
+extern void *pocl_formosa_get_extension_function_address (
   const char *func_name);
 #endif
-extern CL_API_ENTRY cl_int CL_API_CALL
-    POname(clSetKernelStackRemapFORMOSA)(cl_kernel, cl_bool);
 
 CL_API_ENTRY void * CL_API_CALL
 POname (clGetExtensionFunctionAddressForPlatform) (cl_platform_id  platform,
@@ -235,14 +233,12 @@ CL_API_SUFFIX__VERSION_1_2
   if (strcmp (func_name, "clCreateProgramWithDefinedBuiltInKernelsEXP") == 0)
     return (void *)&POname (clCreateProgramWithDefinedBuiltInKernelsEXP);
 
-#ifdef ENABLE_FORMOSA_WORKGRAPH
-  void *work_graph_function =
-    pocl_work_graph_get_extension_function_address (func_name);
-  if (work_graph_function != NULL)
-    return work_graph_function;
+#ifdef BUILD_FORMOSA
+  void *formosa_function =
+    pocl_formosa_get_extension_function_address (func_name);
+  if (formosa_function != NULL)
+    return formosa_function;
 #endif
-  if (strcmp(func_name, "clSetKernelStackRemapFORMOSA") == 0)
-    return (void *)&POname(clSetKernelStackRemapFORMOSA);
 
   POCL_MSG_ERR ("unknown platform extension requested: %s\n", func_name);
   return NULL;

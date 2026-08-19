@@ -1,6 +1,7 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 #include "CL/cl_ext.h"
@@ -19,6 +20,21 @@
 #ifdef ENABLE_FORMOSA_WORKGRAPH
 #include "workgraph/pocl-formosa-workgraph.h"
 #endif
+
+static const struct pocl_stack_remap_ops pocl_formosa_stack_remap_ops = {
+    .set_kernel_stack_remap = pocl_formosa_set_kernel_stack_remap,
+};
+
+static const void *pocl_formosa_get_extension_ops(const char *extension_name) {
+#ifdef ENABLE_FORMOSA_WORKGRAPH
+  const void *workgraph_ops =
+      pocl_formosa_workgraph_get_extension_ops(extension_name);
+  if (workgraph_ops != NULL) return workgraph_ops;
+#endif
+  if (strcmp(extension_name, CL_FORMOSA_STACK_REMAP_EXTENSION_NAME) == 0)
+    return &pocl_formosa_stack_remap_ops;
+  return NULL;
+}
 
 static inline uint64_t align(uint64_t n, size_t size) {
   return (n + size - 1) & ~(size - 1);
@@ -118,10 +134,7 @@ void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
   ops->get_mapping_ptr = pocl_driver_get_mapping_ptr;
   ops->free_mapping_ptr = pocl_driver_free_mapping_ptr;
 
-  ops->set_kernel_stack_remap_formosa = pocl_formosa_set_kernel_stack_remap;
-#ifdef ENABLE_FORMOSA_WORKGRAPH
-  ops->get_extension_ops = pocl_formosa_workgraph_get_extension_ops;
-#endif
+  ops->get_extension_ops = pocl_formosa_get_extension_ops;
 }
 
 /*

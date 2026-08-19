@@ -6,6 +6,12 @@
 
 GEN_PROTOTYPES(formosa)
 
+struct pocl_stack_remap_ops {
+  cl_int (*set_kernel_stack_remap)(cl_device_id device,
+                                   unsigned program_device_i, cl_kernel kernel,
+                                   cl_bool designate);
+};
+
 cl_int pocl_formosa_set_kernel_stack_remap(cl_device_id device,
                                            unsigned program_device_i,
                                            cl_kernel kernel, cl_bool designate);

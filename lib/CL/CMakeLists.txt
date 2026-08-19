@@ -148,7 +148,6 @@ set(POCL_LIB_SOURCES  "clCreateContextFromType.c"
                    "clEnqueueSVMMemcpy.c" "clEnqueueSVMMemFill.c"
                    "clSetKernelArgSVMPointer.c" "clSetKernelExecInfo.c"
                    "clSetDefaultDeviceCommandQueue.c"
-                   "clSetKernelStackRemapFORMOSA.c"
                    "clCommandBarrierWithWaitListKHR.c"
                    "clCommandCopyBufferKHR.c"
                    "clCommandCopyBufferRectKHR.c"
@@ -222,6 +221,10 @@ set(POCL_LIB_SOURCES  "clCreateContextFromType.c"
                    "dbk/pocl_dbk_set_rows_shared.h"
                    "pocl_raw_ptr_set.c"
 )
+
+if(ENABLE_FORMOSA)
+  list(APPEND POCL_LIB_SOURCES "clSetKernelStackRemapFORMOSA.c")
+endif()
 
 if(ENABLE_FORMOSA_WORKGRAPH)
   list(APPEND POCL_LIB_SOURCES
