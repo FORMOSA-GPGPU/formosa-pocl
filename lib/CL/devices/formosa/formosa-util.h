@@ -1,7 +1,7 @@
 #ifndef FORMOSA_UTIL_H
 #define FORMOSA_UTIL_H
 
-#include <formosa-hal/formosa-hal.h>
+#include <formosa-hal/api.h>
 
 #include "pocl.h"
 

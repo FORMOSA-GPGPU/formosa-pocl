@@ -9,7 +9,7 @@
 #include <tuple>
 #include <vector>
 
-#include "formosa-hal/formosa-hal.h"
+#include "formosa-hal/hal.h"
 #include "formosa-llvm-util.h"
 #include "pocl-formosa-internal.h"
 #include "pocl.h"

@@ -8,7 +8,8 @@
 #include "common.h"
 #include "common_driver.h"
 #include "config.h"
-#include "formosa-hal/formosa-hal.h"
+#include "formosa-hal/api.h"
+#include "formosa-hal/hal.h"
 #include "formosa-llvm-util.h"
 #include "formosa-memory.h"
 #include "formosa-util.h"
@@ -65,26 +66,14 @@ static cl_int formosa_submit_copy_buf(
     size_t src_offset, size_t size, FsaCompletionToken *token);
 
 typedef struct {
-  uint16_t dispatch_flags;
-  size_t *local_sizes;
-  size_t *num_groups;
-  size_t *global_offsets;
-  size_t local_mem_size;
-  uintptr_t kernel_object;
-  uintptr_t kernarg_address;
-  uintptr_t kernel_trampoline;
-  uintptr_t kernel_status;
+  FsaKernelLaunchInfo info;
 } formosa_kernel_submit_args_t;
 
 static FsaCommandSubmitStatus formosa_submit_kernel(void *context,
                                                     FsaCompletionToken *token) {
   const formosa_kernel_submit_args_t *args =
       (const formosa_kernel_submit_args_t *)context;
-  return fsa_cmd_start_kernel(args->dispatch_flags, args->local_sizes,
-                              args->num_groups, args->global_offsets,
-                              args->local_mem_size, args->kernel_object,
-                              args->kernarg_address, args->kernel_trampoline,
-                              args->kernel_status, token);
+  return fsa_cmd_start_kernel(&args->info, token);
 }
 
 static cl_int formosa_validate_host_pointer(const void *host_ptr, size_t size) {
@@ -438,14 +427,19 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
 
   const uint32_t ptr_size = 8;
   const uint32_t word_size = 8;
-  const uint32_t printf_meta_size = sizeof(formosa_printf_launch_meta_t);
+  /* Firmware consumes a kernarg prefix when this launch uses device-side
+   * printf. pocl_context.printf_* is host-kernel state and is not the
+   * Formosa launch option. */
+  const uint32_t has_printf_meta = cmd->device->device_side_printf ? 1u : 0u;
+  const uint32_t printf_meta_size =
+      has_printf_meta ? (uint32_t)sizeof(formosa_printf_launch_meta_t) : 0u;
 
   // calculate kernel arguments buffer size
   uint64_t local_mem_size = 0;  // total local memory size
 
   // kernel arguments buffer size
   // it contains:
-  // 0. PoCL device-side printf metadata consumed by firmware/CP
+  // 0. optional PoCL device-side printf metadata consumed by firmware/CP
   // 1. local memory size (8 bytes)
   // 2. other arguments
   size_t kargs_buffer_size = printf_meta_size + word_size;
@@ -509,42 +503,48 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
     errcode = CL_OUT_OF_RESOURCES;
     goto FAIL;
   }
-  err = fsa_malloc(&device_printf_buffer_addr, cmd->device->printf_buffer_size);
-  if (err != 0) {
-    POCL_MSG_ERR("pocl_formosa_run: device printf buffer allocation failed\n");
-    errcode = CL_OUT_OF_RESOURCES;
-    goto FAIL;
-  }
-  POCL_MSG_PRINT_INFO(
-      "Device printf buffer allocated at address %p with size %zu "
-      "bytes\n",
-      device_printf_buffer_addr, cmd->device->printf_buffer_size);
-  err = fsa_malloc(&device_printf_position_addr, sizeof(uint32_t));
-  if (err != 0) {
-    POCL_MSG_ERR(
-        "pocl_formosa_run: device printf position allocation failed\n");
-    errcode = CL_OUT_OF_RESOURCES;
-    goto FAIL;
+  if (has_printf_meta) {
+    err =
+        fsa_malloc(&device_printf_buffer_addr, cmd->device->printf_buffer_size);
+    if (err != 0) {
+      POCL_MSG_ERR(
+          "pocl_formosa_run: device printf buffer allocation failed\n");
+      errcode = CL_OUT_OF_RESOURCES;
+      goto FAIL;
+    }
+    POCL_MSG_PRINT_INFO(
+        "Device printf buffer allocated at address %p with size %zu "
+        "bytes\n",
+        device_printf_buffer_addr, cmd->device->printf_buffer_size);
+    err = fsa_malloc(&device_printf_position_addr, sizeof(uint32_t));
+    if (err != 0) {
+      POCL_MSG_ERR(
+          "pocl_formosa_run: device printf position allocation failed\n");
+      errcode = CL_OUT_OF_RESOURCES;
+      goto FAIL;
+    }
   }
   fsa_kargs_buffer.buf_address = (uint64_t)device_args_buffer_addr;
   fsa_kargs_buffer.buf_size = kargs_buffer_size;
 
   // write arguments
-  formosa_printf_launch_meta_t printf_meta = {
-      .printf_buffer = (uint64_t)device_printf_buffer_addr,
-      .printf_buffer_position = (uint64_t)device_printf_position_addr,
-      .printf_buffer_capacity = (uint32_t)cmd->device->printf_buffer_size,
-      .reserved = 0,
-  };
-  memcpy(host_kargs_base_ptr, &printf_meta, sizeof(printf_meta));
+  if (has_printf_meta) {
+    formosa_printf_launch_meta_t printf_meta = {
+        .printf_buffer = (uint64_t)device_printf_buffer_addr,
+        .printf_buffer_position = (uint64_t)device_printf_position_addr,
+        .printf_buffer_capacity = (uint32_t)cmd->device->printf_buffer_size,
+        .reserved = 0,
+    };
+    memcpy(host_kargs_base_ptr, &printf_meta, sizeof(printf_meta));
 
-  uint32_t zero_printf_position = 0;
-  err = fsa_copy_to_dev((uintptr_t)device_printf_position_addr,
-                        &zero_printf_position, sizeof(zero_printf_position));
-  if (err != 0) {
-    POCL_MSG_ERR("pocl_formosa_run: device printf position reset failed\n");
-    errcode = formosa_hal_error(CL_OUT_OF_RESOURCES);
-    goto FAIL;
+    uint32_t zero_printf_position = 0;
+    err = fsa_copy_to_dev((uintptr_t)device_printf_position_addr,
+                          &zero_printf_position, sizeof(zero_printf_position));
+    if (err != 0) {
+      POCL_MSG_ERR("pocl_formosa_run: device printf position reset failed\n");
+      errcode = formosa_hal_error(CL_OUT_OF_RESOURCES);
+      goto FAIL;
+    }
   }
 
   uint32_t host_args_offset = printf_meta_size;
@@ -690,19 +690,33 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
 
   // launch kernel execution
   FsaCompletionToken token = 0;
-  uint16_t dispatch_flags = pc->work_dim | FSA_KERNEL_DISPATCH_HAS_PRINTF_META;
-  if (pocl_formosa_kernel_stack_remap_enabled(kernel, cmd->device))
-    dispatch_flags |= FSA_KERNEL_DISPATCH_STACK_REMAP;
-  const formosa_kernel_submit_args_t submit_args = {
-      dispatch_flags,
-      pc->local_size,
-      pc->num_groups,
-      pc->global_offset,
-      local_mem_size,
-      entry_pc,
-      (uintptr_t)device_args_buffer_addr,
-      (uintptr_t)trampoline_pc,
-      (uintptr_t)device_kernel_status_addr};
+  formosa_kernel_submit_args_t submit_args;
+  memset(&submit_args, 0, sizeof(submit_args));
+  if (pc->work_dim < 1 || pc->work_dim > 3 || local_mem_size > UINT32_MAX) {
+    POCL_MSG_ERR("pocl_formosa_run: launch geometry does not fit descriptor\n");
+    errcode = CL_INVALID_WORK_DIMENSION;
+    goto FAIL;
+  }
+  submit_args.info.struct_size = sizeof(submit_args.info);
+  submit_args.info.dimensions = pc->work_dim;
+  for (cl_uint dim = 0; dim < pc->work_dim; ++dim) {
+    if (pc->local_size[dim] > UINT32_MAX || pc->num_groups[dim] > UINT32_MAX) {
+      POCL_MSG_ERR("pocl_formosa_run: launch geometry exceeds descriptor\n");
+      errcode = CL_INVALID_WORK_GROUP_SIZE;
+      goto FAIL;
+    }
+    submit_args.info.local_size[dim] = (uint32_t)pc->local_size[dim];
+    submit_args.info.num_groups[dim] = (uint32_t)pc->num_groups[dim];
+    submit_args.info.global_offset[dim] = pc->global_offset[dim];
+  }
+  submit_args.info.local_mem_size = (uint32_t)local_mem_size;
+  submit_args.info.has_printf_meta = has_printf_meta;
+  submit_args.info.enable_stack_remap =
+      pocl_formosa_kernel_stack_remap_enabled(kernel, cmd->device) ? 1u : 0u;
+  submit_args.info.kernel_entry = entry_pc;
+  submit_args.info.kernarg_address = (FsaDeviceAddress)device_args_buffer_addr;
+  submit_args.info.kernel_trampoline = trampoline_pc;
+  submit_args.info.kernel_status = (FsaDeviceAddress)device_kernel_status_addr;
   const FsaCommandSubmitStatus submit_status =
       pocl_fsa_submit_with_backpressure(formosa_submit_kernel,
                                         (void *)&submit_args, &token);
@@ -722,39 +736,42 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
     goto FAIL;
   }
 
-  uint32_t printf_position = 0;
-  err = fsa_copy_from_dev((uintptr_t)device_printf_position_addr,
-                          &printf_position, sizeof(printf_position));
-  if (err != 0) {
-    POCL_MSG_ERR(
-        "pocl_formosa_run: reading printf position from device failed\n");
-    errcode = formosa_hal_error(CL_OUT_OF_RESOURCES);
-    goto FAIL;
-  }
-  if (printf_position > cmd->device->printf_buffer_size) {
-    POCL_MSG_ERR(
-        "pocl_formosa_run: invalid printf buffer position %u (capacity %zu)\n",
-        printf_position, cmd->device->printf_buffer_size);
-    errcode = CL_OUT_OF_RESOURCES;
-    goto FAIL;
-  }
-  if (printf_position > 0) {
-    host_printf_buffer = (char *)malloc(printf_position);
-    if (host_printf_buffer == NULL) {
-      errcode = CL_OUT_OF_HOST_MEMORY;
-      goto FAIL;
-    }
-    err = fsa_copy_from_dev((uintptr_t)device_printf_buffer_addr,
-                            host_printf_buffer, printf_position);
+  if (has_printf_meta) {
+    uint32_t printf_position = 0;
+    err = fsa_copy_from_dev((uintptr_t)device_printf_position_addr,
+                            &printf_position, sizeof(printf_position));
     if (err != 0) {
       POCL_MSG_ERR(
-          "pocl_formosa_run: reading printf buffer from device failed\n");
+          "pocl_formosa_run: reading printf position from device failed\n");
       errcode = formosa_hal_error(CL_OUT_OF_RESOURCES);
       goto FAIL;
     }
-    pocl_write_printf_buffer(host_printf_buffer, printf_position);
-    free(host_printf_buffer);
-    host_printf_buffer = NULL;
+    if (printf_position > cmd->device->printf_buffer_size) {
+      POCL_MSG_ERR(
+          "pocl_formosa_run: invalid printf buffer position %u (capacity "
+          "%zu)\n",
+          printf_position, cmd->device->printf_buffer_size);
+      errcode = CL_OUT_OF_RESOURCES;
+      goto FAIL;
+    }
+    if (printf_position > 0) {
+      host_printf_buffer = (char *)malloc(printf_position);
+      if (host_printf_buffer == NULL) {
+        errcode = CL_OUT_OF_HOST_MEMORY;
+        goto FAIL;
+      }
+      err = fsa_copy_from_dev((uintptr_t)device_printf_buffer_addr,
+                              host_printf_buffer, printf_position);
+      if (err != 0) {
+        POCL_MSG_ERR(
+            "pocl_formosa_run: reading printf buffer from device failed\n");
+        errcode = formosa_hal_error(CL_OUT_OF_RESOURCES);
+        goto FAIL;
+      }
+      pocl_write_printf_buffer(host_printf_buffer, printf_position);
+      free(host_printf_buffer);
+      host_printf_buffer = NULL;
+    }
   }
 
   // release arguments device buffer
