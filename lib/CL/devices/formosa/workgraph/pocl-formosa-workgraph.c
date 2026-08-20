@@ -1,14 +1,16 @@
+#include "pocl-formosa-workgraph.h"
+
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "pocl-formosa-workgraph.h"
-#include "formosa-hal/graph.h"
-#include "formosa-hal/hal.h"
 #include "../formosa-llvm-util.h"
 #include "../formosa-util.h"
 #include "../pocl-formosa-internal.h"
+#include "formosa-hal/api.h"
+#include "formosa-hal/graph.h"
+#include "formosa-hal/hal.h"
 #include "pocl_util.h"
 
 /* Extra ctx/kernarg slots let firmware keep multiple dispatches active for the
@@ -18,20 +20,18 @@
 #define FORMOSA_WG_MAX_DISPATCH_SLOTS 64
 #define FORMOSA_WG_DEFAULT_QUEUE_CAPACITY 16
 
-static const struct pocl_work_graph_backend_ops
-    pocl_formosa_work_graph_ops = {
-      .create_graph = pocl_formosa_create_work_graph,
-      .create_node = pocl_formosa_create_work_graph_node,
-      .create_edge = pocl_formosa_create_work_graph_edge,
-      .get_info = pocl_formosa_get_work_graph_info,
-      .free_graph = pocl_formosa_free_work_graph,
-      .run = pocl_formosa_run_work_graph,
-    };
+static const struct pocl_work_graph_backend_ops pocl_formosa_work_graph_ops = {
+    .create_graph = pocl_formosa_create_work_graph,
+    .create_node = pocl_formosa_create_work_graph_node,
+    .create_edge = pocl_formosa_create_work_graph_edge,
+    .get_info = pocl_formosa_get_work_graph_info,
+    .free_graph = pocl_formosa_free_work_graph,
+    .run = pocl_formosa_run_work_graph,
+};
 
-const void *
-pocl_formosa_workgraph_get_extension_ops (const char *extension_name)
-{
-  if (strcmp (extension_name, CL_FORMOSA_WORK_GRAPH_EXTENSION_NAME) == 0)
+const void *pocl_formosa_workgraph_get_extension_ops(
+    const char *extension_name) {
+  if (strcmp(extension_name, CL_FORMOSA_WORK_GRAPH_EXTENSION_NAME) == 0)
     return &pocl_formosa_work_graph_ops;
   return NULL;
 }
@@ -40,8 +40,8 @@ typedef struct {
   FsaGraphLaunchInfo info;
 } formosa_graph_submit_args_t;
 
-static FsaCommandSubmitStatus formosa_submit_graph(
-    void *context, FsaCompletionToken *token) {
+static FsaCommandSubmitStatus formosa_submit_graph(void *context,
+                                                   FsaCompletionToken *token) {
   const formosa_graph_submit_args_t *args =
       (const formosa_graph_submit_args_t *)context;
   return fsa_cmd_launch_graph(&args->info, token);
@@ -427,8 +427,7 @@ static cl_int pocl_formosa_pack_kernel_args(
 cl_int pocl_formosa_run_work_graph(void *data, _cl_command_node *cmd) {
   const struct pocl_work_graph_launch *launch =
       (const struct pocl_work_graph_launch *)cmd->command.extension.data;
-  if (launch == NULL)
-    return CL_INVALID_VALUE;
+  if (launch == NULL) return CL_INVALID_VALUE;
   cl_work_graph_formosa graph = launch->graph;
   cl_uint num_root_inputs = launch->num_root_inputs;
   cl_work_graph_root_input_formosa *root_inputs = launch->root_inputs;

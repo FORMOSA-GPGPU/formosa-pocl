@@ -1,5 +1,6 @@
 #include "formosa-memory.h"
 
+#include "formosa-hal/hal.h"
 #include "formosa-util.h"
 #include "pocl-formosa-internal.h"
 #include "pocl_debug.h"
@@ -11,7 +12,7 @@ struct MemoryCopySubmitArgs {
 };
 
 FsaCommandSubmitStatus submit_memory_copy(void *context,
-                                             FsaCompletionToken *token) {
+                                          FsaCompletionToken *token) {
   const MemoryCopySubmitArgs *args =
       static_cast<const MemoryCopySubmitArgs *>(context);
   return fsa_cmd_memory_copy(&args->info, token);

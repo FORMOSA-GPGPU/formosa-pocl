@@ -8,6 +8,7 @@
 #include "common.h"
 #include "common_driver.h"
 #include "config.h"
+#include "formosa-hal/api.h"
 #include "formosa-hal/hal.h"
 #include "formosa-llvm-util.h"
 #include "formosa-memory.h"

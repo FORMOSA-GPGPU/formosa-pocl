@@ -1,7 +1,7 @@
 #ifndef FORMOSA_MEMORY_H
 #define FORMOSA_MEMORY_H
 
-#include <formosa-hal/hal.h>
+#include <formosa-hal/api.h>
 
 #include "pocl.h"
 
