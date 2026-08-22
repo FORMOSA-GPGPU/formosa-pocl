@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: 2026 CASLab, National Cheng Kung University
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+exclude: '(third-party/.*)|(build/.*)'
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-added-large-files
+      - id: check-symlinks
+      - id: destroyed-symlinks
+
+  - repo: local
+    hooks:
+      - id: clang-format-formosa
+        name: clang-format (formosa)
+        entry: clang-format -i --style=file:lib/CL/devices/formosa/.clang-format
+        language: system
+        files: >-
+          ^(lib/CL/devices/formosa/|include/CL/cl_formosa|
+          lib/CL/cl.*FORMOSA|tests/runtime/test_formosa).*\.(c|cc|cpp|h|hpp)$

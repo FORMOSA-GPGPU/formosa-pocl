@@ -184,6 +184,17 @@ if(ENABLE_CUDA)
   endif()
 endif()
 
+if(ENABLE_FORMOSA)
+  message(STATUS "Building Formosa device driver")
+  add_subdirectory("formosa")
+  set(POCL_DEVICES_OBJS "${POCL_DEVICES_OBJS}"
+    "$<TARGET_OBJECTS:pocl-devices-formosa>")
+
+  if(NOT ENABLE_LOADABLE_DRIVERS)
+    list(APPEND POCL_DEVICES_LINK_LIST ${FORMOSA_LIBS})
+  endif()
+endif()
+
 
 set(POCL_DEVICES_SOURCES
   devices.h  devices.c

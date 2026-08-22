@@ -85,7 +85,10 @@ POname (clReleaseCommandBufferKHR) (cl_command_buffer_khr command_buffer)
       _cl_command_node *cmd = command_buffer->cmds;
       while (cmd != NULL)
         {
-          switch (cmd->type)
+          if (cmd->is_extension)
+            pocl_cleanup_command_extension (cmd);
+          else
+            switch (cmd->type)
             {
             case CL_COMMAND_NDRANGE_KERNEL:
               for (unsigned i = 0; i < cmd->command.run.kernel->meta->num_args;

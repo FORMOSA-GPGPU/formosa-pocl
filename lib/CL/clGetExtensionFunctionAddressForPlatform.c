@@ -23,8 +23,12 @@
 */
 
 #include "pocl_cl.h"
-
 #include <string.h>
+
+#ifdef BUILD_FORMOSA
+extern void *pocl_formosa_get_extension_function_address (
+  const char *func_name);
+#endif
 
 CL_API_ENTRY void * CL_API_CALL
 POname (clGetExtensionFunctionAddressForPlatform) (cl_platform_id  platform,
@@ -228,6 +232,13 @@ CL_API_SUFFIX__VERSION_1_2
 
   if (strcmp (func_name, "clCreateProgramWithDefinedBuiltInKernelsEXP") == 0)
     return (void *)&POname (clCreateProgramWithDefinedBuiltInKernelsEXP);
+
+#ifdef BUILD_FORMOSA
+  void *formosa_function =
+    pocl_formosa_get_extension_function_address (func_name);
+  if (formosa_function != NULL)
+    return formosa_function;
+#endif
 
   POCL_MSG_ERR ("unknown platform extension requested: %s\n", func_name);
   return NULL;

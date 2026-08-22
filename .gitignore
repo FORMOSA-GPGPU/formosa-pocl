@@ -93,3 +93,13 @@ cmake-build-*/
 
 # Cmake
 CMakeUserPresets.json
+
+# nix generated files
+outputs/*
+result
+
+# direnv
+.direnv/
+
+# macos
+.DS_Store

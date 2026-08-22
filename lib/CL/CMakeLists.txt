@@ -222,6 +222,12 @@ set(POCL_LIB_SOURCES  "clCreateContextFromType.c"
                    "pocl_raw_ptr_set.c"
 )
 
+if(ENABLE_FORMOSA)
+  list(APPEND POCL_LIB_SOURCES
+       "clSetKernelStackRemapFORMOSA.c"
+       "devices/formosa/pocl-formosa-extensions.c")
+endif()
+
 unset(EXTRA_LLVM_SOURCES)
 
 if(ENABLE_LLVM_PLATFORM_SUPPORT)

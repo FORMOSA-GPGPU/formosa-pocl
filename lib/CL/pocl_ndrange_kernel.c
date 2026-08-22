@@ -258,7 +258,7 @@ find_raw_ptr (void *value, cl_context context, cl_device_id dev)
 /**
  * Collect the kernel's buffer usage for implicit migration.
  */
-static cl_int
+cl_int
 pocl_kernel_collect_mem_objs (
   cl_device_id realdev,
   cl_context context,

@@ -1051,6 +1051,9 @@ struct pocl_device_ops {
   cl_int (*free_command_buffer) (cl_device_id device,
                                  cl_command_buffer_khr command_buffer);
 
+  /* Returns a device extension's private operations table, or NULL when the
+   * extension is unsupported. */
+  const void *(*get_extension_ops) (const char *extension_name);
 };
 
 typedef struct pocl_global_mem_t {
@@ -1135,6 +1138,7 @@ struct _cl_device_id {
     dot_product_accel_props_8bit;
   cl_device_integer_dot_product_acceleration_properties_khr
     dot_product_accel_props_4x8bit;
+  cl_device_kernel_clock_capabilities_khr kernel_clock_caps;
   cl_device_mem_cache_type global_mem_cache_type;
   cl_uint global_mem_cacheline_size;
   cl_ulong global_mem_cache_size;

@@ -814,8 +814,20 @@ pocl_exec_command (_cl_command_node *node)
 
     default:
       pocl_update_event_running (event);
-      POCL_UPDATE_EVENT_FAILED_MSG (
-        CL_FAILED, event, "pocl_exec_command: Unknown command type\n");
+      if (node->is_extension && cmd->extension.run != NULL)
+        {
+          cl_int err = cmd->extension.run (dev->data, node);
+          const char *name = cmd->extension.event_name != NULL
+                               ? cmd->extension.event_name
+                               : "Device extension command";
+          if (err != CL_SUCCESS)
+            POCL_UPDATE_EVENT_FAILED_MSG (err, event, name);
+          else
+            POCL_UPDATE_EVENT_COMPLETE_MSG (event, name);
+        }
+      else
+        POCL_UPDATE_EVENT_FAILED_MSG (
+          CL_FAILED, event, "pocl_exec_command: Unknown command type\n");
       break;
     }
 }
@@ -1887,6 +1899,7 @@ static const cl_name_version OPENCL_EXTENSIONS[]
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_create_command_queue" },
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_pci_bus_info" },
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_device_uuid" },
+      { CL_MAKE_VERSION (1, 0, 0), "cl_khr_kernel_clock" },
 
       { CL_MAKE_VERSION (0, 9, 6), "cl_khr_command_buffer" },
       { CL_MAKE_VERSION (0, 9, 1), "cl_khr_command_buffer_multi_device" },
@@ -1898,7 +1911,8 @@ static const cl_name_version OPENCL_EXTENSIONS[]
       { CL_MAKE_VERSION (0, 9, 0), "cl_pocl_command_buffer_host_buffer" },
       { CL_MAKE_VERSION (0, 9, 0), "cl_pocl_command_buffer_host_exec" },
       { CL_MAKE_VERSION (0, 1, 0), "cl_exp_tensor" },
-      { CL_MAKE_VERSION (0, 1, 0), "cl_exp_defined_builtin_kernels" } };
+      { CL_MAKE_VERSION (0, 1, 0), "cl_exp_defined_builtin_kernels" },
+      { CL_MAKE_VERSION (1, 0, 0), "cl_formosa_stack_remap" } };
 
 const size_t OPENCL_EXTENSIONS_NUM
     = sizeof (OPENCL_EXTENSIONS) / sizeof (OPENCL_EXTENSIONS[0]);
@@ -2025,6 +2039,9 @@ static const cl_name_version OPENCL_C_FEATURES[] = {
   { CL_MAKE_VERSION (3, 0, 0), "__opencl_c_ext_fp64_local_atomic_load_store" },
   { CL_MAKE_VERSION (3, 0, 0), "__opencl_c_integer_dot_product_input_4x8bit" },
   { CL_MAKE_VERSION (3, 0, 0), "__opencl_c_integer_dot_product_input_4x8bit_packed" },
+  { CL_MAKE_VERSION (3, 0, 0), "__opencl_c_kernel_clock_scope_device" },
+  { CL_MAKE_VERSION (3, 0, 0), "__opencl_c_kernel_clock_scope_work_group" },
+  { CL_MAKE_VERSION (3, 0, 0), "__opencl_c_kernel_clock_scope_sub_group" },
 };
 
 const size_t OPENCL_C_FEATURES_NUM

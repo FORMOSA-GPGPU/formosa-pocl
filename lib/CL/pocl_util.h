@@ -239,6 +239,7 @@ int pocl_setup_context (cl_context context);
 
 /* Helpers for dealing with devices / subdevices */
 
+POCL_EXPORT
 cl_device_id pocl_real_dev (const cl_device_id);
 cl_device_id * pocl_unique_device_list(const cl_device_id * in, cl_uint num, cl_uint *real);
 int pocl_device_supports_builtin_kernel (cl_device_id dev,
@@ -324,6 +325,9 @@ pocl_update_event_failed ((status), __func__, __LINE__, (__event), msg)
 POCL_EXPORT
 int pocl_copy_command_node (_cl_command_node *dst_node,
                             _cl_command_node *src_node);
+
+POCL_EXPORT
+void pocl_cleanup_command_extension (_cl_command_node *node);
 
 const char*
 pocl_status_to_str (int status);
