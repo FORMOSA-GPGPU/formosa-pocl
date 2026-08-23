@@ -45,9 +45,9 @@ cmake --build build --target install
 ## Examine the installation
 
 1. Start the lv server (from the formosa monorepo)
-2. Export the socket path (direnv defaults to `/tmp/casvp-ipc`)
+2. Export the socket path (direnv defaults to `/tmp/formosa.sock`)
 ```bash
-export AGENT_SOCKET_PATH=/tmp/casvp-ipc
+export AGENT_SOCKET_PATH=/tmp/formosa.sock
 ```
 3. Point ICD at your local install if needed
 ```bash
@@ -62,7 +62,7 @@ clinfo -l
 
 1. Set the environment variable
 ```bash
-export AGENT_SOCKET_PATH=<path-to-lv-ipc-socket>
+export AGENT_SOCKET_PATH=/tmp/formosa.sock
 export POCL_FORMOSA_CFLAGS=<kernel-compiler-flags>  # default: "-O2" (no PRI insertion); for PRI, use: -fsa-ics-first, -mllvm -fsa-ipdom-like, or -mllvm -fsa-post-topo
 export POCL_FORMOSA_LDFLAGS=<kernel-linker-flags>  # default: "-fuse-ld=lld -nostartfiles"
 ```
