@@ -282,8 +282,26 @@ cl_int pocl_fsa_wait_completion(FsaCompletionToken token,
   const cl_int wait_status = pocl_fsa_wait_completion_result(token, &result);
   if (wait_status != CL_SUCCESS) return wait_status;
 
-  if (device_kernel_status_addr == 0)
-    return result == FSA_COMPLETION_RESULT_SUCCESS ? CL_SUCCESS : CL_FAILED;
+  bool result_is_okay = false;
+  bool result_is_known = true;
+  switch (result) {
+    case FSA_COMPLETION_RESULT_KERNEL_OKAY:
+      result_is_okay = true;
+      break;
+    case FSA_COMPLETION_RESULT_KERNEL_BAD_DIMENSION:
+    case FSA_COMPLETION_RESULT_KERNEL_EXCEPTION:
+    case FSA_COMPLETION_RESULT_KERNEL_UNKNOWN_ERROR:
+      break;
+    default:
+      POCL_MSG_ERR("Unexpected kernel completion result %u\n",
+                   (unsigned)result);
+      result_is_known = false;
+      break;
+  }
+
+  if (device_kernel_status_addr == 0) {
+    return result_is_okay ? CL_SUCCESS : CL_FAILED;
+  }
 
   uint8_t status_raw[sizeof(KernelStatus)];
   int err = fsa_copy_from_dev(device_kernel_status_addr, status_raw,
@@ -296,13 +314,18 @@ cl_int pocl_fsa_wait_completion(FsaCompletionToken token,
   KernelStatus status;
   deserialize_kernel_status(status_raw, &status);
 
+  FsaCompletionResult status_result =
+      FSA_COMPLETION_RESULT_KERNEL_UNKNOWN_ERROR;
   switch (status.code) {
     case kKernelOkay:
+      status_result = FSA_COMPLETION_RESULT_KERNEL_OKAY;
       break;
     case kKernelBadDimension:
+      status_result = FSA_COMPLETION_RESULT_KERNEL_BAD_DIMENSION;
       POCL_MSG_ERR("Bad dimension\n");
       break;
     case kKernelException:
+      status_result = FSA_COMPLETION_RESULT_KERNEL_EXCEPTION;
       POCL_MSG_ERR(
           "\nException occurs:\n"
           "\tmcause: 0x%08lx\n"
@@ -310,19 +333,27 @@ cl_int pocl_fsa_wait_completion(FsaCompletionToken token,
           "\tmtval:  0x%08lx\n",
           status.mcause, status.mepc, status.mtval);
       break;
-    default:
-      __attribute__((fallthrough));
     case kKernelUnknownError:
+    default:
+      status_result = FSA_COMPLETION_RESULT_KERNEL_UNKNOWN_ERROR;
       POCL_MSG_ERR(
           "Unknown error occurred in kernel execution\n"
           "\tmcause: 0x%08lx\n"
           "\tmepc:   0x%08lx\n"
           "\tmtval:  0x%08lx\n",
           status.mcause, status.mepc, status.mtval);
+      break;
   }
 
-  if (result != FSA_COMPLETION_RESULT_SUCCESS) return CL_FAILED;
-  return status.code == kKernelOkay ? CL_SUCCESS : CL_FAILED;
+  if (!result_is_known) return CL_FAILED;
+  if (result != status_result) {
+    POCL_MSG_ERR(
+        "Kernel completion/status ABI mismatch (result=%u, status=%u)\n",
+        (unsigned)result, (unsigned)status.code);
+    return CL_FAILED;
+  }
+
+  return result_is_okay ? CL_SUCCESS : CL_FAILED;
 }
 
 static int exec(const char *cmd, std::ostream &out) {
