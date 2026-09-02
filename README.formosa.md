@@ -4,18 +4,9 @@
 
 ### Option A: direnv (recommended)
 
-If this `pocl` checkout sits next to a `formosa` clone:
-
-```text
-<formosa-gpgpu>/
-  formosa/
-  pocl/        # you are here
-```
-
-then:
-
 ```bash
-# once per clone
+cp .envrc.local.example .envrc.local
+# Set the required FORMOSA_SOURCE_DIR, then:
 direnv allow
 
 # entering pocl/ loads formosa#formosa-pocl automatically
@@ -23,14 +14,20 @@ cmake -B build -G Ninja $(echo $cmakeFlags)
 cmake --build build --target install
 ```
 
-`direnv` only auto-discovers **sibling** `../formosa` (same parent directory as `pocl`).
+`FORMOSA_SOURCE_DIR` must point to a FORMOSA source tree containing `flake.nix`.
+PoCL does not infer this path from the checkout layout.
 
-If formosa is elsewhere, set an absolute path once:
+PoCL links the installed `Formosa::formosa-hal.lv` CMake target. By default it
+uses the FORMOSA SDK from the Nix shell. To use a locally installed FORMOSA SDK,
+set `FORMOSA_INSTALL_PREFIX` in `.envrc.local`, then run `direnv reload`.
 
-```bash
-export FORMOSA_FLAKE=/absolute/path/to/formosa
-direnv allow   # re-enter pocl/ after setting
-```
+`FORMOSA_INSTALL_PREFIX` is an install prefix, not a source directory. Build and
+install FORMOSA first; the prefix must contain
+`lib/cmake/Formosa/FormosaConfig.cmake` or
+`lib64/cmake/Formosa/FormosaConfig.cmake`.
+
+When migrating from the old source-tree setup, configure PoCL in a clean build
+directory.
 
 Requires [direnv](https://direnv.net/) with [nix-direnv](https://github.com/nix-community/nix-direnv), same as the formosa monorepo.
 
@@ -38,7 +35,8 @@ Requires [direnv](https://direnv.net/) with [nix-direnv](https://github.com/nix-
 
 ```bash
 nix develop /path/to/formosa#formosa-pocl
-cmake -B build -G Ninja $(echo $cmakeFlags)
+cmake -B build -G Ninja $(echo $cmakeFlags) \
+  -D Formosa_DIR=/path/to/formosa-install/lib64/cmake/Formosa
 cmake --build build --target install
 ```
 

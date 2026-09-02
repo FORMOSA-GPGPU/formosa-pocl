@@ -97,6 +97,7 @@ CMakeUserPresets.json
 # nix generated files
 outputs/*
 result
+.envrc.local
 
 # direnv
 .direnv/
