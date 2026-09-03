@@ -77,6 +77,7 @@ void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
   ops->probe = pocl_formosa_probe;
   ops->init = pocl_formosa_init;
   ops->uninit = pocl_formosa_uninit;
+  ops->reinit = pocl_formosa_reinit;
 
   ops->init_context = pocl_formosa_init_context;
   ops->free_context = pocl_formosa_free_context;
@@ -214,7 +215,10 @@ void pocl_formosa_copy(void *data, pocl_mem_identifier *dst_mem_id,
  **************************/
 
 static cl_bool formosa_available = CL_TRUE;
+static cl_device_id formosa_owned_device = NULL;
+static cl_bool formosa_atexit_registered = CL_FALSE;
 static char *formosa_build_hash = "formosa-riscv64-unknown-unknwon-elf";
+static void formosa_finish_fn(void);
 
 void formosa_mark_unavailable(void) { formosa_available = CL_FALSE; }
 
@@ -224,6 +228,12 @@ static cl_int formosa_hal_error(cl_int fallback) {
     return CL_DEVICE_NOT_AVAILABLE;
   }
   return fallback;
+}
+
+// atexit function to cleanup formosa device
+static void formosa_finish_fn(void) {
+  if (formosa_owned_device != NULL)
+    (void)pocl_formosa_uninit(0, formosa_owned_device);
 }
 
 unsigned int pocl_formosa_probe(struct pocl_device_ops *ops) {
@@ -345,6 +355,11 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   dd->copy_thread_stop = CL_FALSE;
   dd->copy_thread_started = CL_TRUE;
   POCL_CREATE_THREAD(dd->copy_thread, formosa_copy_completion_thread, dd);
+  formosa_owned_device = device;
+  if (!formosa_atexit_registered) {
+    atexit(formosa_finish_fn);
+    formosa_atexit_registered = CL_TRUE;
+  }
 
   return CL_SUCCESS;
 }
@@ -352,6 +367,7 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
 cl_int pocl_formosa_uninit(unsigned j, cl_device_id device) {
   pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
   if (dd == NULL) return CL_SUCCESS;
+  if (formosa_owned_device == device) formosa_owned_device = NULL;
 
   if (dd->copy_thread_started) {
     POCL_LOCK(dd->copy_lock);
@@ -381,6 +397,48 @@ cl_int pocl_formosa_uninit(unsigned j, cl_device_id device) {
   }
   POCL_MEM_FREE(device->data);
   device->data = NULL;
+  return CL_SUCCESS;
+}
+
+cl_int pocl_formosa_reinit(unsigned j, cl_device_id device,
+                           const char *parameters) {
+  pocl_formosa_data_t *dd;
+  FsaDeviceDescription description = {};
+
+  assert(device->data == NULL);
+
+  dd = (pocl_formosa_data_t *)calloc(1, sizeof(pocl_formosa_data_t));
+  if (dd == NULL) {
+    return CL_OUT_OF_HOST_MEMORY;
+  }
+
+  POCL_INIT_LOCK(dd->compile_lock);
+  POCL_INIT_LOCK(dd->cq_lock);
+  POCL_INIT_LOCK(dd->copy_lock);
+  POCL_INIT_COND(dd->copy_cond);
+
+  int err = fsa_hal_init(&description);
+  if (err != 0) {
+    formosa_available = CL_FALSE;
+    POCL_DESTROY_LOCK(dd->compile_lock);
+    POCL_DESTROY_LOCK(dd->cq_lock);
+    POCL_DESTROY_COND(dd->copy_cond);
+    POCL_DESTROY_LOCK(dd->copy_lock);
+    POCL_MEM_FREE(dd);
+    POCL_MSG_ERR("pocl_formosa_reinit: HAL initialization failed (%d)\n", err);
+    return CL_DEVICE_NOT_AVAILABLE;
+  }
+
+  device->data = dd;
+  formosa_available = CL_TRUE;
+  dd->copy_thread_stop = CL_FALSE;
+  dd->copy_thread_started = CL_TRUE;
+  POCL_CREATE_THREAD(dd->copy_thread, formosa_copy_completion_thread, dd);
+  formosa_owned_device = device;
+  if (!formosa_atexit_registered) {
+    atexit(formosa_finish_fn);
+    formosa_atexit_registered = CL_TRUE;
+  }
   return CL_SUCCESS;
 }
 
@@ -987,12 +1045,7 @@ cl_int pocl_formosa_init_context(cl_device_id device, cl_context context) {
 cl_int pocl_formosa_free_context(cl_device_id device, cl_context context) {
   pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
   if (dd == NULL) return CL_SUCCESS;
-
   dd->context_ref_count--;
-  if (dd->context_ref_count == 0) {
-    pocl_formosa_uninit(0, device);
-  }
-
   return CL_SUCCESS;
 }
 
