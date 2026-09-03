@@ -1,0 +1,12 @@
+# Copy this file to .envrc.local and replace paths with absolute paths.
+
+# Required FORMOSA source tree containing flake.nix.
+# export FORMOSA_SOURCE_DIR=/absolute/path/to/formosa
+
+# Optional local FORMOSA SDK override. The prefix must contain
+# lib/cmake/Formosa/FormosaConfig.cmake or lib64/cmake/Formosa/FormosaConfig.cmake.
+# Without this, PoCL uses the FORMOSA SDK provided by the Nix dev shell.
+# export FORMOSA_INSTALL_PREFIX=/absolute/path/to/formosa-install
+
+# Optional; defaults to this PoCL checkout's outputs/out directory.
+# export POCL_INSTALL_PREFIX=/absolute/path/to/pocl-install

@@ -67,23 +67,8 @@ endif()
 set(FORMOSA_PLATFORM "lv" CACHE STRING "Platform for FORMOSA HAL, default to lv")
 message(STATUS "FORMOSA_PLATFORM: ${FORMOSA_PLATFORM}")
 
-if(CMAKE_BUILD_TYPE STREQUAL Release)
-  find_package(Formosa REQUIRED)
-  set(FORMOSA_HAL_TARGET Formosa::formosa-hal.${FORMOSA_PLATFORM})
-else()
-  if(NOT FORMOSA_SOURCE_DIR)
-    message(FATAL_ERROR "FORMOSA_SOURCE_DIR is not set.\nUse -D FORMOSA_SOURCE_DIR=/absolute/path/to/formosa to define the path.")
-  endif()
-  set(ENABLE_PROJECTS hal)
-  add_subdirectory(${FORMOSA_SOURCE_DIR} formosa-build)
-
-  # Prioritize source headers
-  target_include_directories(pocl-devices-formosa BEFORE PRIVATE
-                             "${FORMOSA_SOURCE_DIR}/hal/include"
-                             "${FORMOSA_SOURCE_DIR}/fw")
-
-  set(FORMOSA_HAL_TARGET formosa-hal.${FORMOSA_PLATFORM})
-endif()
+find_package(Formosa REQUIRED GLOBAL)
+set(FORMOSA_HAL_TARGET Formosa::formosa-hal.${FORMOSA_PLATFORM})
 
 target_link_libraries(pocl-devices-formosa PUBLIC ${FORMOSA_HAL_TARGET})
 set(FORMOSA_LIBS ${FORMOSA_HAL_TARGET} PARENT_SCOPE)
