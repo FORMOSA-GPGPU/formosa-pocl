@@ -43,6 +43,11 @@ list(APPEND KERNEL_SOURCES "formosa/printf_globals.c")
 list(APPEND KERNEL_SOURCES "formosa/printf_alloc.c")
 list(APPEND KERNEL_SOURCES "formosa/atomics.cl")
 
+if(ENABLE_SPIRV)
+  generate_cpu_spir_wrapper(cpu_riscv formosa 128 SPIR_WRAPPER_FILE)
+  list(APPEND KERNEL_SOURCES "${SPIR_WRAPPER_FILE}")
+endif()
+
 if(NOT DEFINED FORMOSA_DEVICE_EXTENSIONS)
   set(FORMOSA_DEVICE_EXTENSIONS "")
 endif()
