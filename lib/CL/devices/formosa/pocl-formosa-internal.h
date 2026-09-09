@@ -37,6 +37,8 @@ typedef struct {
 typedef struct formosa_pending_copy {
   _cl_command_node *node;
   FsaCompletionToken token;
+  /* Staging buffer owned by this pending copy, or NULL if none. */
+  void *owned_staging;
   struct formosa_pending_copy *next;
 } formosa_pending_copy_t;
 
