@@ -23,15 +23,25 @@
 
 #include "templates.h"
 
-/* ponytail: sign from tgamma; fused lgamma_r if overflow/pole sign matters */
+/* signp is 0 at zero and negative integers; otherwise sign(Gamma). */
 
-float _CL_OVERLOADABLE
-lgamma_r (float a, int __private *c)
-{
-  *c = tgamma (a) < 0.0f ? -1 : 1;
-  return lgamma (a);
-}
+#define IMPLEMENT_LGAMMA_R_SCALAR(STYPE, ZERO, TWO)                           \
+  STYPE _CL_OVERLOADABLE lgamma_r (STYPE a, int __private *c)                 \
+  {                                                                           \
+    STYPE fl = floor (a);                                                     \
+    if (a > ZERO)                                                             \
+      *c = 1;                                                                 \
+    else if (a == fl)                                                         \
+      *c = 0;                                                                 \
+    else                                                                      \
+      {                                                                       \
+        STYPE rem = fl - TWO * floor (fl / TWO);                              \
+        *c = rem != ZERO ? -1 : 1;                                            \
+      }                                                                       \
+    return lgamma (a);                                                        \
+  }
 
+IMPLEMENT_LGAMMA_R_SCALAR (float, 0.0f, 2.0f)
 IMPLEMENT_BUILTIN_V_VPJ_ADDRSPACE (lgamma_r, float, int, __local)
 IMPLEMENT_BUILTIN_V_VPJ_ADDRSPACE (lgamma_r, float, int, __global)
 IF_GEN_AS (IMPLEMENT_BUILTIN_V_VPJ_ADDRSPACE (lgamma_r, float, int, __generic))
@@ -42,13 +52,7 @@ IMPLEMENT_BUILTIN_V_VPJ (lgamma_r, float8, int8, int4, int4, lo, hi)
 IMPLEMENT_BUILTIN_V_VPJ (lgamma_r, float16, int16, int8, int8, lo, hi)
 
 __IF_FP64 (
-double _CL_OVERLOADABLE
-lgamma_r (double a, int __private *c)
-{
-  *c = tgamma (a) < 0.0 ? -1 : 1;
-  return lgamma (a);
-}
-
+IMPLEMENT_LGAMMA_R_SCALAR (double, 0.0, 2.0)
 IMPLEMENT_BUILTIN_V_VPJ_ADDRSPACE (lgamma_r, double, int, __local)
 IMPLEMENT_BUILTIN_V_VPJ_ADDRSPACE (lgamma_r, double, int, __global)
 IF_GEN_AS (IMPLEMENT_BUILTIN_V_VPJ_ADDRSPACE (lgamma_r, double, int, __generic))
