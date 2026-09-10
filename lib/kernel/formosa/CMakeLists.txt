@@ -30,13 +30,13 @@ set(KERNEL_SOURCES ${SOURCES_GENERIC})
 foreach(FILE atomics.cl printf.c printf_base.c get_local_id.c get_local_size.c get_group_id.c
     get_global_size.c get_num_groups.c get_work_dim.c get_global_id.c
     get_global_offset.c barrier.ll erf.cl erfc.cl fdim.cl nextafter.cl
-    kernel_clock.cl)
+    kernel_clock.cl lgamma.cl)
   list(REMOVE_ITEM KERNEL_SOURCES "${FILE}")
 endforeach()
 
 foreach(FILE get_local_id.cl get_local_size.cl get_group_id.cl get_global_size.cl
   barrier.cl get_num_groups.cl get_work_dim.cl get_global_id.cl get_global_offset.cl
-  erf.cl erfc.cl subgroup_function.cl kernel_clock.cl)
+  erf.cl erfc.cl subgroup_function.cl kernel_clock.cl lgamma.cl)
   list(APPEND KERNEL_SOURCES "formosa/${FILE}")
 endforeach()
 
@@ -85,6 +85,10 @@ foreach(FEATURE IN LISTS FORMOSA_DEVICE_FEATURES_LIST)
   endif()
 endforeach()
 
+# SPIR wrappers are generated with generic AS; CTS SPIR-V calls those
+# _cl_* symbols. Do not advertise the feature on the device API.
+string(APPEND FORMOSA_CL_EXT_FLAGS ",+__opencl_c_generic_address_space")
+
 # -----------------------------------------------------------------------------
 # Build -D flags
 # -----------------------------------------------------------------------------
@@ -105,6 +109,7 @@ foreach(FEATURE IN LISTS FORMOSA_DEVICE_FEATURES_LIST)
     list(APPEND FORMOSA_DEVICE_FEATURE_DEFINES "-D${FEATURE}=1")
   endif()
 endforeach()
+list(APPEND FORMOSA_DEVICE_FEATURE_DEFINES "-D__opencl_c_generic_address_space=1")
 
 # -----------------------------------------------------------------------------
 # Compiler flags
