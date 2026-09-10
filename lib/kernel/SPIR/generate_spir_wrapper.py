@@ -987,7 +987,7 @@ def generate_function(name, ret_type, ret_type_ext, multiAS, *args):
 					print("  %%final_ret = bitcast %s %%coerced_ret to %s" % (coerced_ret_type, ret_type))
 
 				print("  ret %s %%final_ret" % ret_type)
-			elif ARM_CALLING_ABI and (ret_type != sret_ret_type):
+			elif (ARM_CALLING_ABI or RISCV64_CALLING_ABI) and (ret_type != sret_ret_type):
 				print("  call void %s(%s)" % (ocl_mangled_name, callee_args))
 				# add load from alloca
 				if OPAQUE_POINTERS:
