@@ -32,7 +32,7 @@ cl_int pocl_fsa_wait_completion(FsaCompletionToken token,
 
 int pocl_fsa_compile_program(char **kernel_names, int *num_kernels,
                              char *str_program_fsa_bin, char *compiler_options,
-                             void *llvm_module);
+                             void *llvm_module, cl_context ctx);
 
 #ifdef __cplusplus
 }
