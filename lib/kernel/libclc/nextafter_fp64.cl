@@ -13,7 +13,7 @@ _CL_OVERLOADABLE vtype nextafter(vtype x, vtype y) {
   itype ay = iy & sign_bit_mask;
   itype my = sign_bit - iy;
   my = iy < (itype)0 ? my : iy;
-  itype t = mx + (mx < my ? 1 : -1);
+  itype t = mx + (mx < my ? (itype)1 : (itype)-1);
   itype r = sign_bit - t;
   r = t < (itype)0 ? r : t;
   r = isnan(x) ? ix : r;

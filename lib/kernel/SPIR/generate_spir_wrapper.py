@@ -1584,6 +1584,11 @@ generate_function("atomic_work_item_fence", SIG_TO_LLVM_TYPE_MAP['v'], '', None,
 generate_function("work_group_barrier", SIG_TO_LLVM_TYPE_MAP['v'], '', None, 'j', '12memory_scope')
 generate_function("work_group_barrier", SIG_TO_LLVM_TYPE_MAP['v'], '', None, 'j')
 
+# cl_khr_kernel_clock
+for scope in ["device", "work_group", "sub_group"]:
+	generate_function("clock_read_" + scope, SIG_TO_LLVM_TYPE_MAP['m'], '', None)
+	generate_function("clock_read_hilo_" + scope, SIG_TO_LLVM_TYPE_MAP['Dv2_j'], '', None)
+
 # generate wrapper function
 #def generate_function(name, ret_type, ret_type_ext, multiAS, *args):
 # subgroups
