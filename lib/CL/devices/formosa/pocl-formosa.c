@@ -1067,10 +1067,6 @@ cl_int pocl_formosa_alloc_mem_obj(cl_device_id device, cl_mem mem_obj,
                                   void *host_ptr) {
   pocl_mem_identifier *p = &mem_obj->device_ptrs[device->global_mem_id];
 
-  cl_mem_flags flags = mem_obj->flags;
-  assert((flags & (CL_MEM_READ_WRITE | CL_MEM_WRITE_ONLY | CL_MEM_READ_ONLY)) !=
-         0);
-
   void *addr;
   int err = fsa_malloc(&addr, mem_obj->size);
   if (err) {
@@ -1328,8 +1324,8 @@ static void formosa_submit_memory_copy_command(pocl_formosa_data_t *dd,
       break;
     case CL_COMMAND_UNMAP_MEM_OBJECT:
       size = cmd->unmap.mapping->size;
-      no_op = (cmd->unmap.mapping->map_flags
-               & (CL_MAP_WRITE | CL_MAP_WRITE_INVALIDATE_REGION)) == 0;
+      no_op = (cmd->unmap.mapping->map_flags &
+               (CL_MAP_WRITE | CL_MAP_WRITE_INVALIDATE_REGION)) == 0;
       break;
     default:
       assert(0 && "not a Formosa memory-copy command");
