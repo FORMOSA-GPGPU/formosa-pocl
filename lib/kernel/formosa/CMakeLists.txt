@@ -29,7 +29,8 @@ set(KERNEL_SOURCES ${SOURCES_GENERIC})
 
 foreach(FILE atomics.cl printf.c printf_base.c get_local_id.c get_local_size.c get_group_id.c
     get_global_size.c get_num_groups.c get_work_dim.c get_global_id.c
-    get_global_offset.c barrier.ll erf.cl erfc.cl kernel_clock.cl)
+    get_global_offset.c barrier.ll erf.cl erfc.cl fdim.cl nextafter.cl
+    kernel_clock.cl)
   list(REMOVE_ITEM KERNEL_SOURCES "${FILE}")
 endforeach()
 
@@ -38,6 +39,10 @@ foreach(FILE get_local_id.cl get_local_size.cl get_group_id.cl get_global_size.c
   erf.cl erfc.cl subgroup_function.cl kernel_clock.cl)
   list(APPEND KERNEL_SOURCES "formosa/${FILE}")
 endforeach()
+
+list(APPEND KERNEL_SOURCES
+  "libclc-pocl/fdim.cl"
+  "libclc-pocl/nextafter.cl")
 
 list(APPEND KERNEL_SOURCES "formosa/printf_globals.c")
 list(APPEND KERNEL_SOURCES "formosa/printf_alloc.c")

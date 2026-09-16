@@ -6,3 +6,7 @@ size_t _CL_OVERLOADABLE get_local_size(uint dim) {
   else
     return get_wg_info()->local_size[dim];
 }
+
+size_t _CL_OVERLOADABLE get_enqueued_local_size(uint dim) {
+  return get_local_size(dim);
+}
