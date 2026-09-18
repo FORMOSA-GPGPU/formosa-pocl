@@ -77,11 +77,78 @@ static void formosa_release_pending_staging(formosa_pending_copy_t *pending) {
   pending->owned_staging = NULL;
 }
 
+static void formosa_init_subgroup_info(
+    cl_device_id device, pocl_formosa_data_t *data,
+    const FsaDeviceDescription *description) {
+  data->subgroup_size = description->threads_per_warp;
+  device->preferred_wg_size_multiple = data->subgroup_size;
+  device->max_num_sub_groups =
+      description->max_threads_per_work_group / data->subgroup_size;
+}
+
+static cl_int pocl_formosa_get_subgroup_info(
+    cl_device_id device, cl_kernel kernel, unsigned program_device_i,
+    cl_kernel_sub_group_info param_name, size_t input_value_size,
+    const void *input_value, size_t param_value_size, void *param_value,
+    size_t *param_value_size_ret) {
+  (void)program_device_i;
+  const pocl_formosa_data_t *data = device->data;
+  const size_t width = data->subgroup_size;
+  switch (param_name) {
+    case CL_KERNEL_MAX_SUB_GROUP_SIZE_FOR_NDRANGE:
+    case CL_KERNEL_SUB_GROUP_COUNT_FOR_NDRANGE: {
+      POCL_RETURN_ERROR_ON(input_value == NULL ||
+                               input_value_size < sizeof(size_t) ||
+                               input_value_size > 3 * sizeof(size_t) ||
+                               input_value_size % sizeof(size_t) != 0,
+                           CL_INVALID_VALUE, "Invalid local work size array\n");
+      const size_t *local = input_value;
+      size_t count = 1;
+      for (size_t i = 0; i < input_value_size / sizeof(size_t); ++i) {
+        POCL_RETURN_ERROR_ON(
+            local[i] == 0 || local[i] > device->max_work_item_sizes[i] ||
+                local[i] > device->max_work_group_size / count,
+            CL_INVALID_VALUE, "Local work size exceeds device limits\n");
+        count *= local[i];
+      }
+      if (param_name == CL_KERNEL_MAX_SUB_GROUP_SIZE_FOR_NDRANGE)
+        POCL_RETURN_GETINFO(size_t, width);
+      POCL_RETURN_GETINFO(size_t, count / width + (count % width != 0));
+    }
+    case CL_KERNEL_LOCAL_SIZE_FOR_SUB_GROUP_COUNT: {
+      POCL_RETURN_ERROR_ON(
+          input_value == NULL || input_value_size != sizeof(size_t),
+          CL_INVALID_VALUE, "Invalid subgroup count\n");
+      POCL_RETURN_ERROR_ON(
+          param_value != NULL && (param_value_size < sizeof(size_t) ||
+                                  param_value_size > 3 * sizeof(size_t) ||
+                                  param_value_size % sizeof(size_t) != 0),
+          CL_INVALID_VALUE, "Invalid local work size output array\n");
+      const size_t count = *(const size_t *)input_value;
+      size_t local[3] = {0, 0, 0};
+      if (count > 0 && count <= device->max_num_sub_groups) {
+        local[0] = count * width;
+        local[1] = local[2] = 1;
+        const size_t *required = kernel->meta->reqd_wg_size;
+        if (required[0] != 0 &&
+            (required[0] != local[0] || required[1] != 1 || required[2] != 1))
+          local[0] = local[1] = local[2] = 0;
+      }
+      const size_t dims =
+          param_value == NULL ? 3 : param_value_size / sizeof(size_t);
+      POCL_RETURN_GETINFO_ARRAY(size_t, dims, local);
+    }
+    default:
+      return CL_INVALID_VALUE;
+  }
+}
+
 void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
   ops->device_name = "formosa";
   ops->build_hash = pocl_formosa_build_hash;
   ops->probe = pocl_formosa_probe;
   ops->init = pocl_formosa_init;
+  ops->get_subgroup_info_ext = pocl_formosa_get_subgroup_info;
   ops->uninit = pocl_formosa_uninit;
   ops->reinit = pocl_formosa_reinit;
 
@@ -362,6 +429,7 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   device->max_compute_units = description.num_cores;
   device->mem_base_addr_align = 128;  // TODO: determine this
 
+  formosa_init_subgroup_info(device, dd, &description);
   dd->copy_thread_stop = CL_FALSE;
   dd->copy_thread_started = CL_TRUE;
   POCL_CREATE_THREAD(dd->copy_thread, formosa_copy_completion_thread, dd);
@@ -440,6 +508,7 @@ cl_int pocl_formosa_reinit(unsigned j, cl_device_id device,
     return CL_DEVICE_NOT_AVAILABLE;
   }
 
+  formosa_init_subgroup_info(device, dd, &description);
   device->data = dd;
   formosa_available = CL_TRUE;
   dd->copy_thread_stop = CL_FALSE;
