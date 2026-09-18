@@ -69,6 +69,8 @@ typedef struct {
   /* The number of contexts that are currently using this device */
   size_t context_ref_count;
 
+  size_t subgroup_size;
+
   /* The kernel data buffer */
   formosa_buffer_data_t *kernel_buffer;
 
