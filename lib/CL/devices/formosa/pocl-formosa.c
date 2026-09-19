@@ -421,6 +421,7 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   device->global_mem_size = description.global_mem_size;
   device->max_mem_alloc_size = description.max_allocation_size;
   device->local_mem_type = CL_LOCAL;
+  device->max_constant_buffer_size = 64 * 1024;
   device->local_mem_size = description.local_mem_size_per_core;
   device->max_work_group_size = max_work_group_size;
   device->max_work_item_sizes[0] = max_work_group_size;
