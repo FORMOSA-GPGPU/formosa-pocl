@@ -57,6 +57,10 @@ set(FORMOSA_DEVICE_SOURCES
     formosa-util.cc formosa-util.h
     formosa-memory.cc formosa-memory.h)
 
+set_source_files_properties(
+  formosa-llvm-util.cc formosa-util.cc formosa-memory.cc
+  PROPERTIES COMPILE_FLAGS "${LLVM_CXXFLAGS}")
+
 add_pocl_device_library(pocl-devices-formosa ${FORMOSA_DEVICE_SOURCES})
 
 if(ENABLE_LOADABLE_DRIVERS)

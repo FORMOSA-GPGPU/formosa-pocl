@@ -1,9 +1,9 @@
 #include "formosa-util.h"
 
-#include <cstddef>
 #include <elf.h>
 #include <unistd.h>
 
+#include <cstddef>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -17,6 +17,7 @@
 #include "pocl_cache.h"
 #include "pocl_debug.h"
 #include "pocl_file_util.h"
+#include "pocl_llvm_api.h"
 #include "pocl_runtime_config.h"
 #include "pocl_util.h"
 
@@ -31,8 +32,8 @@
 namespace {
 void read_kernel_traps(const uint8_t *raw, uint64_t *mcause, uint64_t *mepc,
                        uint64_t *mtval) {
-  *mcause = *reinterpret_cast<const uint64_t *>(
-      raw + offsetof(KernelStatus, mcause));
+  *mcause =
+      *reinterpret_cast<const uint64_t *>(raw + offsetof(KernelStatus, mcause));
   *mepc =
       *reinterpret_cast<const uint64_t *>(raw + offsetof(KernelStatus, mepc));
   *mtval =
@@ -273,11 +274,10 @@ cl_int pocl_fsa_wait_completion(FsaCompletionToken token,
   if (wait_status != CL_SUCCESS) return wait_status;
 
   const bool result_is_okay = result == FSA_COMPLETION_RESULT_SUCCESS;
-  const bool result_is_known =
-      result == FSA_COMPLETION_RESULT_SUCCESS ||
-      result == kKernelCompletionBadDimension ||
-      result == kKernelCompletionException ||
-      result == kKernelCompletionUnknownError;
+  const bool result_is_known = result == FSA_COMPLETION_RESULT_SUCCESS ||
+                               result == kKernelCompletionBadDimension ||
+                               result == kKernelCompletionException ||
+                               result == kKernelCompletionUnknownError;
   if (!result_is_known) {
     POCL_MSG_ERR("Unexpected kernel completion result %u\n", (unsigned)result);
   }
@@ -361,7 +361,7 @@ std::tuple<int, std::stringstream> compile_source(char *src_path,
 
 int pocl_fsa_compile_program(char **kernel_names, int *num_kernels,
                              char *str_program_fsa_bin, char *compiler_options,
-                             void *llvm_module) {
+                             void *llvm_module, cl_context ctx) {
   int err;
   std::string llvm_path = FORMOSA_LLVM;
   std::string llvm_objdump_path = llvm_path + "/bin/llvm-objdump";
@@ -401,8 +401,14 @@ int pocl_fsa_compile_program(char **kernel_names, int *num_kernels,
   char elf_path[POCL_MAX_PATHNAME_LENGTH];
   memcpy(elf_path, str_program_fsa_bin, strlen(str_program_fsa_bin) + 1);
 
-  pocl_fsa_build_kernel(llvm_module, bitcode_path, (unsigned *)num_kernels,
-                        kernel_names);
+  {
+    auto *llvm_context =
+        static_cast<PoclLLVMContextData *>(ctx->llvm_context_data);
+    POCL_LOCK(llvm_context->Lock);
+    pocl_fsa_build_kernel(llvm_module, bitcode_path, (unsigned *)num_kernels,
+                          kernel_names);
+    POCL_UNLOCK(llvm_context->Lock);
+  }
 
   const char *default_clang = CLANGCC;
 #ifdef FORMOSA_CLANG_PATH
