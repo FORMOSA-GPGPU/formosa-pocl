@@ -195,6 +195,17 @@ if(ENABLE_FORMOSA)
   endif()
 endif()
 
+if(ENABLE_SIMTSIM)
+  message(STATUS "Building simtsim device driver")
+  add_subdirectory("simtsim")
+  set(POCL_DEVICES_OBJS "${POCL_DEVICES_OBJS}"
+    "$<TARGET_OBJECTS:pocl-devices-simtsim>")
+
+  if(NOT ENABLE_LOADABLE_DRIVERS)
+    list(APPEND POCL_DEVICES_LINK_LIST simtsim::simtsim)
+  endif()
+endif()
+
 
 set(POCL_DEVICES_SOURCES
   devices.h  devices.c
