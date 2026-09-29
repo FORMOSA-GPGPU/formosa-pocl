@@ -104,3 +104,6 @@ result
 
 # macos
 .DS_Store
+
+.claude/
+install/

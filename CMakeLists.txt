@@ -280,6 +280,8 @@ option(ENABLE_CUDA "Enable the CUDA device driver for NVIDIA devices" OFF)
 
 option(ENABLE_FORMOSA "Enable the Formosa device driver for the Formosa GPGPU" OFF)
 
+option(ENABLE_SIMTSIM "Enable the SIMTSIM device driver for the Formosa GPGPU" OFF)
+
 option(ENABLE_CUDNN "Enable the CUDNN for the CUDA device driver, requires CUDA" OFF)
 
 option(ENABLE_VULKAN "Experimental and incomplete driver that uses the Vulkan API for controlling the device. Please refer to the user manual for the status and open tasks" OFF)
@@ -2221,6 +2223,31 @@ if(ENABLE_FORMOSA)
   if(ENABLE_SPIRV)
     set(FORMOSA_DEVICE_EXTENSIONS "${FORMOSA_DEVICE_EXTENSIONS} cl_khr_il_program cl_khr_spirv_queries")
   endif()
+
+endif()
+
+if(ENABLE_SIMTSIM)
+  if(NOT SIMTSIM_ROOT)
+    if(DEFINED ENV{SIMTSIM_ROOT})
+      set(SIMTSIM_ROOT "$ENV{SIMTSIM_ROOT}" CACHE PATH "Path to Simtsim installation")
+      message(STATUS "Found SIMTSIM_ROOT in environment: ${SIMTSIM_ROOT}")
+    endif()
+  endif()
+
+  if(SIMTSIM_ROOT)
+    list(APPEND CMAKE_PREFIX_PATH "${SIMTSIM_ROOT}")
+  endif()
+  find_package(Simtsim REQUIRED)
+  
+  set(OCL_DRIVERS "${OCL_DRIVERS} simtsim")
+  set(OCL_TARGETS "${OCL_TARGETS} simtsim")
+  set(BUILD_SIMTSIM 1)
+
+  set(SIMTSIM_DEVICE_EXTENSIONS "cl_khr_byte_addressable_store cl_khr_int64 cl_khr_fp64")
+  set(SIMTSIM_DEVICE_CL_VERSION_MAJOR 1)
+  set(SIMTSIM_DEVICE_CL_VERSION_MINOR 2)
+  set(SIMTSIM_DEVICE_CL_VERSION "120")
+  set(SIMTSIM_DEVICE_CL_STD "1.2")
 
 endif()
 
