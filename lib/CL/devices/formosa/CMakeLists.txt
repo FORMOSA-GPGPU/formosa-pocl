@@ -25,6 +25,7 @@
 
 if(MSVC)
   set_source_files_properties( pocl-formosa.c pocl-formosa.h
+                               formosa-image.c formosa-image.h
                                pocl-formosa-internal.h
                                PROPERTIES LANGUAGE C )
   set_source_files_properties( formosa-util.cc formosa-util.h
@@ -53,6 +54,7 @@ if(FORMOSA_CLANG_PATH)
 endif()
 set(FORMOSA_DEVICE_SOURCES
     pocl-formosa.c pocl-formosa.h pocl-formosa-internal.h
+    formosa-image.c formosa-image.h
     formosa-llvm-util.cc formosa-llvm-util.h
     formosa-util.cc formosa-util.h
     formosa-memory.cc formosa-memory.h)

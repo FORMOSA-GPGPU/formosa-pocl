@@ -44,6 +44,11 @@ list(APPEND KERNEL_SOURCES
   "libclc-pocl/fdim.cl"
   "libclc-pocl/nextafter.cl")
 
+list(APPEND KERNEL_SOURCES
+  get_image_array_size.cl get_image_channel_data_type.cl
+  get_image_channel_order.cl get_image_depth.cl get_image_dim.cl
+  get_image_height.cl get_image_width.cl read_image.cl write_image.cl)
+
 list(APPEND KERNEL_SOURCES "formosa/printf_globals.c")
 list(APPEND KERNEL_SOURCES "formosa/printf_alloc.c")
 list(APPEND KERNEL_SOURCES "formosa/atomics.cl")
