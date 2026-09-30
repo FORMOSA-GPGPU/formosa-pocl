@@ -484,12 +484,17 @@ pocl_exec_command (_cl_command_node *node)
                   region[2] = 1;
                 if (region[1] == 0)
                   region[1] = 1;
+                if (mem->type == CL_MEM_OBJECT_IMAGE1D_ARRAY)
+                  region[1] = mem->image_array_size;
+                if (mem->type == CL_MEM_OBJECT_IMAGE2D_ARRAY)
+                  region[2] = mem->image_array_size;
                 size_t origin[3] = { 0, 0, 0 };
                 assert (dev->ops->read_image_rect);
                 dev->ops->read_image_rect (
                   dev->data, mem,
                   &node->migr_infos->buffer->device_ptrs[dev->global_mem_id],
-                  mem->mem_host_ptr, NULL, origin, region, 0, 0, 0);
+                  mem->mem_host_ptr, NULL, origin, region,
+                  mem->image_row_pitch, mem->image_slice_pitch, 0);
               }
             else
               {
@@ -511,12 +516,17 @@ pocl_exec_command (_cl_command_node *node)
                   region[2] = 1;
                 if (region[1] == 0)
                   region[1] = 1;
+                if (mem->type == CL_MEM_OBJECT_IMAGE1D_ARRAY)
+                  region[1] = mem->image_array_size;
+                if (mem->type == CL_MEM_OBJECT_IMAGE2D_ARRAY)
+                  region[2] = mem->image_array_size;
                 size_t origin[3] = { 0, 0, 0 };
                 assert (dev->ops->write_image_rect);
                 dev->ops->write_image_rect (
                   dev->data, mem,
                   &node->migr_infos->buffer->device_ptrs[dev->global_mem_id],
-                  mem->mem_host_ptr, NULL, origin, region, 0, 0, 0);
+                  mem->mem_host_ptr, NULL, origin, region,
+                  mem->image_row_pitch, mem->image_slice_pitch, 0);
               }
             else
               {

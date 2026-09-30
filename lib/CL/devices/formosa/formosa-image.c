@@ -6,6 +6,11 @@
 #include "formosa-memory.h"
 #include "pocl_util.h"
 
+static size_t image_row_stride(cl_mem image) {
+  return image->type == CL_MEM_OBJECT_IMAGE1D_ARRAY ? image->image_slice_pitch
+                                                    : image->image_row_pitch;
+}
+
 cl_int pocl_formosa_write_image_rect(
     void *data, cl_mem image, pocl_mem_identifier *dst_mem,
     const void *src_host, pocl_mem_identifier *src_mem, const size_t *origin,
@@ -14,12 +19,15 @@ cl_int pocl_formosa_write_image_rect(
   (void)data;
   size_t row_bytes = region[0] * image->image_elem_size * image->image_channels;
   if (src_row_pitch == 0) src_row_pitch = row_bytes;
+  if (image->type == CL_MEM_OBJECT_IMAGE1D_ARRAY)
+    src_row_pitch = src_slice_pitch ? src_slice_pitch : src_row_pitch;
   if (src_slice_pitch == 0) src_slice_pitch = src_row_pitch * region[1];
   size_t dst_offset =
       origin[0] * image->image_elem_size * image->image_channels +
-      origin[1] * image->image_row_pitch + origin[2] * image->image_slice_pitch;
+      origin[1] * image_row_stride(image) +
+      origin[2] * image->image_slice_pitch;
   return formosa_memory_copy_rows(
-      dst_mem, NULL, dst_offset, image->image_row_pitch,
+      dst_mem, NULL, dst_offset, image_row_stride(image),
       image->image_slice_pitch, src_mem, src_host, src_offset, src_row_pitch,
       src_slice_pitch, region, row_bytes);
 }
@@ -31,13 +39,16 @@ cl_int pocl_formosa_read_image_rect(
   (void)data;
   size_t row_bytes = region[0] * image->image_elem_size * image->image_channels;
   if (dst_row_pitch == 0) dst_row_pitch = row_bytes;
+  if (image->type == CL_MEM_OBJECT_IMAGE1D_ARRAY)
+    dst_row_pitch = dst_slice_pitch ? dst_slice_pitch : dst_row_pitch;
   if (dst_slice_pitch == 0) dst_slice_pitch = dst_row_pitch * region[1];
   size_t src_offset =
       origin[0] * image->image_elem_size * image->image_channels +
-      origin[1] * image->image_row_pitch + origin[2] * image->image_slice_pitch;
+      origin[1] * image_row_stride(image) +
+      origin[2] * image->image_slice_pitch;
   return formosa_memory_copy_rows(dst_mem, dst_host, dst_offset, dst_row_pitch,
                                   dst_slice_pitch, src_mem, NULL, src_offset,
-                                  image->image_row_pitch,
+                                  image_row_stride(image),
                                   image->image_slice_pitch, region, row_bytes);
 }
 
@@ -50,14 +61,14 @@ cl_int pocl_formosa_copy_image_rect(void *data, cl_mem src, cl_mem dst,
   (void)data;
   size_t pixel_bytes = src->image_elem_size * src->image_channels;
   size_t src_offset = src_origin[0] * pixel_bytes +
-                      src_origin[1] * src->image_row_pitch +
+                      src_origin[1] * image_row_stride(src) +
                       src_origin[2] * src->image_slice_pitch;
   size_t dst_offset = dst_origin[0] * pixel_bytes +
-                      dst_origin[1] * dst->image_row_pitch +
+                      dst_origin[1] * image_row_stride(dst) +
                       dst_origin[2] * dst->image_slice_pitch;
   return formosa_memory_copy_rows(
-      dst_mem, NULL, dst_offset, dst->image_row_pitch, dst->image_slice_pitch,
-      src_mem, NULL, src_offset, src->image_row_pitch, src->image_slice_pitch,
+      dst_mem, NULL, dst_offset, image_row_stride(dst), dst->image_slice_pitch,
+      src_mem, NULL, src_offset, image_row_stride(src), src->image_slice_pitch,
       region, region[0] * pixel_bytes);
 }
 
@@ -90,10 +101,10 @@ cl_int pocl_formosa_fill_image(void *data, cl_mem image,
   for (size_t x = 0; x < region[0]; ++x)
     memcpy(row + x * pixel_size, fill_pixel, pixel_size);
   size_t dst_offset = origin[0] * pixel_size +
-                      origin[1] * image->image_row_pitch +
+                      origin[1] * image_row_stride(image) +
                       origin[2] * image->image_slice_pitch;
   cl_int err = formosa_memory_copy_rows(
-      mem, NULL, dst_offset, image->image_row_pitch, image->image_slice_pitch,
+      mem, NULL, dst_offset, image_row_stride(image), image->image_slice_pitch,
       NULL, row, 0, 0, 0, region, row_bytes);
   free(row);
   return err;
