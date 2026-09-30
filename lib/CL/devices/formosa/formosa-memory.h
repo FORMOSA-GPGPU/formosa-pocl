@@ -41,6 +41,16 @@ cl_int formosa_memory_copy(MemoryDomain src_domain, uint64_t src_addr,
                            MemoryDomain dst_domain, uint64_t dst_addr,
                            size_t size);
 
+cl_int formosa_memory_copy_rows(pocl_mem_identifier *dst_mem, void *dst_host,
+                                size_t dst_base, size_t dst_row_pitch,
+                                size_t dst_slice_pitch,
+                                pocl_mem_identifier *src_mem,
+                                const void *src_host, size_t src_base,
+                                size_t src_row_pitch, size_t src_slice_pitch,
+                                const size_t *region, size_t row_bytes);
+
+cl_int formosa_memory_exec_rect_command(_cl_command_node *node);
+
 /* Convert a terminal memory-copy Completion Outcome to an OpenCL status. */
 cl_int formosa_memory_copy_outcome_to_cl(FsaCompletionResult outcome);
 

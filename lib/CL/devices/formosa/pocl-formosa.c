@@ -10,6 +10,7 @@
 #include "config.h"
 #include "formosa-hal/api.h"
 #include "formosa-hal/hal.h"
+#include "formosa-image.h"
 #include "formosa-llvm-util.h"
 #include "formosa-memory.h"
 #include "formosa-util.h"
@@ -190,8 +191,14 @@ void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
   ops->memfill = pocl_formosa_memfill;
   ops->map_mem = pocl_formosa_map_mem;
   ops->unmap_mem = pocl_formosa_unmap_mem;
+  ops->copy_image_rect = pocl_formosa_copy_image_rect;
+  ops->write_image_rect = pocl_formosa_write_image_rect;
+  ops->read_image_rect = pocl_formosa_read_image_rect;
+  ops->map_image = pocl_formosa_map_image;
+  ops->unmap_image = pocl_formosa_unmap_image;
+  ops->fill_image = pocl_formosa_fill_image;
 
-  ops->get_mapping_ptr = pocl_driver_get_mapping_ptr;
+  ops->get_mapping_ptr = pocl_formosa_get_mapping_ptr;
   ops->free_mapping_ptr = pocl_driver_free_mapping_ptr;
 
   ops->get_extension_ops = pocl_formosa_get_extension_ops;
@@ -374,7 +381,8 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   device->kernellib_fallback_name = NULL;
   device->kernellib_subdir = "formosa";
 
-  device->image_support = CL_FALSE;
+  device->image_support = CL_TRUE;
+  device->max_read_write_image_args = 0;
 
 #if defined(ENABLE_SPIRV)
   device->supported_spir_v_versions =
@@ -538,6 +546,7 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
   uint8_t *host_kargs_base_ptr = NULL;
   void *device_args_buffer_addr = NULL;
   void *device_kernel_status_addr = NULL;
+  void *device_image_descriptors = NULL;
   void *device_printf_buffer_addr = NULL;
   void *device_printf_position_addr = NULL;
   void *device_kernel_addr = NULL;
@@ -573,6 +582,7 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
   // 1. local memory size (8 bytes)
   // 2. other arguments
   size_t kargs_buffer_size = printf_meta_size + word_size;
+  size_t image_count = 0;
 
   for (int i = 0; i < meta->num_args; ++i) {
     struct pocl_argument *al = &(cmd->command.run.arguments[i]);
@@ -584,6 +594,7 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
                (meta->arg_info[i].type == POCL_ARG_TYPE_IMAGE) ||
                (meta->arg_info[i].type == POCL_ARG_TYPE_SAMPLER)) {
       kargs_buffer_size = align(kargs_buffer_size, ptr_size) + ptr_size;
+      image_count += meta->arg_info[i].type == POCL_ARG_TYPE_IMAGE;
     } else {
       // scalar argument
       kargs_buffer_size = align(kargs_buffer_size, al->size) + al->size;
@@ -626,6 +637,14 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
     POCL_MSG_ERR("pocl_formosa_run: device kargs allocation failed\n");
     errcode = CL_OUT_OF_RESOURCES;
     goto FAIL;
+  }
+  if (image_count != 0) {
+    err = fsa_malloc(&device_image_descriptors,
+                     image_count * sizeof(dev_image_t));
+    if (err != 0) {
+      errcode = CL_OUT_OF_RESOURCES;
+      goto FAIL;
+    }
   }
   err = fsa_malloc(&device_kernel_status_addr, sizeof(KernelStatus));
   if (err != 0) {
@@ -691,6 +710,7 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
     host_args_offset += word_size;
   }
 
+  size_t image_index = 0;
   for (int i = 0; i < meta->num_args; ++i) {
     struct pocl_argument *al = &(cmd->command.run.arguments[i]);
     if (ARG_IS_LOCAL(meta->arg_info[i])) {
@@ -723,13 +743,45 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
         host_args_offset += ptr_size;
       }
     } else if (meta->arg_info[i].type == POCL_ARG_TYPE_IMAGE) {
-      POCL_MSG_ERR("pocl_formosa_run: image arguments are not supported\n");
-      errcode = CL_INVALID_KERNEL_ARGS;
-      goto FAIL;
+      if (al->value == NULL) {
+        errcode = CL_INVALID_KERNEL_ARGS;
+        goto FAIL;
+      }
+      cl_mem image = *(cl_mem *)al->value;
+      cl_mem backing = image;
+      IMAGE1D_TO_BUFFER(backing);
+      formosa_buffer_data_t *buffer =
+          (formosa_buffer_data_t *)backing
+              ->device_ptrs[cmd->device->global_mem_id]
+              .mem_ptr;
+      if (buffer == NULL) {
+        errcode = CL_INVALID_MEM_OBJECT;
+        goto FAIL;
+      }
+      dev_image_t descriptor = {0};
+      pocl_fill_dev_image_t(&descriptor, al, cmd->device);
+      descriptor._data = (void *)(uintptr_t)buffer->buf_address;
+      uint64_t descriptor_addr = (uintptr_t)device_image_descriptors +
+                                 image_index++ * sizeof(descriptor);
+      err = fsa_copy_to_dev(descriptor_addr, &descriptor, sizeof(descriptor));
+      if (err != 0) {
+        errcode = formosa_hal_error(CL_OUT_OF_RESOURCES);
+        goto FAIL;
+      }
+      host_args_offset = align(host_args_offset, ptr_size);
+      memcpy(host_kargs_base_ptr + host_args_offset, &descriptor_addr,
+             ptr_size);
+      host_args_offset += ptr_size;
     } else if (meta->arg_info[i].type == POCL_ARG_TYPE_SAMPLER) {
-      POCL_MSG_ERR("pocl_formosa_run: sampler arguments are not supported\n");
-      errcode = CL_INVALID_KERNEL_ARGS;
-      goto FAIL;
+      if (al->value == NULL) {
+        errcode = CL_INVALID_KERNEL_ARGS;
+        goto FAIL;
+      }
+      dev_sampler_t sampler;
+      pocl_fill_dev_sampler_t(&sampler, al);
+      host_args_offset = align(host_args_offset, ptr_size);
+      memcpy(host_kargs_base_ptr + host_args_offset, &sampler, ptr_size);
+      host_args_offset += ptr_size;
     } else {
       // scalar argument
       if (al->value == NULL) {
@@ -907,6 +959,8 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
   // release arguments device buffer
   if (device_args_buffer_addr && fsa_free(device_args_buffer_addr) != 0)
     POCL_MSG_ERR("pocl_formosa_run: kernel argument free failed\n");
+  if (device_image_descriptors && fsa_free(device_image_descriptors) != 0)
+    POCL_MSG_ERR("pocl_formosa_run: image descriptor free failed\n");
   // release kernel status device buffer
   if (device_kernel_status_addr && fsa_free(device_kernel_status_addr) != 0)
     POCL_MSG_ERR("pocl_formosa_run: kernel status free failed\n");
@@ -921,6 +975,7 @@ FAIL:
   free(trampoline_name);
   free(host_printf_buffer);
   if (device_args_buffer_addr) fsa_free(device_args_buffer_addr);
+  if (device_image_descriptors) fsa_free(device_image_descriptors);
   if (device_kernel_status_addr) fsa_free(device_kernel_status_addr);
   if (device_printf_buffer_addr) fsa_free(device_printf_buffer_addr);
   if (device_printf_position_addr) fsa_free(device_printf_position_addr);
@@ -1483,6 +1538,22 @@ static void formosa_submit_memory_copy_command(pocl_formosa_data_t *dd,
                          "Formosa Memory Copy");
 }
 
+static void formosa_submit_image_command(_cl_command_node *node) {
+  cl_event event = node->sync.event.event;
+  pocl_update_event_running(event);
+  cl_int err = pocl_formosa_exec_image_command(node);
+  formosa_finish_command(event, err, "Event Image                  ",
+                         "Formosa image operation");
+}
+
+static void formosa_submit_rect_command(_cl_command_node *node) {
+  cl_event event = node->sync.event.event;
+  pocl_update_event_running(event);
+  cl_int err = formosa_memory_exec_rect_command(node);
+  formosa_finish_command(event, err, "Event Buffer Rect            ",
+                         "Formosa buffer rectangle");
+}
+
 static void formosa_command_scheduler(pocl_formosa_data_t *dd) {
   _cl_command_node *node;
 
@@ -1509,18 +1580,40 @@ static void formosa_command_scheduler(pocl_formosa_data_t *dd) {
       case CL_COMMAND_COPY_BUFFER:
       case CL_COMMAND_FILL_BUFFER:
       case CL_COMMAND_MAP_BUFFER:
-      case CL_COMMAND_UNMAP_MEM_OBJECT:
         formosa_submit_memory_copy_command(dd, node);
+        break;
+
+      case CL_COMMAND_UNMAP_MEM_OBJECT:
+        if (node->command.unmap.buffer->is_image &&
+            !IS_IMAGE1D_BUFFER(node->command.unmap.buffer))
+          formosa_submit_image_command(node);
+        else
+          formosa_submit_memory_copy_command(dd, node);
+        break;
+
+      case CL_COMMAND_READ_IMAGE:
+      case CL_COMMAND_WRITE_IMAGE:
+      case CL_COMMAND_COPY_IMAGE:
+      case CL_COMMAND_FILL_IMAGE:
+      case CL_COMMAND_MAP_IMAGE:
+      case CL_COMMAND_COPY_IMAGE_TO_BUFFER:
+      case CL_COMMAND_COPY_BUFFER_TO_IMAGE:
+        formosa_submit_image_command(node);
         break;
 
       case CL_COMMAND_READ_BUFFER_RECT:
       case CL_COMMAND_WRITE_BUFFER_RECT:
       case CL_COMMAND_COPY_BUFFER_RECT:
-        /* ponytail: rectangular copies need grouped completions before they
-         * can use the 1D firmware packet. */
-        pocl_update_event_running(event);
-        formosa_finish_command(event, CL_INVALID_OPERATION, NULL,
-                               "Formosa rectangular buffer transfer");
+        formosa_submit_rect_command(node);
+        break;
+
+      case CL_COMMAND_MIGRATE_MEM_OBJECTS:
+        if ((node->command.migrate.type == ENQUEUE_MIGRATE_TYPE_H2D ||
+             node->command.migrate.type == ENQUEUE_MIGRATE_TYPE_D2H) &&
+            node->migr_infos->buffer->is_image)
+          formosa_submit_image_command(node);
+        else
+          pocl_exec_command(node);
         break;
 
       default:
