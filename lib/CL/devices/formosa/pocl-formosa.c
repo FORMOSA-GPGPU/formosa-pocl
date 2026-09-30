@@ -198,7 +198,7 @@ void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
   ops->unmap_image = pocl_formosa_unmap_image;
   ops->fill_image = pocl_formosa_fill_image;
 
-  ops->get_mapping_ptr = pocl_driver_get_mapping_ptr;
+  ops->get_mapping_ptr = pocl_formosa_get_mapping_ptr;
   ops->free_mapping_ptr = pocl_driver_free_mapping_ptr;
 
   ops->get_extension_ops = pocl_formosa_get_extension_ops;
@@ -341,8 +341,10 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
 
   assert(device->data == NULL);
 
-  pocl_init_default_device_infos(device, FORMOSA_DEVICE_EXTENSIONS);
-  device->features = FORMOSA_DEVICE_FEATURES_30;
+  pocl_init_default_device_infos(
+      device, FORMOSA_DEVICE_EXTENSIONS " cl_khr_3d_image_writes");
+  device->features = FORMOSA_DEVICE_FEATURES_30
+      " __opencl_c_images __opencl_c_3d_image_writes";
 
   if (strstr(FORMOSA_DEVICE_EXTENSIONS, "cl_khr_kernel_clock") != NULL) {
     device->kernel_clock_caps = CL_DEVICE_KERNEL_CLOCK_SCOPE_DEVICE_KHR |
@@ -1605,6 +1607,15 @@ static void formosa_command_scheduler(pocl_formosa_data_t *dd) {
       case CL_COMMAND_WRITE_BUFFER_RECT:
       case CL_COMMAND_COPY_BUFFER_RECT:
         formosa_submit_rect_command(node);
+        break;
+
+      case CL_COMMAND_MIGRATE_MEM_OBJECTS:
+        if ((node->command.migrate.type == ENQUEUE_MIGRATE_TYPE_H2D ||
+             node->command.migrate.type == ENQUEUE_MIGRATE_TYPE_D2H) &&
+            node->migr_infos->buffer->is_image)
+          formosa_submit_image_command(node);
+        else
+          pocl_exec_command(node);
         break;
 
       default:

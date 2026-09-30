@@ -32,8 +32,8 @@
 CL_API_ENTRY void * CL_API_CALL
 POname(clEnqueueMapImage)(cl_command_queue   command_queue,
                           cl_mem             image,
-                          cl_bool            blocking_map,
-                          cl_map_flags       map_flags,
+                          cl_bool            blocking_map, 
+                          cl_map_flags       map_flags, 
                           const size_t *     origin,
                           const size_t *     region,
                           size_t *           image_row_pitch,
@@ -41,7 +41,7 @@ POname(clEnqueueMapImage)(cl_command_queue   command_queue,
                           cl_uint            num_events_in_wait_list,
                           const cl_event *   event_wait_list,
                           cl_event *         event,
-                          cl_int *           errcode_ret )
+                          cl_int *           errcode_ret ) 
 CL_API_SUFFIX__VERSION_1_0
 {
   cl_int errcode = CL_SUCCESS;
@@ -93,7 +93,7 @@ CL_API_SUFFIX__VERSION_1_0
     goto ERROR;
 
   POCL_GOTO_ERROR_ON((image_slice_pitch == NULL &&
-      (image->type == CL_MEM_OBJECT_IMAGE3D ||
+      (image->type == CL_MEM_OBJECT_IMAGE3D || 
        image->type == CL_MEM_OBJECT_IMAGE1D_ARRAY ||
        image->type == CL_MEM_OBJECT_IMAGE2D_ARRAY)), CL_INVALID_VALUE,
        "For a 3D image, 1D, and 2D image array, "
@@ -146,20 +146,17 @@ CL_API_SUFFIX__VERSION_1_0
   mapping_info->slice_pitch = image->image_slice_pitch;
 
   size_t px = image->image_elem_size * image->image_channels;
-  size_t row_stride = image->type == CL_MEM_OBJECT_IMAGE1D_ARRAY
-                          ? mapping_info->slice_pitch
-                          : mapping_info->row_pitch;
   size_t start_offset = origin[2] * mapping_info->slice_pitch
-                        + origin[1] * row_stride + origin[0] * px;
+                        + origin[1] * mapping_info->row_pitch + origin[0] * px;
   size_t end_offset
       = px * (origin[0] + region[0] - 1)
-        + row_stride * (origin[1] + region[1] - 1)
+        + mapping_info->row_pitch * (origin[1] + region[1] - 1)
         + mapping_info->slice_pitch * (origin[2] + region[2] - 1);
 
   mapping_info->offset = start_offset;
   assert (start_offset <= image->size);
   assert (start_offset <= end_offset);
-  mapping_info->size = end_offset + px - start_offset;
+  mapping_info->size = end_offset + 1 - start_offset;
 
   /* because cl_mems are per-context, PoCL delays allocation of
    * cl_mem backing memory until it knows which device will need it,

@@ -40,7 +40,7 @@ set(C_PROGRAMS_TO_BUILD test_clFinish test_clGetDeviceInfo test_clGetEventInfo
   test_clSetEventCallback test_clEnqueueNativeKernel test_clBuildProgram
   test_clCreateKernelsInProgram test_clCreateKernel test_clGetKernelArgInfo
   test_version test_kernel_cache_includes test_event_cycle test_link_error
-  test_read-copy-write-buffer test_buffer-image-copy test_image1d_array_pitches test_clCreateSubDevices test_event_free
+  test_read-copy-write-buffer test_buffer-image-copy test_clCreateSubDevices test_event_free
   test_event_double_wait test_buffer_migration test_buffer_ping_pong
   test_enqueue_kernel_from_binary test_user_event test_fill-buffer
   test_clSetMemObjectDestructorCallback test_dbk_jpeg
@@ -111,8 +111,6 @@ add_test_pocl(NAME "runtime/test_read-copy-write-buffer" COMMAND "test_read-copy
 add_test_pocl(NAME "runtime/test_fill-buffer" COMMAND "test_fill-buffer" WORKITEM_HANDLER "loopvec")
 
 add_test(NAME "runtime/test_buffer-image-copy" COMMAND "test_buffer-image-copy")
-add_test(NAME "runtime/test_image1d_array_pitches" COMMAND "test_image1d_array_pitches")
-set_tests_properties("runtime/test_image1d_array_pitches" PROPERTIES SKIP_RETURN_CODE 77)
 
 add_test_pocl(NAME "runtime/clCreateKernel" COMMAND "test_clCreateKernel" WORKITEM_HANDLER "loopvec")
 

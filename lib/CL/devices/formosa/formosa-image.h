@@ -4,6 +4,8 @@
 #include "pocl_cl.h"
 
 cl_int pocl_formosa_exec_image_command(_cl_command_node *node);
+cl_int pocl_formosa_get_mapping_ptr(void *data, pocl_mem_identifier *mem,
+                                    cl_mem image, mem_mapping_t *map);
 
 cl_int pocl_formosa_copy_image_rect(void *data, cl_mem src, cl_mem dst,
                                     pocl_mem_identifier *src_mem,

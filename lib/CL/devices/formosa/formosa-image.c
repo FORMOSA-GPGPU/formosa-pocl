@@ -3,12 +3,29 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "common_driver.h"
 #include "formosa-memory.h"
 #include "pocl_util.h"
 
 static size_t image_row_stride(cl_mem image) {
   return image->type == CL_MEM_OBJECT_IMAGE1D_ARRAY ? image->image_slice_pitch
                                                     : image->image_row_pitch;
+}
+
+cl_int pocl_formosa_get_mapping_ptr(void *data, pocl_mem_identifier *mem,
+                                    cl_mem image, mem_mapping_t *map) {
+  if (image->is_image) {
+    size_t pixel_bytes = image->image_elem_size * image->image_channels;
+    size_t row_stride = image_row_stride(image);
+    map->offset = map->origin[0] * pixel_bytes + map->origin[1] * row_stride +
+                  map->origin[2] * image->image_slice_pitch;
+    map->size = map->region[0] * pixel_bytes +
+                (map->region[1] - 1) * row_stride +
+                (map->region[2] - 1) * image->image_slice_pitch;
+    if (map->offset > image->size || map->size > image->size - map->offset)
+      return CL_INVALID_VALUE;
+  }
+  return pocl_driver_get_mapping_ptr(data, mem, image, map);
 }
 
 cl_int pocl_formosa_write_image_rect(
@@ -115,6 +132,17 @@ cl_int pocl_formosa_exec_image_command(_cl_command_node *node) {
   _cl_command_t *cmd = &node->command;
   unsigned mem_id = dev->global_mem_id;
   switch (node->type) {
+    case CL_COMMAND_MIGRATE_MEM_OBJECTS: {
+      cl_mem image = node->migr_infos->buffer;
+      pocl_mem_identifier *mem = &image->device_ptrs[mem_id];
+      const size_t region[3] = {1, 1, 1};
+      if (cmd->migrate.type == ENQUEUE_MIGRATE_TYPE_H2D)
+        return formosa_memory_copy_rows(mem, NULL, 0, 0, 0, NULL,
+                                        image->mem_host_ptr, 0, 0, 0, region,
+                                        image->size);
+      return formosa_memory_copy_rows(NULL, image->mem_host_ptr, 0, 0, 0, mem,
+                                      NULL, 0, 0, 0, region, image->size);
+    }
     case CL_COMMAND_READ_IMAGE:
     case CL_COMMAND_COPY_IMAGE_TO_BUFFER:
       return pocl_formosa_read_image_rect(
