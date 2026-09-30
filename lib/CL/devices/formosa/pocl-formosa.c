@@ -341,10 +341,8 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
 
   assert(device->data == NULL);
 
-  pocl_init_default_device_infos(
-      device, FORMOSA_DEVICE_EXTENSIONS " cl_khr_3d_image_writes");
-  device->features = FORMOSA_DEVICE_FEATURES_30
-      " __opencl_c_images __opencl_c_3d_image_writes";
+  pocl_init_default_device_infos(device, FORMOSA_DEVICE_EXTENSIONS);
+  device->features = FORMOSA_DEVICE_FEATURES_30;
 
   if (strstr(FORMOSA_DEVICE_EXTENSIONS, "cl_khr_kernel_clock") != NULL) {
     device->kernel_clock_caps = CL_DEVICE_KERNEL_CLOCK_SCOPE_DEVICE_KHR |
