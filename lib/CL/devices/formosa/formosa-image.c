@@ -19,7 +19,7 @@ cl_int pocl_formosa_write_image_rect(
   (void)data;
   size_t row_bytes = region[0] * image->image_elem_size * image->image_channels;
   if (src_row_pitch == 0) src_row_pitch = row_bytes;
-  if (image->type == CL_MEM_OBJECT_IMAGE1D_ARRAY)
+  if (image->type == CL_MEM_OBJECT_IMAGE1D_ARRAY && src_mem == NULL)
     src_row_pitch = src_slice_pitch ? src_slice_pitch : src_row_pitch;
   if (src_slice_pitch == 0) src_slice_pitch = src_row_pitch * region[1];
   size_t dst_offset =
@@ -39,7 +39,7 @@ cl_int pocl_formosa_read_image_rect(
   (void)data;
   size_t row_bytes = region[0] * image->image_elem_size * image->image_channels;
   if (dst_row_pitch == 0) dst_row_pitch = row_bytes;
-  if (image->type == CL_MEM_OBJECT_IMAGE1D_ARRAY)
+  if (image->type == CL_MEM_OBJECT_IMAGE1D_ARRAY && dst_mem == NULL)
     dst_row_pitch = dst_slice_pitch ? dst_slice_pitch : dst_row_pitch;
   if (dst_slice_pitch == 0) dst_slice_pitch = dst_row_pitch * region[1];
   size_t src_offset =
