@@ -390,6 +390,8 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   device->supported_spirv_extensions = "+SPV_KHR_no_integer_wrap_decoration";
 #endif
 
+  pocl_setup_opencl_c_with_version(device, CL_TRUE);
+  pocl_setup_features_with_version(device);
   pocl_setup_extensions_with_version(device);
   pocl_setup_ils_with_version(device);
   pocl_setup_builtin_kernels_with_version(device);

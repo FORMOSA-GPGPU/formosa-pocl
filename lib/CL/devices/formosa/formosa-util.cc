@@ -368,7 +368,11 @@ int pocl_fsa_compile_program(char **kernel_names, int *num_kernels,
   std::string build_cflags = "-mcpu=formosa-gpgpu ";
   std::string extra_cflags = pocl_get_string_option("POCL_FORMOSA_CFLAGS", "");
   if (compiler_options != nullptr) {
-    build_cflags += std::string(compiler_options) + " ";
+    std::istringstream options(compiler_options);
+    std::string option;
+    while (options >> option) {
+      if (option.rfind("-cl-std=", 0) != 0) build_cflags += option + " ";
+    }
   }
   if (extra_cflags == "") {
     POCL_MSG_WARN(
