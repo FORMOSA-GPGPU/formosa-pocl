@@ -1630,7 +1630,7 @@ static void *formosa_copy_completion_thread(void *arg) {
   while (1) {
     formosa_pending_copy_t *finished = NULL;
     FsaCompletionResult completion_result = FSA_COMPLETION_RESULT_PENDING;
-    FsaCompletionPollStatus poll_status = kFsaCompletionPollPending;
+    FsaCompletionWaitStatus wait_status = kFsaCompletionWaitTimeout;
 
     POCL_LOCK(dd->copy_lock);
     while (!dd->copy_thread_stop && dd->copy_pending == NULL)
@@ -1644,9 +1644,9 @@ static void *formosa_copy_completion_thread(void *arg) {
     POCL_UNLOCK(dd->copy_lock);
 
     if (candidate != NULL)
-      poll_status = fsa_poll_completion(candidate->token, &completion_result);
+      wait_status = fsa_wait_completion(candidate->token, 100, &completion_result);
 
-    if (poll_status != kFsaCompletionPollPending) {
+    if (wait_status != kFsaCompletionWaitTimeout) {
       POCL_LOCK(dd->copy_lock);
       if (dd->copy_pending == candidate) {
         dd->copy_pending = candidate->next;
@@ -1654,35 +1654,25 @@ static void *formosa_copy_completion_thread(void *arg) {
         finished = candidate;
       }
       POCL_UNLOCK(dd->copy_lock);
-      if (poll_status == kFsaCompletionPollTransportError)
+      if (wait_status == kFsaCompletionWaitTransportError)
         formosa_mark_unavailable();
     }
 
     if (finished != NULL) {
       const cl_int event_status =
-          poll_status == kFsaCompletionPollTerminal
+          wait_status == kFsaCompletionWaitSuccess
               ? formosa_memory_copy_outcome_to_cl(completion_result)
               : CL_DEVICE_NOT_AVAILABLE;
       formosa_finish_command(finished->node->sync.event.event, event_status,
                              "Event Memory Copy            ",
                              "Formosa Memory Copy");
-      if (poll_status == kFsaCompletionPollTerminal) {
-        const FsaCompletionReleaseStatus release_status =
-            fsa_release_completion(finished->token);
-        if (release_status == kFsaCompletionReleaseTransportError)
-          formosa_mark_unavailable();
-        else if (release_status != kFsaCompletionReleaseAccepted)
-          POCL_MSG_ERR("Formosa completion release failed (%d)\n",
-                       release_status);
-      }
+      /* fsa_wait_completion releases a terminal token before returning. */
       formosa_release_pending_staging(finished);
       POCL_MEM_FREE(finished);
 
       POCL_LOCK(dd->cq_lock);
       formosa_command_scheduler(dd);
       POCL_UNLOCK(dd->cq_lock);
-    } else {
-      usleep(1000);
     }
   }
   return NULL;
