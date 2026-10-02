@@ -1734,8 +1734,13 @@ void pocl_formosa_notify(cl_device_id device, cl_event event,
   if (dd == NULL) return;
 
   _cl_command_node *volatile node = event->command;
+  if (node->state == POCL_COMMAND_FAILED) return;
 
   if (finished->status < CL_COMPLETE) {
+    POCL_LOCK(dd->cq_lock);
+    if (node->state == POCL_COMMAND_READY) CDL_DELETE(dd->command_list, node);
+    node->state = POCL_COMMAND_FAILED;
+    POCL_UNLOCK(dd->cq_lock);
     /* Unlock the finished event in order to prevent a lock order violation
      * with the command queue that will be locked during
      * pocl_update_event_failed.
