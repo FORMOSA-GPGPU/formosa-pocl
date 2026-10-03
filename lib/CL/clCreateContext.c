@@ -1,17 +1,17 @@
 /* OpenCL runtime library: clCreateContext()
 
    Copyright (c) 2011 Universidad Rey Juan Carlos
-   
+
    Permission is hereby granted, free of charge, to any person obtaining a copy
    of this software and associated documentation files (the "Software"), to deal
    in the Software without restriction, including without limitation the rights
    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
    copies of the Software, and to permit persons to whom the Software is
    furnished to do so, subject to the following conditions:
-   
+
    The above copyright notice and this permission notice shall be included in
    all copies or substantial portions of the Software.
-   
+
    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -36,7 +36,7 @@ context_set_properties (cl_context context,
 {
   unsigned i;
   int num_properties = 0;
-  
+
   context->properties = NULL;
   context->gl_interop = CL_FALSE;
 
@@ -46,7 +46,7 @@ context_set_properties (cl_context context,
     {
       const cl_context_properties *p = properties;
       const cl_context_properties *q;
-      
+
       cl_platform_id platforms[1];
       cl_uint num_platforms;
       cl_bool platform_found;
@@ -63,7 +63,7 @@ context_set_properties (cl_context context,
                 POCL_MSG_ERR("Duplicate properties: %lu\n", (unsigned long)q[0]);
                 return CL_INVALID_PROPERTY;
               }
-          
+
           switch (p[0])
             {
             case CL_CONTEXT_PLATFORM:
@@ -84,6 +84,11 @@ context_set_properties (cl_context context,
               break;
 
             case CL_CONTEXT_INTEROP_USER_SYNC:
+              if (p[1] != CL_FALSE && p[1] != CL_TRUE)
+                return CL_INVALID_PROPERTY;
+              p += 2;
+              break;
+
             case CL_GL_CONTEXT_KHR:
             case CL_EGL_DISPLAY_KHR:
             case CL_GLX_DISPLAY_KHR:
@@ -92,7 +97,7 @@ context_set_properties (cl_context context,
               p += 2;
               break;
 
-            default: 
+            default:
               POCL_MSG_ERR("Unknown context property: %lu\n", (unsigned long)p[0]);
               return CL_INVALID_PROPERTY;
             }
@@ -105,8 +110,8 @@ context_set_properties (cl_context context,
         {
           return CL_OUT_OF_HOST_MEMORY;
         }
-      
-      memcpy(context->properties, properties, 
+
+      memcpy(context->properties, properties,
              (num_properties * 2 + 1) * sizeof(cl_context_properties));
       context->num_properties = num_properties;
 
@@ -116,7 +121,7 @@ context_set_properties (cl_context context,
     {
       context->properties     = NULL;
       context->num_properties = 0;
-      
+
       return 0;
     }
 }
@@ -241,7 +246,7 @@ POname(clCreateContext)(const cl_context_properties * properties,
   POCL_MSG_PRINT_GENERAL ("Created Context %" PRId64 " (%p)\n", context->id,
                           context);
   return context;
-  
+
 ERROR:
   if (context)
     {

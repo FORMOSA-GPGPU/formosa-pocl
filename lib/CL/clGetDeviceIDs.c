@@ -47,6 +47,15 @@ POname(clGetDeviceIDs)(cl_platform_id   platform,
   POCL_RETURN_ERROR_ON ((platform != tmp_platform), CL_INVALID_PLATFORM,
                         "Can only return devices from the POCL platform\n");
 
+  const cl_device_type valid_device_types
+      = CL_DEVICE_TYPE_DEFAULT | CL_DEVICE_TYPE_CPU | CL_DEVICE_TYPE_GPU
+        | CL_DEVICE_TYPE_ACCELERATOR | CL_DEVICE_TYPE_CUSTOM;
+  POCL_RETURN_ERROR_COND (
+      (device_type == 0
+       || (device_type != CL_DEVICE_TYPE_ALL
+           && (device_type & ~valid_device_types) != 0)),
+      CL_INVALID_DEVICE_TYPE);
+
   int err = pocl_init_devices (platform);
   if (err)
     return err;
