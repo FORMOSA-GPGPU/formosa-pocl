@@ -113,7 +113,7 @@ _cl_command_node* pocl_mem_manager_new_command ()
   if ((cmd = mm->cmd_list))
     LL_DELETE (mm->cmd_list, cmd);
   POCL_UNLOCK (mm->cmd_lock);
-  
+
   if (cmd)
     {
       memset (cmd, 0, sizeof (struct _cl_command_node));
@@ -143,7 +143,7 @@ event_node* pocl_mem_manager_new_event_node ()
   if ((ed = mm->event_node_list))
     LL_DELETE (mm->event_node_list, ed);
   POCL_UNLOCK (mm->event_node_lock);
-  
+
   if (ed)
     {
       memset (ed, 0, sizeof(event_node));
@@ -235,6 +235,14 @@ add_unique_implicit_sub_buffer (cl_mem parent,
   return sub_buf;
 }
 
+static int
+compare_buffer_regions (const void *a, const void *b)
+{
+  const cl_buffer_region *left = a;
+  const cl_buffer_region *right = b;
+  return (left->origin > right->origin) - (left->origin < right->origin);
+}
+
 /**
  * Generates "implicit" sub-buffers that cover the parts of the parent
  * buffer that are not covered by user-created sub-buffers.
@@ -262,105 +270,55 @@ generate_implicit_aligned_sub_buffers (cl_mem parent,
                                        pocl_buffer_migration_info *migrations,
                                        int read_only)
 {
-  struct buf_usage
-  {
-    size_t offset;
-    size_t size;
-    struct buf_usage *prev, *next;
-  };
-
   assert (migrations != NULL);
-
   cl_int retv = CL_SUCCESS;
-
-  if (parent->sub_buffers == NULL)
-    return CL_SUCCESS;
-
-  /* A list of sorted buffer address range usages. If there are overlapping
-     sub-buffers, they get merged to a single buf_usage. */
-  struct buf_usage *usage = NULL;
+  size_t count = 0;
   cl_mem_list_item_t *sub_buf;
+
+  POCL_LOCK_OBJ (parent);
   LL_FOREACH (parent->sub_buffers, sub_buf)
+    if (!sub_buf->mem->implicit_sub_buffer)
+      ++count;
+
+  if (count == 0)
     {
-      /* We might have generated implicit sub-buffers before, but
-         the user might have added new sub-buffers after that,
-         so we must process the whole list. */
-      if (sub_buf->mem->implicit_sub_buffer)
-        continue;
-
-      /* Find if there's an overlapping buffer and if not, add a new one
-         before/after it, depending on the position. If found, merge to an
-         overlapping existing buffer right away. */
-
-      /* Yeah, it's unoptimal. Hopefully there won't be zillions of
-       * sub-buffers. */
-      struct buf_usage *buf_usage = NULL, *spot_before = NULL;
-      int merged = 0;
-      LL_FOREACH (usage, buf_usage)
-        {
-          if (buf_usage->offset <= sub_buf->mem->origin
-              && buf_usage->offset + buf_usage->size >= sub_buf->mem->origin)
-            {
-              /* Expand the buffer usage with the overlapping part (if any).
-                 Otherwise there's full overlap, thus it gets absorbed to this
-                 usage. */
-              if (sub_buf->mem->origin + sub_buf->mem->size
-                  > buf_usage->offset + buf_usage->size)
-                buf_usage->size += sub_buf->mem->origin + sub_buf->mem->size
-                                   - (buf_usage->offset + buf_usage->size);
-              merged = 1;
-              break;
-            }
-          else if (buf_usage->offset
-                   > sub_buf->mem->origin + sub_buf->mem->size)
-            {
-              /* This usage is already past the one we are inserting, prepend.
-               */
-              spot_before = buf_usage;
-              break;
-            }
-          /* Otherwise we will end up with NULL, which means we are adding a
-             new largest one. */
-        }
-      if (merged)
-        break;
-
-      struct buf_usage *new_usage = calloc (1, sizeof (struct buf_usage));
-      new_usage->size = sub_buf->mem->size;
-      new_usage->offset = sub_buf->mem->origin;
-      if (spot_before != NULL)
-        {
-          new_usage->next = spot_before;
-          new_usage->prev = spot_before->prev;
-          if (spot_before->prev == NULL)
-            usage = new_usage;
-          spot_before->prev = new_usage;
-        }
-      else
-        {
-          DL_APPEND (usage, new_usage);
-        }
+      POCL_UNLOCK_OBJ (parent);
+      return CL_SUCCESS;
     }
 
-  size_t align = parent->context->mem_base_addr_align;
-  /* Create/find the implicit sub-buffers for the empty spots. */
-  struct buf_usage *bu = NULL, *tmp = NULL;
-  size_t pos = 0;
-  LL_FOREACH (usage, bu)
+  cl_buffer_region *regions = calloc (count, sizeof (*regions));
+  if (regions == NULL)
     {
-      size_t chunk_offset = pos;
-      size_t chunk_size = bu->offset - pos;
-      pos = bu->offset + bu->size;
-      if (chunk_size == 0)
-        /* End-to-start sub-buffer. No gap. */
-        continue;
+      POCL_UNLOCK_OBJ (parent);
+      return CL_OUT_OF_HOST_MEMORY;
+    }
 
-      cl_mem sb = add_unique_implicit_sub_buffer (parent, chunk_offset,
-                                                  chunk_size, &retv);
-      pocl_append_unique_migration_info (migrations, sb, read_only);
+  size_t i = 0;
+  LL_FOREACH (parent->sub_buffers, sub_buf)
+    if (!sub_buf->mem->implicit_sub_buffer)
+      {
+        regions[i].origin = sub_buf->mem->origin;
+        regions[i].size = sub_buf->mem->size;
+        ++i;
+      }
+  POCL_UNLOCK_OBJ (parent);
 
-      if (retv != CL_SUCCESS)
-        goto out;
+  qsort (regions, count, sizeof (*regions), compare_buffer_regions);
+  size_t pos = 0;
+  for (i = 0; i < count; ++i)
+    {
+      if (regions[i].origin > pos)
+        {
+          cl_mem sb = add_unique_implicit_sub_buffer (
+            parent, pos, regions[i].origin - pos, &retv);
+          if (retv != CL_SUCCESS)
+            goto out;
+          pocl_append_unique_migration_info (migrations, sb, read_only);
+        }
+
+      size_t end = regions[i].origin + regions[i].size;
+      if (end > pos)
+        pos = end;
     }
   /* Check if there's uncovered space in the end of the buffer. */
   size_t chunk_size = parent->size - pos;
@@ -372,8 +330,7 @@ generate_implicit_aligned_sub_buffers (cl_mem parent,
     }
 
 out:
-  LL_FOREACH_SAFE (usage, bu, tmp)
-    free (bu);
+  free (regions);
   return retv;
 }
 
