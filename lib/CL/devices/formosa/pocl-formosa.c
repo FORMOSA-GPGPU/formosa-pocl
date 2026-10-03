@@ -1260,6 +1260,7 @@ void pocl_formosa_free(cl_device_id device, cl_mem mem_obj) {
 cl_int pocl_formosa_alloc_subbuffer(cl_device_id device, cl_mem sub_buf) {
   if (sub_buf == NULL || sub_buf->parent == NULL) return CL_INVALID_MEM_OBJECT;
   pocl_mem_identifier *p = &sub_buf->device_ptrs[device->global_mem_id];
+  p->mem_ptr = NULL;
   pocl_mem_identifier *parent_p =
       &sub_buf->parent->device_ptrs[device->global_mem_id];
   formosa_buffer_data_t *parent_data =
