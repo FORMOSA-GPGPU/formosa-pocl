@@ -36,6 +36,7 @@ POname (clCreateSubBuffer) (cl_mem parent,
                             cl_int *errcode_ret) CL_API_SUFFIX__VERSION_1_1
 {
   cl_mem mem = NULL;
+  cl_mem_list_item_t *sub_buf = NULL;
   int errcode, parent_locked = 0;
 
   POCL_GOTO_ERROR_COND ((!IS_CL_OBJECT_VALID (parent)), CL_INVALID_MEM_OBJECT);
@@ -82,7 +83,8 @@ POname (clCreateSubBuffer) (cl_mem parent,
                       CL_INVALID_BUFFER_SIZE,
                       "buffer_create_info->size == 0\n");
 
-  POCL_GOTO_ERROR_ON ((info->size + info->origin > parent->size),
+  POCL_GOTO_ERROR_ON ((info->origin > parent->size
+                      || info->size > parent->size - info->origin),
                       CL_INVALID_VALUE,
                       "buffer_create_info->size+origin > buffer size\n");
 
@@ -174,15 +176,14 @@ POname (clCreateSubBuffer) (cl_mem parent,
         "Couldn't allocate space for tensor description.");
     }
 
+  sub_buf = (cl_mem_list_item_t *)calloc (1, sizeof (cl_mem_list_item_t));
+  POCL_GOTO_ERROR_COND ((sub_buf == NULL), CL_OUT_OF_HOST_MEMORY);
+  sub_buf->mem = mem;
+
   /* The sub-parents should keep the parent parent alive until all of them are
    * released. */
   POCL_RETAIN_OBJECT (mem->parent);
   POCL_RETAIN_OBJECT (mem->context);
-
-  cl_mem_list_item_t *sub_buf
-    = (cl_mem_list_item_t *)calloc (1, sizeof (cl_mem_list_item_t));
-  sub_buf->mem = mem;
-  POCL_GOTO_ERROR_COND ((mem->device_ptrs == NULL), CL_OUT_OF_HOST_MEMORY);
 
   POCL_LOCK_OBJ (parent); parent_locked = 1;
 
@@ -232,7 +233,10 @@ POname (clCreateSubBuffer) (cl_mem parent,
 
 ERROR:
   if (parent_locked)
-    POCL_UNLOCK_OBJ (parent);
+    {
+      LL_DELETE (parent->sub_buffers, sub_buf);
+      POCL_UNLOCK_OBJ (parent);
+    }
 
   if (mem != NULL && mem->device_ptrs)
     {
@@ -244,6 +248,13 @@ ERROR:
             dev->ops->free_subbuffer (dev, mem);
         }
       POCL_MEM_FREE (mem->device_ptrs);
+    }
+
+  if (sub_buf != NULL)
+    {
+      POname (clReleaseMemObject) (parent);
+      POname (clReleaseContext) (mem->context);
+      POCL_MEM_FREE (sub_buf);
     }
 
   POCL_MEM_FREE(mem);
