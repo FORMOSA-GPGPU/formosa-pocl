@@ -68,6 +68,8 @@ cbrt (float x)
   float s = 5.4285717010e-01f + r * t;
   t *= 3.5714286566e-01f
        + 1.6071428061e+00f / (s + 1.4142856598e+00f - 7.0530611277e-01f / s);
+  r = x / (t * t);
+  t += t * ((r - t) / (t + t + r));
   return as_float (as_uint (t) | sign);
 }
 
