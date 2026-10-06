@@ -3,6 +3,7 @@
 
 #include <formosa-hal/api.h>
 
+#include "pocl-formosa-internal.h"
 #include "pocl.h"
 
 #ifdef __cplusplus
@@ -30,7 +31,7 @@ cl_int pocl_fsa_wait_completion_result(FsaCompletionToken token,
 cl_int pocl_fsa_wait_completion(FsaCompletionToken token,
                                 uintptr_t device_kernel_status_addr);
 
-int pocl_fsa_compile_program(char **kernel_names, int *num_kernels,
+int pocl_fsa_compile_program(formosa_program_data_t *program_data,
                              char *str_program_fsa_bin, char *compiler_options,
                              void *llvm_module, cl_context ctx);
 

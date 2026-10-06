@@ -1,6 +1,8 @@
 #ifndef FORMSA_LLVM_UTIL_H
 #define FORMSA_LLVM_UTIL_H
 
+#include "pocl-formosa-internal.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -8,17 +10,15 @@ extern "C" {
 #include <stdint.h>
 
 /**
- * Build the LLVM module and write it to the specified bitcode path. The number
- * of kernels and the corresponding names will be returned in the provided
- * pointers.
+ * Build the LLVM module and write it to the specified bitcode path. Kernel
+ * names and argument layouts are returned in the backend's program data.
  * @param LLVMModule The LLVM module to build.
  * @param BitcodePath The path where the bitcode will be written.
- * @param NumKernels Pointer to store the number of kernels found.
- * @param Names Pointer to store the names of the kernels found. The names will
- * be null-terminated and separated by null characters.
+ * @param ProgramData Receives kernel names and their matching argument layouts.
+ * @return CL_SUCCESS on success, otherwise an OpenCL error code.
  */
-void pocl_fsa_build_kernel(void *LLVMModule, char *BitcodePath,
-                           unsigned *NumKernels, char **Names);
+int pocl_fsa_build_kernel(void *LLVMModule, char *BitcodePath,
+                          formosa_program_data_t *ProgramData);
 
 /**
  * Get the address of a symbol in the ELF file.

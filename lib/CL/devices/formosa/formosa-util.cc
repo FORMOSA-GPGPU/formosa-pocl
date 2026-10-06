@@ -359,7 +359,7 @@ std::tuple<int, std::stringstream> compile_source(char *src_path,
   return std::make_tuple(err, std::move(ss_out));
 }
 
-int pocl_fsa_compile_program(char **kernel_names, int *num_kernels,
+int pocl_fsa_compile_program(formosa_program_data_t *program_data,
                              char *str_program_fsa_bin, char *compiler_options,
                              void *llvm_module, cl_context ctx) {
   int err;
@@ -409,10 +409,10 @@ int pocl_fsa_compile_program(char **kernel_names, int *num_kernels,
     auto *llvm_context =
         static_cast<PoclLLVMContextData *>(ctx->llvm_context_data);
     POCL_LOCK(llvm_context->Lock);
-    pocl_fsa_build_kernel(llvm_module, bitcode_path, (unsigned *)num_kernels,
-                          kernel_names);
+    err = pocl_fsa_build_kernel(llvm_module, bitcode_path, program_data);
     POCL_UNLOCK(llvm_context->Lock);
   }
+  if (err != CL_SUCCESS) return err;
 
   const char *default_clang = CLANGCC;
 #ifdef FORMOSA_CLANG_PATH
