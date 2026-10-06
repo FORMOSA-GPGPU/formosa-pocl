@@ -44,10 +44,8 @@ int createArgumentLayout(llvm::Function *F, llvm::Module *M,
   if (Layout.num_args != 0 && Layout.args == nullptr)
     return CL_OUT_OF_HOST_MEMORY;
 
-  // Firmware has already consumed printf metadata. The trampoline argument
-  // starts with the 64-bit total local-memory size, followed by kernel args.
-  // Align in the complete allocation: a printf prefix can leave the
-  // trampoline pointer only 8-byte aligned, even for a 16-byte byval object.
+  // Align slots in the full buffer, after printf and local-size metadata.
+  // Store offsets relative to the trampoline argument after the printf prefix.
   size_t Offset = ArgBufferOffset + sizeof(uint64_t);
   Layout.alignment = sizeof(uint64_t);
   for (auto &Arg : F->args()) {

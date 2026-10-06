@@ -10,9 +10,8 @@ extern "C" {
 #include <stdint.h>
 
 /**
- * Build the LLVM module and write it to the specified bitcode path. Kernel
- * names and argument layouts are returned in the backend's program data.
- * @param LLVMModule The LLVM module to build.
+ * Generate kernel trampolines and write the LLVM module to bitcode.
+ * @param LLVMModule The LLVM module to transform.
  * @param BitcodePath The path where the bitcode will be written.
  * @param ProgramData Receives kernel names and their matching argument layouts.
  * @return CL_SUCCESS on success, otherwise an OpenCL error code.
