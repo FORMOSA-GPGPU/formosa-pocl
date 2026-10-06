@@ -14,8 +14,24 @@ void formosa_mark_unavailable(void);
 #endif
 
 typedef struct {
+  /* Offset from the trampoline argument, including its local-size prefix. */
+  size_t offset;
+  size_t size;
+} formosa_kernel_arg_layout_t;
+
+typedef struct {
+  size_t num_args;
+  size_t size;
+  size_t alignment;
+  formosa_kernel_arg_layout_t *args;
+} formosa_kernel_layout_t;
+
+typedef struct {
   int num_kernels;
   char *kernel_names;
+  formosa_kernel_layout_t *kernel_layouts;
+  /* Bytes consumed by firmware before entering the trampoline. */
+  size_t arg_buffer_offset;
 } formosa_program_data_t;
 
 typedef struct {

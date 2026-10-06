@@ -1,5 +1,7 @@
 #include "formosa-llvm-util.h"
 
+#include <cstdlib>
+
 #include "pocl_debug.h"
 
 #if LLVM_MAJOR >= 17
@@ -25,13 +27,48 @@
 #include <llvm/Object/SymbolicFile.h>
 #include <llvm/Support/Error.h>
 #include <llvm/Support/FileSystem.h>
+#include <llvm/Support/MathExtras.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 
 namespace {
+int createArgumentLayout(llvm::Function *F, llvm::Module *M,
+                         size_t ArgBufferOffset,
+                         formosa_kernel_layout_t &Layout) {
+  const auto &DL = M->getDataLayout();
+  Layout.num_args = F->arg_size();
+  Layout.args = static_cast<formosa_kernel_arg_layout_t *>(
+      calloc(Layout.num_args, sizeof(*Layout.args)));
+  if (Layout.num_args != 0 && Layout.args == nullptr)
+    return CL_OUT_OF_HOST_MEMORY;
+
+  // Align slots in the full buffer, after printf and local-size metadata.
+  // Store offsets relative to the trampoline argument after the printf prefix.
+  size_t Offset = ArgBufferOffset + sizeof(uint64_t);
+  Layout.alignment = sizeof(uint64_t);
+  for (auto &Arg : F->args()) {
+    auto *StorageTy =
+        Arg.hasByValAttr() ? Arg.getParamByValType() : Arg.getType();
+    if (pocl::isLocalMemFunctionArg(F, Arg.getArgNo()))
+      StorageTy = llvm::Type::getInt64Ty(M->getContext());
+    auto Alignment = DL.getABITypeAlign(StorageTy);
+    if (Arg.hasByValAttr() && Arg.getParamAlign())
+      Alignment = *Arg.getParamAlign();
+    Layout.alignment = std::max(Layout.alignment, size_t(Alignment.value()));
+    auto &Slot = Layout.args[Arg.getArgNo()];
+    Offset = llvm::alignTo(Offset, Alignment);
+    Slot.offset = Offset - ArgBufferOffset;
+    Slot.size = DL.getTypeAllocSize(StorageTy).getFixedValue();
+    Offset += Slot.size;
+  }
+  Layout.size = Offset - ArgBufferOffset;
+  return CL_SUCCESS;
+}
+
 bool createTrampolineFunction(llvm::Function *F, llvm::Module *M,
+                              const formosa_kernel_layout_t &Layout,
                               llvm::SmallVector<std::string, 8> &FuncNames) {
   auto &Context = M->getContext();
   llvm::IRBuilder<> Builder(Context);
@@ -40,14 +77,9 @@ bool createTrampolineFunction(llvm::Function *F, llvm::Module *M,
   llvm::FunctionType *FuncType = F->getFunctionType();
   llvm::ArrayRef<llvm::Type *> ArgTypes = FuncType->params();
 
-  // Create a structure type for the arguments
-  llvm::StructType *ArgStructType =
-      llvm::StructType::create(Context, ArgTypes, "ArgStruct");
-
   // Create the trampoline function type: `void trampoline(i8*)`
   llvm::Type *VoidTy = llvm::Type::getVoidTy(Context);
   auto I8Ty = llvm::Type::getInt8Ty(Context);
-  auto I32Ty = llvm::Type::getInt32Ty(Context);
   auto I8PtrTy = llvm::PointerType::get(I8Ty->getContext(), 0);
   auto I64Ty = llvm::Type::getInt64Ty(Context);
   llvm::FunctionType *TrampolineTy =
@@ -71,29 +103,26 @@ bool createTrampolineFunction(llvm::Function *F, llvm::Module *M,
   llvm::Value *LocalMemPtr =
       Builder.CreateCall(FSALocalAllocFunc, {}, "allocated_local_mem");
 
-  // Cast the `i8*` pointer to the structure type representing the arguments
-  llvm::Type *ArgStructPtrType =
-      llvm::PointerType::get(ArgStructType->getContext(), 0);
-  auto ArgStructBytes = Builder.CreateGEP(I8Ty, ArgPtr, Builder.getInt32(8));
-  auto CastedArg = Builder.CreateBitCast(ArgStructBytes, ArgStructPtrType);
-
-  // Extract each argument from the structure
+  // Use the same byte offsets that the host uses to pack this kernel.
   std::vector<llvm::Value *> ExtractedArgs;
   for (unsigned i = 0; i < ArgTypes.size(); ++i) {
+    auto ArgGEP =
+        Builder.CreateGEP(I8Ty, ArgPtr, Builder.getInt64(Layout.args[i].offset),
+                          "arg" + std::to_string(i) + "__gep");
     if (pocl::isLocalMemFunctionArg(F, i)) {
       // Load argument __offset
       auto OffsetName = "arg" + std::to_string(i) + "__offset";
-      auto OffsetGEP = Builder.CreateStructGEP(
-          ArgStructType, CastedArg, i, "arg" + std::to_string(i) + "__gep");
-      auto OffsetValue = Builder.CreateLoad(I64Ty, OffsetGEP, OffsetName);
+      auto OffsetValue = Builder.CreateLoad(I64Ty, ArgGEP, OffsetName);
       // Apply pointer offset
       auto OffsetByteGEP =
           Builder.CreateGEP(I8Ty, LocalMemPtr, OffsetValue,
                             "arg" + std::to_string(i) + "_lmem__gep");
       ExtractedArgs.push_back(OffsetByteGEP);
+    } else if (F->getArg(i)->hasByValAttr()) {
+      // The buffer contains the object itself, not a pointer to it. Keep
+      // byval on the call so inlining creates a private copy per work-item.
+      ExtractedArgs.push_back(ArgGEP);
     } else {
-      auto ArgGEP = Builder.CreateStructGEP(
-          ArgStructType, CastedArg, i, "arg" + std::to_string(i) + "__gep");
       auto ArgValue = Builder.CreateLoad(ArgTypes[i], ArgGEP,
                                          "arg" + std::to_string(i) + "__value");
       ExtractedArgs.push_back(ArgValue);
@@ -105,6 +134,10 @@ bool createTrampolineFunction(llvm::Function *F, llvm::Module *M,
   // split blocks, so appending the return after inlining can leave malformed
   // CFG.
   auto CallInst = Builder.CreateCall(F, ExtractedArgs);
+  CallInst->setCallingConv(F->getCallingConv());
+  for (unsigned i = 0; i < ArgTypes.size(); ++i)
+    for (auto Attr : F->getAttributes().getParamAttrs(i))
+      CallInst->addParamAttr(i, Attr);
 
   if (FuncType->getReturnType()->isVoidTy()) {
     Builder.CreateRetVoid();
@@ -136,20 +169,35 @@ bool createTrampolineFunction(llvm::Function *F, llvm::Module *M,
   return InlineRes.isSuccess();
 }
 
-void generateTrampolineForKernels(llvm::SmallVector<std::string, 8> &FuncNames,
-                                  llvm::Module *M) {
+int generateTrampolineForKernels(llvm::SmallVector<std::string, 8> &FuncNames,
+                                 llvm::Module *M,
+                                 formosa_program_data_t *ProgramData) {
+  llvm::SmallVector<llvm::Function *, 8> Kernels;
+  for (auto &F : M->functions())
+    if (pocl::isKernelToProcess(F)) Kernels.push_back(&F);
+  ProgramData->num_kernels = Kernels.size();
+  ProgramData->kernel_layouts = static_cast<formosa_kernel_layout_t *>(
+      calloc(Kernels.size(), sizeof(*ProgramData->kernel_layouts)));
+  if (!Kernels.empty() && ProgramData->kernel_layouts == nullptr)
+    return CL_OUT_OF_HOST_MEMORY;
+
   llvm::SmallVector<llvm::Function *, 8> FunctionsToErase;
-  for (auto &F : M->functions()) {
-    if (!pocl::isKernelToProcess(F)) continue;
-    bool Inlined = createTrampolineFunction(&F, M, FuncNames);
+  for (unsigned i = 0; i < Kernels.size(); ++i) {
+    auto *F = Kernels[i];
+    auto &Layout = ProgramData->kernel_layouts[i];
+    int Err =
+        createArgumentLayout(F, M, ProgramData->arg_buffer_offset, Layout);
+    if (Err != CL_SUCCESS) return Err;
+    bool Inlined = createTrampolineFunction(F, M, Layout, FuncNames);
     if (!Inlined) continue;
-    if (F.use_empty())
-      FunctionsToErase.push_back(&F);
+    if (F->use_empty())
+      FunctionsToErase.push_back(F);
     else
-      F.setLinkage(llvm::GlobalValue::InternalLinkage);
+      F->setLinkage(llvm::GlobalValue::InternalLinkage);
   }
   // remove original functions if inlined to save code size
   for (auto *F : FunctionsToErase) F->eraseFromParent();
+  return CL_SUCCESS;
 }
 
 char *convertToCharArray(const llvm::SmallVector<std::string, 8> &Names) {
@@ -160,7 +208,7 @@ char *convertToCharArray(const llvm::SmallVector<std::string, 8> &Names) {
   }
 
   // Allocate buffer
-  char *Buffer = new char[TotalLength];
+  char *Buffer = static_cast<char *>(malloc(TotalLength ? TotalLength : 1));
   if (Buffer == nullptr) {
     POCL_MSG_ERR("Host memory allocation failed\n");
     return nullptr;
@@ -180,14 +228,14 @@ char *convertToCharArray(const llvm::SmallVector<std::string, 8> &Names) {
 
 }  // namespace
 
-void pocl_fsa_build_kernel(void *LLVMModule, char *BitcodePath,
-                           unsigned *NumKernels, char **Names) {
+int pocl_fsa_build_kernel(void *LLVMModule, char *BitcodePath,
+                          formosa_program_data_t *ProgramData) {
   auto M = (llvm::Module *)LLVMModule;
   llvm::SmallVector<std::string, 8> KernelNames;
-  generateTrampolineForKernels(KernelNames, M);
-
-  *NumKernels = KernelNames.size();
-  *Names = convertToCharArray(KernelNames);
+  int Err = generateTrampolineForKernels(KernelNames, M, ProgramData);
+  if (Err != CL_SUCCESS) return Err;
+  ProgramData->kernel_names = convertToCharArray(KernelNames);
+  if (ProgramData->kernel_names == nullptr) return CL_OUT_OF_HOST_MEMORY;
 
   std::error_code EC;
   llvm::raw_fd_ostream File(BitcodePath, EC, llvm::sys::fs::OF_None);
@@ -200,6 +248,7 @@ void pocl_fsa_build_kernel(void *LLVMModule, char *BitcodePath,
     M->print(File, nullptr);
     File.close();
   }
+  return CL_SUCCESS;
 }
 
 uint64_t pocl_fsa_get_symbol_pc(const char *ELFPath, const char *SymbolName) {
