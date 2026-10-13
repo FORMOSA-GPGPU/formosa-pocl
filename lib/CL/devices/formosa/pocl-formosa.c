@@ -166,7 +166,6 @@ void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
   ops->build_binary = pocl_driver_build_binary;
   ops->setup_metadata = pocl_driver_setup_metadata;
   ops->supports_binary = pocl_driver_supports_binary;
-  ops->build_poclbinary = pocl_driver_build_poclbinary;
   ops->build_builtin = pocl_driver_build_opencl_builtins;
 
   ops->post_build_program = pocl_formosa_post_build_program;
