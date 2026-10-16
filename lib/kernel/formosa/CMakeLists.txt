@@ -134,11 +134,7 @@ list(APPEND FORMOSA_DEVICE_FEATURE_DEFINES
 set(CLANG_FLAGS
     "-emit-llvm"
     "-target" "riscv64-unknown-unknown-elf"
-    "-mcpu=formosa-gpgpu"
-    "-Xclang" "-target-feature"
-    "-Xclang" "+a"
-    "-Xclang" "-target-feature"
-    "-Xclang" "+zacas")
+    "-mcpu=formosa-gpgpu")
 set(LLC_FLAGS "")
 
 set(KERNEL_CL_FLAGS
