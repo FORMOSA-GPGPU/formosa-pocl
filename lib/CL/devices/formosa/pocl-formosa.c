@@ -1002,9 +1002,9 @@ char *pocl_formosa_init_build(void *data) {
   const char *pocl_cflags = pocl_get_string_option("POCL_FORMOSA_CFLAGS", "");
   if (strstr(pocl_cflags, "-fsa-ics-first") != NULL)
     return strdup(
-        "-target-feature +zaamo "
+        "-target-feature +a -target-feature +zacas "
         "-fsa-ics-first-cg -target-feature +xformosapri");
-  return strdup("-target-feature +zaamo");
+  return strdup("-target-feature +a -target-feature +zacas");
 }
 
 static void formosa_free_program_data(formosa_program_data_t *pdata) {

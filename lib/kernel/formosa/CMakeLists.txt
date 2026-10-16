@@ -27,7 +27,7 @@ include("bitcode_rules")
 
 set(KERNEL_SOURCES ${SOURCES_GENERIC})
 
-foreach(FILE atomics.cl printf.c printf_base.c get_local_id.c get_local_size.c get_group_id.c
+foreach(FILE printf.c printf_base.c get_local_id.c get_local_size.c get_group_id.c
     get_global_size.c get_num_groups.c get_work_dim.c get_global_id.c
     get_global_offset.c barrier.ll erf.cl erfc.cl fdim.cl nextafter.cl
     kernel_clock.cl lgamma.cl acosh.cl asinh.cl atanh.cl cbrt.cl log1p.cl)
@@ -53,7 +53,9 @@ list(APPEND KERNEL_SOURCES
 
 list(APPEND KERNEL_SOURCES "formosa/printf_globals.c")
 list(APPEND KERNEL_SOURCES "formosa/printf_alloc.c")
-list(APPEND KERNEL_SOURCES "formosa/atomics.cl")
+# Reuse PoCL's old-style and C11 atomics, including generic-AS overloads.
+# Zacas provides compare-exchange without per-lane LR/SC reservations.
+list(APPEND KERNEL_SOURCES svm_atomics.cl formosa/svm_atomics_impl.cl)
 
 if(ENABLE_SPIRV)
   generate_cpu_spir_wrapper(cpu_riscv formosa 128 SPIR_WRAPPER_FILE)
@@ -95,6 +97,9 @@ endforeach()
 # SPIR wrappers are generated with generic AS; CTS SPIR-V calls those
 # _cl_* symbols. Do not advertise the feature on the device API.
 string(APPEND FORMOSA_CL_EXT_FLAGS ",+__opencl_c_generic_address_space")
+# The shared atomic library also emits the optional default-order/scope ABI.
+# These library compilation flags do not expand the device's advertised caps.
+string(APPEND FORMOSA_CL_EXT_FLAGS ",+__opencl_c_atomic_order_seq_cst,+__opencl_c_atomic_order_acq_rel,+__opencl_c_atomic_scope_device")
 
 # -----------------------------------------------------------------------------
 # Build -D flags
@@ -117,6 +122,10 @@ foreach(FEATURE IN LISTS FORMOSA_DEVICE_FEATURES_LIST)
   endif()
 endforeach()
 list(APPEND FORMOSA_DEVICE_FEATURE_DEFINES "-D__opencl_c_generic_address_space=1")
+list(APPEND FORMOSA_DEVICE_FEATURE_DEFINES
+  "-D__opencl_c_atomic_order_seq_cst=1"
+  "-D__opencl_c_atomic_order_acq_rel=1"
+  "-D__opencl_c_atomic_scope_device=1")
 
 # -----------------------------------------------------------------------------
 # Compiler flags
@@ -127,7 +136,9 @@ set(CLANG_FLAGS
     "-target" "riscv64-unknown-unknown-elf"
     "-mcpu=formosa-gpgpu"
     "-Xclang" "-target-feature"
-    "-Xclang" "+zaamo")
+    "-Xclang" "+a"
+    "-Xclang" "-target-feature"
+    "-Xclang" "+zacas")
 set(LLC_FLAGS "")
 
 set(KERNEL_CL_FLAGS
@@ -159,6 +170,11 @@ foreach(FILE misc.h vtables.h vtables_macros.h ep_log_fp64.cl
 endforeach()
 
 make_kernel_bc(KERNEL_BC "riscv64-formosa" "formosa" 0 0 0 ${KERNEL_SOURCES})
+add_custom_command(
+  OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/formosa/svm_atomics_impl.cl.bc"
+  APPEND DEPENDS
+    "${CMAKE_SOURCE_DIR}/lib/kernel/svm_atomics_host.cl"
+    "${CMAKE_SOURCE_DIR}/lib/kernel/svm_atomics.h")
 
 # just debug
 message(STATUS "FORMOSA Kernel BC: ${KERNEL_BC}")

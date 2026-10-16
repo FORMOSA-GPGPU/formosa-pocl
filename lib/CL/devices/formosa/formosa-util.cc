@@ -365,7 +365,9 @@ int pocl_fsa_compile_program(formosa_program_data_t *program_data,
   int err;
   std::string llvm_path = FORMOSA_LLVM;
   std::string llvm_objdump_path = llvm_path + "/bin/llvm-objdump";
-  std::string build_cflags = "-mcpu=formosa-gpgpu ";
+  std::string build_cflags =
+      "-mcpu=formosa-gpgpu -Xclang -target-feature -Xclang +a "
+      "-Xclang -target-feature -Xclang +zacas ";
   std::string extra_cflags = pocl_get_string_option("POCL_FORMOSA_CFLAGS", "");
   if (compiler_options != nullptr) {
     std::istringstream options(compiler_options);
