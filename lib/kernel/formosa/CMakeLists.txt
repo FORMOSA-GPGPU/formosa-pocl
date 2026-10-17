@@ -99,7 +99,7 @@ endforeach()
 string(APPEND FORMOSA_CL_EXT_FLAGS ",+__opencl_c_generic_address_space")
 # The shared atomic library also emits the optional default-order/scope ABI.
 # These library compilation flags do not expand the device's advertised caps.
-string(APPEND FORMOSA_CL_EXT_FLAGS ",+__opencl_c_atomic_order_seq_cst,+__opencl_c_atomic_order_acq_rel,+__opencl_c_atomic_scope_device")
+string(APPEND FORMOSA_CL_EXT_FLAGS ",+__opencl_c_atomic_order_seq_cst,+__opencl_c_atomic_scope_device")
 
 # -----------------------------------------------------------------------------
 # Build -D flags
@@ -124,7 +124,6 @@ endforeach()
 list(APPEND FORMOSA_DEVICE_FEATURE_DEFINES "-D__opencl_c_generic_address_space=1")
 list(APPEND FORMOSA_DEVICE_FEATURE_DEFINES
   "-D__opencl_c_atomic_order_seq_cst=1"
-  "-D__opencl_c_atomic_order_acq_rel=1"
   "-D__opencl_c_atomic_scope_device=1")
 
 # -----------------------------------------------------------------------------

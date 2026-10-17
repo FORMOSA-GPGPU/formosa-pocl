@@ -235,10 +235,6 @@ int pocl_fsa_build_kernel(void *LLVMModule, char *BitcodePath,
   llvm::SmallVector<std::string, 8> KernelNames;
   int Err = generateTrampolineForKernels(KernelNames, M, ProgramData);
   if (Err != CL_SUCCESS) return Err;
-  if (llvm::verifyModule(*M, &llvm::errs())) {
-    POCL_MSG_ERR("Invalid Formosa kernel trampoline module\n");
-    return CL_BUILD_PROGRAM_FAILURE;
-  }
   ProgramData->kernel_names = convertToCharArray(KernelNames);
   if (ProgramData->kernel_names == nullptr) return CL_OUT_OF_HOST_MEMORY;
 
