@@ -117,7 +117,8 @@ bool createTrampolineFunction(llvm::Function *F, llvm::Module *M,
       auto OffsetByteGEP =
           Builder.CreateGEP(I8Ty, LocalMemPtr, OffsetValue,
                             "arg" + std::to_string(i) + "_lmem__gep");
-      ExtractedArgs.push_back(OffsetByteGEP);
+      ExtractedArgs.push_back(Builder.CreatePointerCast(
+          OffsetByteGEP, ArgTypes[i], "arg" + std::to_string(i) + "_lmem"));
     } else if (F->getArg(i)->hasByValAttr()) {
       // The buffer contains the object itself, not a pointer to it. Keep
       // byval on the call so inlining creates a private copy per work-item.
