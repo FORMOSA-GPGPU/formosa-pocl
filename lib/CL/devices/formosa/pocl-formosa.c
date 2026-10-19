@@ -686,7 +686,7 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
 
   // write arguments
   if (has_printf_meta) {
-    formosa_printf_launch_meta_t printf_meta = {
+    KernelDispatchPrintfMeta printf_meta = {
         .printf_buffer = (uint64_t)device_printf_buffer_addr,
         .printf_buffer_position = (uint64_t)device_printf_position_addr,
         .printf_buffer_capacity = (uint32_t)cmd->device->printf_buffer_size,
@@ -1035,7 +1035,7 @@ int pocl_formosa_post_build_program(cl_program program, cl_uint device_i) {
     goto POST_BUILD_PROGRAM_FINALLY;
   }
   pdata->arg_buffer_offset =
-      dev->device_side_printf ? sizeof(formosa_printf_launch_meta_t) : 0;
+      dev->device_side_printf ? sizeof(KernelDispatchPrintfMeta) : 0;
 
   char fsa_program_bin[POCL_MAX_PATHNAME_LENGTH];
   err = pocl_fsa_get_elf_name(program, device_i, fsa_program_bin);
