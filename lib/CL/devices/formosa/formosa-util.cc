@@ -32,12 +32,12 @@
 namespace {
 void read_kernel_traps(const uint8_t *raw, uint64_t *mcause, uint64_t *mepc,
                        uint64_t *mtval) {
-  *mcause =
-      *reinterpret_cast<const uint64_t *>(raw + offsetof(KernelStatus, mcause));
-  *mepc =
-      *reinterpret_cast<const uint64_t *>(raw + offsetof(KernelStatus, mepc));
-  *mtval =
-      *reinterpret_cast<const uint64_t *>(raw + offsetof(KernelStatus, mtval));
+  *mcause = *reinterpret_cast<const uint64_t *>(
+      raw + offsetof(FsaKernelStatus, mcause));
+  *mepc = *reinterpret_cast<const uint64_t *>(raw +
+                                              offsetof(FsaKernelStatus, mepc));
+  *mtval = *reinterpret_cast<const uint64_t *>(
+      raw + offsetof(FsaKernelStatus, mtval));
 }
 
 int apply_kernel_relocations(FILE *elf, const Elf64_Ehdr &ehdr,
@@ -275,9 +275,9 @@ cl_int pocl_fsa_wait_completion(FsaCompletionToken token,
 
   const bool result_is_okay = result == FSA_COMPLETION_RESULT_SUCCESS;
   const bool result_is_known = result == FSA_COMPLETION_RESULT_SUCCESS ||
-                               result == kKernelCompletionBadDimension ||
-                               result == kKernelCompletionException ||
-                               result == kKernelCompletionUnknownError;
+                               result == kFsaKernelCompletionBadDimension ||
+                               result == kFsaKernelCompletionException ||
+                               result == kFsaKernelCompletionUnknownError;
   if (!result_is_known) {
     POCL_MSG_ERR("Unexpected kernel completion result %u\n", (unsigned)result);
   }
@@ -286,7 +286,7 @@ cl_int pocl_fsa_wait_completion(FsaCompletionToken token,
   uint64_t mepc = 0;
   uint64_t mtval = 0;
   if (device_kernel_status_addr != 0) {
-    uint8_t status_raw[sizeof(KernelStatus)];
+    uint8_t status_raw[sizeof(FsaKernelStatus)];
     int err = fsa_copy_from_dev(device_kernel_status_addr, status_raw,
                                 sizeof(status_raw));
     if (err != 0) {
@@ -298,10 +298,10 @@ cl_int pocl_fsa_wait_completion(FsaCompletionToken token,
     switch (result) {
       case FSA_COMPLETION_RESULT_SUCCESS:
         break;
-      case kKernelCompletionBadDimension:
+      case kFsaKernelCompletionBadDimension:
         POCL_MSG_ERR("Bad dimension\n");
         break;
-      case kKernelCompletionException:
+      case kFsaKernelCompletionException:
         POCL_MSG_ERR(
             "\nException occurs:\n"
             "\tmcause: 0x%08lx\n"
@@ -309,7 +309,7 @@ cl_int pocl_fsa_wait_completion(FsaCompletionToken token,
             "\tmtval:  0x%08lx\n",
             mcause, mepc, mtval);
         break;
-      case kKernelCompletionUnknownError:
+      case kFsaKernelCompletionUnknownError:
       default:
         POCL_MSG_ERR(
             "Unknown error occurred in kernel execution\n"

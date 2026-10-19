@@ -221,8 +221,8 @@ static cl_int formosa_copy_buf(void *data, pocl_mem_identifier *dst_mem_id,
       dst_mem_id, src_mem_id, dst_offset, src_offset, size, &addresses);
   if (err != CL_SUCCESS) return err;
 
-  return formosa_memory_copy(kMemoryDomainDevice, addresses.src_addr,
-                             kMemoryDomainDevice, addresses.dst_addr, size);
+  return formosa_memory_copy(kFsaMemoryDomainDevice, addresses.src_addr,
+                             kFsaMemoryDomainDevice, addresses.dst_addr, size);
 }
 
 static cl_int formosa_submit_copy_buf(
@@ -236,8 +236,8 @@ static cl_int formosa_submit_copy_buf(
   cl_int err = formosa_memory_resolve_copy_addresses(
       dst_mem_id, src_mem_id, dst_offset, src_offset, size, &addresses);
   if (err != CL_SUCCESS) return err;
-  return formosa_memory_submit_copy(kMemoryDomainDevice, addresses.src_addr,
-                                    kMemoryDomainDevice, addresses.dst_addr,
+  return formosa_memory_submit_copy(kFsaMemoryDomainDevice, addresses.src_addr,
+                                    kFsaMemoryDomainDevice, addresses.dst_addr,
                                     size, token);
 }
 
@@ -253,8 +253,8 @@ static cl_int formosa_submit_read_buf(void *data, void *__restrict__ host_ptr,
   if (err != CL_SUCCESS) return err;
   err = formosa_validate_host_pointer(host_ptr, size);
   if (err != CL_SUCCESS) return err;
-  return formosa_memory_submit_copy(kMemoryDomainDevice, device_addr,
-                                    kMemoryDomainHost, (uintptr_t)host_ptr,
+  return formosa_memory_submit_copy(kFsaMemoryDomainDevice, device_addr,
+                                    kFsaMemoryDomainHost, (uintptr_t)host_ptr,
                                     size, token);
 }
 
@@ -271,8 +271,8 @@ static cl_int formosa_submit_write_buf(void *data,
   if (err != CL_SUCCESS) return err;
   err = formosa_validate_host_pointer(host_ptr, size);
   if (err != CL_SUCCESS) return err;
-  return formosa_memory_submit_copy(kMemoryDomainHost, (uintptr_t)host_ptr,
-                                    kMemoryDomainDevice, device_addr, size,
+  return formosa_memory_submit_copy(kFsaMemoryDomainHost, (uintptr_t)host_ptr,
+                                    kFsaMemoryDomainDevice, device_addr, size,
                                     token);
 }
 
@@ -652,7 +652,7 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
       goto FAIL;
     }
   }
-  err = fsa_malloc(&device_kernel_status_addr, sizeof(KernelStatus));
+  err = fsa_malloc(&device_kernel_status_addr, sizeof(FsaKernelStatus));
   if (err != 0) {
     POCL_MSG_ERR("pocl_formosa_run: device kernel status allocation failed\n");
     errcode = CL_OUT_OF_RESOURCES;
@@ -686,7 +686,7 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
 
   // write arguments
   if (has_printf_meta) {
-    formosa_printf_launch_meta_t printf_meta = {
+    FsaKernelDispatchPrintfMeta printf_meta = {
         .printf_buffer = (uint64_t)device_printf_buffer_addr,
         .printf_buffer_position = (uint64_t)device_printf_position_addr,
         .printf_buffer_capacity = (uint32_t)cmd->device->printf_buffer_size,
@@ -1035,7 +1035,7 @@ int pocl_formosa_post_build_program(cl_program program, cl_uint device_i) {
     goto POST_BUILD_PROGRAM_FINALLY;
   }
   pdata->arg_buffer_offset =
-      dev->device_side_printf ? sizeof(formosa_printf_launch_meta_t) : 0;
+      dev->device_side_printf ? sizeof(FsaKernelDispatchPrintfMeta) : 0;
 
   char fsa_program_bin[POCL_MAX_PATHNAME_LENGTH];
   err = pocl_fsa_get_elf_name(program, device_i, fsa_program_bin);
@@ -1231,9 +1231,9 @@ cl_int pocl_formosa_alloc_mem_obj(cl_device_id device, cl_mem mem_obj,
     temp->buf_address = (uint64_t)addr;
     temp->buf_size = mem_obj->size;
     temp->msg_id = 0;
-    err =
-        formosa_memory_copy(kMemoryDomainHost, (uintptr_t)host_ptr,
-                            kMemoryDomainDevice, (uint64_t)addr, mem_obj->size);
+    err = formosa_memory_copy(kFsaMemoryDomainHost, (uintptr_t)host_ptr,
+                              kFsaMemoryDomainDevice, (uint64_t)addr,
+                              mem_obj->size);
     if (err != 0) {
       fsa_free((void *)temp->buf_address);
       POCL_MEM_FREE(temp);
@@ -1322,8 +1322,8 @@ void pocl_formosa_memfill(void *data, pocl_mem_identifier *dst_mem_id,
   cl_int err = formosa_memory_resolve_buffer_address(dst_mem_id, offset, size,
                                                      &device_addr);
   if (err == CL_SUCCESS)
-    err = formosa_memory_copy(kMemoryDomainHost, (uintptr_t)staging,
-                              kMemoryDomainDevice, device_addr, size);
+    err = formosa_memory_copy(kFsaMemoryDomainHost, (uintptr_t)staging,
+                              kFsaMemoryDomainDevice, device_addr, size);
   if (err != CL_SUCCESS)
     POCL_MSG_ERR("pocl_formosa_memfill: copy to device failed (%d)\n", err);
 
@@ -1343,8 +1343,9 @@ cl_int pocl_formosa_map_mem(void *data, pocl_mem_identifier *src_mem_id,
   if (err != CL_SUCCESS) return err;
   err = formosa_validate_host_pointer(map->host_ptr, map->size);
   if (err != CL_SUCCESS) return err;
-  err = formosa_memory_copy(kMemoryDomainDevice, device_addr, kMemoryDomainHost,
-                            (uintptr_t)map->host_ptr, map->size);
+  err = formosa_memory_copy(kFsaMemoryDomainDevice, device_addr,
+                            kFsaMemoryDomainHost, (uintptr_t)map->host_ptr,
+                            map->size);
   if (err != CL_SUCCESS)
     POCL_MSG_ERR("pocl_formosa_map_mem: copy from device failed (%d)\n", err);
   return err;
@@ -1364,8 +1365,8 @@ cl_int pocl_formosa_unmap_mem(void *data, pocl_mem_identifier *dst_mem_id,
   if (err != CL_SUCCESS) return err;
   err = formosa_validate_host_pointer(map->host_ptr, map->size);
   if (err != CL_SUCCESS) return err;
-  err = formosa_memory_copy(kMemoryDomainHost, (uintptr_t)map->host_ptr,
-                            kMemoryDomainDevice, device_addr, map->size);
+  err = formosa_memory_copy(kFsaMemoryDomainHost, (uintptr_t)map->host_ptr,
+                            kFsaMemoryDomainDevice, device_addr, map->size);
   if (err != CL_SUCCESS)
     POCL_MSG_ERR("pocl_formosa_unmap_mem: copy to device failed (%d)\n", err);
   return err;
@@ -1385,8 +1386,8 @@ static cl_int formosa_read_buf(void *data, void *__restrict__ host_ptr,
   err = formosa_validate_host_pointer(host_ptr, size);
   if (err != CL_SUCCESS) return err;
   cl_int copy_status =
-      formosa_memory_copy(kMemoryDomainDevice, device_addr, kMemoryDomainHost,
-                          (uintptr_t)host_ptr, size);
+      formosa_memory_copy(kFsaMemoryDomainDevice, device_addr,
+                          kFsaMemoryDomainHost, (uintptr_t)host_ptr, size);
   if (copy_status != CL_SUCCESS) {
     POCL_MSG_ERR("pocl_formosa_read: copy from device failed\n");
     return copy_status;
@@ -1404,8 +1405,8 @@ static cl_int formosa_write_buf(void *data, const void *__restrict__ host_ptr,
   err = formosa_validate_host_pointer(host_ptr, size);
   if (err != CL_SUCCESS) return err;
   cl_int copy_status =
-      formosa_memory_copy(kMemoryDomainHost, (uintptr_t)host_ptr,
-                          kMemoryDomainDevice, device_addr, size);
+      formosa_memory_copy(kFsaMemoryDomainHost, (uintptr_t)host_ptr,
+                          kFsaMemoryDomainDevice, device_addr, size);
   if (copy_status != CL_SUCCESS) {
     POCL_MSG_ERR("pocl_formosa_write: copy to device failed\n");
     return copy_status;

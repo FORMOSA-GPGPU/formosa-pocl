@@ -43,13 +43,6 @@ typedef struct {
   cl_bool stack_remap;
 } formosa_kernel_instance_data_t;
 
-typedef struct {
-  uint64_t printf_buffer;
-  uint64_t printf_buffer_position;
-  uint32_t printf_buffer_capacity;
-  uint32_t reserved;
-} formosa_printf_launch_meta_t;
-
 typedef struct formosa_pending_copy {
   _cl_command_node *node;
   FsaCompletionToken token;
