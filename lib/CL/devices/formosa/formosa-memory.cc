@@ -69,19 +69,19 @@ cl_int formosa_memory_copy_outcome_to_cl(FsaCompletionResult outcome) {
     return CL_DEVICE_NOT_AVAILABLE;
 
   switch (outcome) {
-    case kMemoryCopyStatusOverlap:
+    case kFsaMemoryCopyStatusOverlap:
       return CL_MEM_COPY_OVERLAP;
-    case kMemoryCopyStatusInvalidAddress:
-    case kMemoryCopyStatusInvalidRange:
-    case kMemoryCopyStatusInvalidDomainPair:
+    case kFsaMemoryCopyStatusInvalidAddress:
+    case kFsaMemoryCopyStatusInvalidRange:
+    case kFsaMemoryCopyStatusInvalidDomainPair:
       return CL_INVALID_VALUE;
     default:
       return CL_OUT_OF_RESOURCES;
   }
 }
 
-cl_int formosa_memory_submit_copy(MemoryDomain src_domain, uint64_t src_addr,
-                                  MemoryDomain dst_domain, uint64_t dst_addr,
+cl_int formosa_memory_submit_copy(FsaMemoryDomain src_domain, uint64_t src_addr,
+                                  FsaMemoryDomain dst_domain, uint64_t dst_addr,
                                   size_t size, FsaCompletionToken *token) {
   if (token == nullptr) return CL_INVALID_VALUE;
   *token = 0;
@@ -121,8 +121,8 @@ cl_int formosa_memory_submit_copy(MemoryDomain src_domain, uint64_t src_addr,
   return CL_OUT_OF_RESOURCES;
 }
 
-cl_int formosa_memory_copy(MemoryDomain src_domain, uint64_t src_addr,
-                           MemoryDomain dst_domain, uint64_t dst_addr,
+cl_int formosa_memory_copy(FsaMemoryDomain src_domain, uint64_t src_addr,
+                           FsaMemoryDomain dst_domain, uint64_t dst_addr,
                            size_t size) {
   FsaCompletionToken token = 0;
   cl_int submit_status = formosa_memory_submit_copy(
@@ -178,8 +178,8 @@ cl_int formosa_memory_copy_rows(pocl_mem_identifier *dst_mem, void *dst_host,
             static_cast<const char *>(src_host) + src_offset);
       }
       err = formosa_memory_copy(
-          src_mem ? kMemoryDomainDevice : kMemoryDomainHost, src_addr,
-          dst_mem ? kMemoryDomainDevice : kMemoryDomainHost, dst_addr,
+          src_mem ? kFsaMemoryDomainDevice : kFsaMemoryDomainHost, src_addr,
+          dst_mem ? kFsaMemoryDomainDevice : kFsaMemoryDomainHost, dst_addr,
           row_bytes);
       if (err != CL_SUCCESS) return err;
     }
