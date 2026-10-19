@@ -585,9 +585,6 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
   const size_t printf_meta_size = pdata->arg_buffer_offset;
   const uint32_t has_printf_meta = printf_meta_size != 0;
 
-  // calculate kernel arguments buffer size
-  uint64_t local_mem_size = 0;  // total local memory size
-
   // kernel arguments buffer size
   // it contains:
   // 0. optional PoCL device-side printf metadata consumed by firmware/CP
@@ -597,18 +594,35 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
   size_t image_count = 0;
 
   for (int i = 0; i < meta->num_args; ++i) {
-    struct pocl_argument *al = &(cmd->command.run.arguments[i]);
-    if (ARG_IS_LOCAL(meta->arg_info[i])) {
-      local_mem_size += al->size;
-    } else if (meta->arg_info[i].type == POCL_ARG_TYPE_IMAGE) {
-      ++image_count;
-    }
+    if (meta->arg_info[i].type == POCL_ARG_TYPE_IMAGE) ++image_count;
   }
 
-  // local buffers
-  for (int i = 0; i < meta->num_locals; ++i) {
-    local_mem_size += meta->local_sizes[i];
+  // allocate arguments host buffer
+  host_kargs_base_ptr = (uint8_t *)malloc(kargs_buffer_size);
+  if (host_kargs_base_ptr == NULL) {
+    errcode = CL_OUT_OF_HOST_MEMORY;
+    goto FAIL;
   }
+  memset(host_kargs_base_ptr, 0, kargs_buffer_size);
+
+  // Align each local block to MAX_EXTENDED_ALIGNMENT: the explicit __local
+  // arguments first, then the automatic locals.
+  uint64_t local_mem_size = 0;  // total local memory size, padding included
+  for (size_t i = 0; i < layout->num_args; ++i) {
+    size_t block_size;
+    if (i < meta->num_args) {
+      if (!ARG_IS_LOCAL(meta->arg_info[i])) continue;
+      block_size = cmd->command.run.arguments[i].size;
+    } else {
+      block_size = meta->local_sizes[i - meta->num_args];
+    }
+    uint64_t local_mem_offset =
+        pocl_align_value(local_mem_size, MAX_EXTENDED_ALIGNMENT);
+    memcpy(host_kargs_base_ptr + printf_meta_size + layout->args[i].offset,
+           &local_mem_offset, word_size);
+    local_mem_size = local_mem_offset + block_size;
+  }
+  memcpy(host_kargs_base_ptr + printf_meta_size, &local_mem_size, word_size);
 
   // check occupancy
   uint64_t available_local_mem = 0;
@@ -623,14 +637,6 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
     errcode = formosa_hal_error(CL_INVALID_WORK_GROUP_SIZE);
     goto FAIL;
   }
-
-  // allocate arguments host buffer
-  host_kargs_base_ptr = (uint8_t *)malloc(kargs_buffer_size);
-  if (host_kargs_base_ptr == NULL) {
-    errcode = CL_OUT_OF_HOST_MEMORY;
-    goto FAIL;
-  }
-  memset(host_kargs_base_ptr, 0, kargs_buffer_size);
 
   // allocate kernel arguments buffer
   formosa_buffer_data_t fsa_kargs_buffer;
@@ -704,26 +710,12 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
     }
   }
 
-  size_t host_args_offset = printf_meta_size;
-  uint64_t local_mem_offset = 0;
-
-  if (local_mem_size > 0) {
-    memcpy(host_kargs_base_ptr + host_args_offset, &local_mem_size,
-           word_size);  // total local memory size
-  } else {
-    // if no local memory, write 0
-    memset(host_kargs_base_ptr + host_args_offset, 0,
-           word_size);  // local size
-  }
-
   size_t image_index = 0;
   for (int i = 0; i < meta->num_args; ++i) {
     struct pocl_argument *al = &(cmd->command.run.arguments[i]);
-    host_args_offset = printf_meta_size + layout->args[i].offset;
+    size_t host_args_offset = printf_meta_size + layout->args[i].offset;
     if (ARG_IS_LOCAL(meta->arg_info[i])) {
-      memcpy(host_kargs_base_ptr + host_args_offset, &local_mem_offset,
-             word_size);  // local memory offset
-      local_mem_offset += al->size;
+      continue;  // local memory offsets are written above
     } else if (meta->arg_info[i].type == POCL_ARG_TYPE_POINTER) {
       if (al->value == NULL) {
         memset(host_kargs_base_ptr + host_args_offset, 0,
@@ -795,14 +787,6 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
       memcpy(host_kargs_base_ptr + host_args_offset, al->value,
              al->size);  // scalar value
     }
-  }
-
-  for (int i = 0; i < meta->num_locals; ++i) {
-    host_args_offset =
-        printf_meta_size + layout->args[meta->num_args + i].offset;
-    memcpy(host_kargs_base_ptr + host_args_offset, &local_mem_offset,
-           word_size);  // arg offset
-    local_mem_offset += meta->local_sizes[i];
   }
 
   // upload kernel arguments buffer
