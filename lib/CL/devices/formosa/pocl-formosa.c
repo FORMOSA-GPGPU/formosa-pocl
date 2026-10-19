@@ -624,6 +624,14 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
   }
   memcpy(host_kargs_base_ptr + printf_meta_size, &local_mem_size, word_size);
 
+  if (local_mem_size > cmd->device->local_mem_size) {
+    POCL_MSG_ERR("pocl_formosa_run: kernel needs %" PRIu64
+                 " bytes of local memory, the device has %" PRIu64 "\n",
+                 local_mem_size, (uint64_t)cmd->device->local_mem_size);
+    errcode = CL_OUT_OF_RESOURCES;
+    goto FAIL;
+  }
+
   // check occupancy
   uint64_t available_local_mem = 0;
   err =
@@ -1000,6 +1008,26 @@ static void formosa_free_program_data(formosa_program_data_t *pdata) {
   free(pdata);
 }
 
+/* CL_KERNEL_LOCAL_MEM_SIZE adds only the explicit __local argument sizes to
+ * this value, so include the most padding formosa_run_kernel can add. */
+static void formosa_setup_local_mem_size(pocl_kernel_metadata_t *meta,
+                                         cl_uint device_i) {
+  if (meta->local_mem_size == NULL) return;
+  uint64_t size = 0;
+  for (cl_uint i = 0; i < meta->num_locals; ++i) {
+    size =
+        pocl_align_value(size, MAX_EXTENDED_ALIGNMENT) + meta->local_sizes[i];
+  }
+  // Explicit sizes are unknown here, so assume the most padding after each.
+  uint64_t padded_args = 0;
+  for (cl_uint i = 0; i < meta->num_args; ++i) {
+    if (ARG_IS_LOCAL(meta->arg_info[i])) ++padded_args;
+  }
+  if (padded_args != 0 && meta->num_locals == 0) --padded_args;
+  meta->local_mem_size[device_i] =
+      size + padded_args * (MAX_EXTENDED_ALIGNMENT - 1);
+}
+
 int pocl_formosa_post_build_program(cl_program program, cl_uint device_i) {
   cl_device_id dev = program->devices[device_i];
   pocl_formosa_data_t *ddata = (pocl_formosa_data_t *)dev->data;
@@ -1030,6 +1058,12 @@ int pocl_formosa_post_build_program(cl_program program, cl_uint device_i) {
   err = pocl_fsa_compile_program(pdata, fsa_program_bin,
                                  program->compiler_options,
                                  program->llvm_irs[device_i], program->context);
+  if (err != CL_SUCCESS) goto POST_BUILD_PROGRAM_FINALLY;
+
+  // setup_kernel_metadata ran before this hook.
+  for (size_t i = 0; i < program->num_kernels; ++i) {
+    formosa_setup_local_mem_size(&program->kernel_meta[i], device_i);
+  }
 
 POST_BUILD_PROGRAM_FINALLY:
   if (err != CL_SUCCESS) {
