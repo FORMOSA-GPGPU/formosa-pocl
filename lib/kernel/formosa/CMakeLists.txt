@@ -36,7 +36,8 @@ endforeach()
 
 foreach(FILE get_local_id.cl get_local_size.cl get_group_id.cl get_global_size.cl
   barrier.cl get_num_groups.cl get_work_dim.cl get_global_id.cl get_global_offset.cl
-  erf.cl erfc.cl subgroup_function.cl kernel_clock.cl lgamma.cl cbrt.cl libclc.cl)
+  erfF.cl erfD.cl erfcF.cl erfcD.cl subgroup_function.cl kernel_clock.cl lgamma.cl
+  cbrt.cl libclc.cl)
   list(APPEND KERNEL_SOURCES "formosa/${FILE}")
 endforeach()
 
