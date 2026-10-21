@@ -461,7 +461,7 @@ int pocl_llvm_build_program(cl_program program,
     ss << "-cl-std=" << device->opencl_c_version_as_opt << " ";
 
   std::string temp(ss.str());
-  size_t pos = temp.find("-cl-std=CL");
+  size_t pos = temp.rfind("-cl-std=CL");
   pos += 10;
   int cl_std_major = temp.c_str()[pos] - '0';
   int cl_std_minor = temp.c_str()[pos+2] - '0';
