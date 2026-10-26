@@ -1029,6 +1029,8 @@ static void formosa_setup_local_mem_size(pocl_kernel_metadata_t *meta,
 }
 
 int pocl_formosa_post_build_program(cl_program program, cl_uint device_i) {
+  if (program->binary_type == CL_PROGRAM_BINARY_TYPE_LIBRARY) return CL_SUCCESS;
+
   cl_device_id dev = program->devices[device_i];
   pocl_formosa_data_t *ddata = (pocl_formosa_data_t *)dev->data;
   formosa_program_data_t *pdata = NULL;
@@ -1082,7 +1084,6 @@ int pocl_formosa_free_program(cl_device_id device, cl_program program,
   pocl_formosa_data_t *dd = (pocl_formosa_data_t *)device->data;
   formosa_program_data_t *pdata =
       (formosa_program_data_t *)program->data[program_device_i];
-  if (pdata == NULL) return CL_SUCCESS;
 
   pocl_driver_free_program(device, program, program_device_i);
 
