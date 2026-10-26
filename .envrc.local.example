@@ -8,5 +8,20 @@
 # Without this, PoCL uses the FORMOSA SDK provided by the Nix dev shell.
 # export FORMOSA_INSTALL_PREFIX=/absolute/path/to/formosa-install
 
+# Optional local LLVM install prefix (build and install LLVM first).
+# Selects llvm-config plus the FORMOSA clang/lld wrapper; newlib/compiler-rt
+# come from Nix unless FORMOSA_RUNTIME_PREFIX is also set. Use a fresh build
+# directory when switching LLVM. Without this, PoCL uses the Nix LLVM.
+# Requires a FORMOSA wrapper that supports FORMOSA_LLVM_PREFIX. Keep
+# outputs/toolchains while using PoCL installed from this checkout.
+# export FORMOSA_LLVM_PREFIX=/absolute/path/to/formosa-llvm/outputs/out
+
+# Optional local newlib/compiler-rt runtime prefix, independent of local LLVM.
+# Must contain the RISC-V sysroot, clang resource headers and builtins archive.
+# Requires a FORMOSA wrapper supporting FORMOSA_RUNTIME_PREFIX.
+# Configure, build and install PoCL again when changing
+# this prefix; retain the runtime installation and outputs/toolchains.
+# export FORMOSA_RUNTIME_PREFIX=/absolute/path/to/formosa-runtime
+
 # Optional; defaults to this PoCL checkout's outputs/out directory.
 # export POCL_INSTALL_PREFIX=/absolute/path/to/pocl-install
