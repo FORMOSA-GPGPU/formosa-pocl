@@ -26,6 +26,20 @@ install FORMOSA first; the prefix must contain
 `lib/cmake/Formosa/FormosaConfig.cmake` or
 `lib64/cmake/Formosa/FormosaConfig.cmake`.
 
+To use locally installed LLVM or newlib/compiler-rt, set either or both prefixes
+in `.envrc.local`:
+
+```bash
+export FORMOSA_LLVM_PREFIX=/path/to/formosa-llvm/outputs/out
+export FORMOSA_RUNTIME_PREFIX=/path/to/formosa-runtime
+```
+
+Unset prefixes use Nix. These overrides require a FORMOSA `formosa-clang` wrapper
+that supports the selected variables. Run `direnv reload`, then configure, build
+and install PoCL using the commands above. Use a fresh build directory when
+switching LLVM, and keep LLVM compatible with the shell's `llvm-spirv`.
+Retain `outputs/toolchains` and the selected local installations while using PoCL.
+
 When migrating from the old source-tree setup, configure PoCL in a clean build
 directory.
 
