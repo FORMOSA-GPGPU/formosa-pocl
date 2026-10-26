@@ -433,7 +433,7 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
   device->max_work_item_sizes[1] = max_work_group_size;
   device->max_work_item_sizes[2] = max_work_group_size;
   device->max_compute_units = description.num_cores;
-  device->mem_base_addr_align = 128;  // TODO: determine this
+  device->mem_base_addr_align = MAX_EXTENDED_ALIGNMENT;
 
   formosa_init_subgroup_info(device, dd, &description);
   dd->copy_thread_stop = CL_FALSE;
@@ -1229,8 +1229,12 @@ cl_int pocl_formosa_alloc_mem_obj(cl_device_id device, cl_mem mem_obj,
                                   void *host_ptr) {
   pocl_mem_identifier *p = &mem_obj->device_ptrs[device->global_mem_id];
 
+  const size_t alignment = MAX_EXTENDED_ALIGNMENT;
+  if (mem_obj->size > SIZE_MAX - (alignment - 1))
+    return CL_MEM_OBJECT_ALLOCATION_FAILURE;
+
   void *addr;
-  int err = fsa_malloc(&addr, mem_obj->size);
+  int err = fsa_malloc(&addr, mem_obj->size + alignment - 1);
   if (err) {
     return CL_MEM_OBJECT_ALLOCATION_FAILURE;
   }
@@ -1245,22 +1249,18 @@ cl_int pocl_formosa_alloc_mem_obj(cl_device_id device, cl_mem mem_obj,
     return CL_OUT_OF_HOST_MEMORY;
   }
   memset(temp, 0, sizeof(formosa_buffer_data_t));
-  if (host_ptr) {  // READ_WRITE, WRITE_ONLY
-    temp->buf_address = (uint64_t)addr;
-    temp->buf_size = mem_obj->size;
-    temp->msg_id = 0;
+  temp->allocation_address = (uint64_t)addr;
+  temp->buf_address = pocl_align_value((uintptr_t)addr, alignment);
+  temp->buf_size = mem_obj->size;
+  if (host_ptr) {
     err = formosa_memory_copy(kFsaMemoryDomainHost, (uintptr_t)host_ptr,
-                              kFsaMemoryDomainDevice, (uint64_t)addr,
+                              kFsaMemoryDomainDevice, temp->buf_address,
                               mem_obj->size);
     if (err != 0) {
-      fsa_free((void *)temp->buf_address);
+      fsa_free(addr);
       POCL_MEM_FREE(temp);
       return err;
     }
-  } else {  // READ_ONLY
-    temp->buf_address = (uint64_t)addr;
-    temp->buf_size = mem_obj->size;
-    temp->msg_id = 0;
   }
 
   p->mem_ptr = temp;
@@ -1278,9 +1278,9 @@ void pocl_formosa_free(cl_device_id device, cl_mem mem_obj) {
   if (flags & CL_MEM_ALLOC_HOST_PTR) {
     pocl_release_mem_host_ptr(mem_obj);
   }
-  if (fsa_free((void *)fb->buf_address) != 0) {
+  if (fsa_free((void *)fb->allocation_address) != 0) {
     POCL_MSG_ERR("pocl_formosa_free: device free failed for buffer %p\n",
-                 (void *)fb->buf_address);
+                 (void *)fb->allocation_address);
   }
   POCL_MEM_FREE(fb);
   p->mem_ptr = NULL;

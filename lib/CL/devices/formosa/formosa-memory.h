@@ -11,6 +11,7 @@ extern "C" {
 
 typedef struct {
   uint64_t buf_address;
+  uint64_t allocation_address;
   uint64_t buf_size;
   uint64_t msg_id;
 } formosa_buffer_data_t;
