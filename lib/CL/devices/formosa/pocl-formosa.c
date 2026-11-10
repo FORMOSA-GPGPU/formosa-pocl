@@ -897,6 +897,8 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
   submit_args.info.kernarg_address = fsa_kargs_buffer.buf_address;
   submit_args.info.kernel_trampoline = trampoline_pc;
   submit_args.info.kernel_status = (FsaDeviceAddress)device_kernel_status_addr;
+  /* Names the command in the simulator's device trace. */
+  submit_args.info.label = kernel->name;
   const FsaCommandSubmitStatus submit_status =
       pocl_fsa_submit_with_backpressure(formosa_submit_kernel,
                                         (void *)&submit_args, &token);
