@@ -1,10 +1,14 @@
-#include "wg_info.h"
-
 size_t _CL_OVERLOADABLE get_local_size(uint dim) {
-  if (dim > 2)
+  switch (dim) {
+  case 0:
+    return __builtin_riscv_fsa_local_size_x();
+  case 1:
+    return __builtin_riscv_fsa_local_size_y();
+  case 2:
+    return __builtin_riscv_fsa_local_size_z();
+  default:
     return 1;
-  else
-    return get_wg_info()->local_size[dim];
+  }
 }
 
 size_t _CL_OVERLOADABLE get_enqueued_local_size(uint dim) {

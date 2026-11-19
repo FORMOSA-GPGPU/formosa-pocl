@@ -1,6 +1,8 @@
 #include "formosa-llvm-util.h"
 
+#include <algorithm>
 #include <cstdlib>
+#include <iterator>
 
 #include "pocl_debug.h"
 
@@ -9,6 +11,7 @@
 #endif
 
 #include <LLVMUtils.h>
+#include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Analysis/TargetLibraryInfo.h>
@@ -16,7 +19,13 @@
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/GlobalAlias.h>
+#include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/InlineAsm.h>
+#include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/Intrinsics.h>
+#include <llvm/IR/IntrinsicsRISCV.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
@@ -32,8 +41,210 @@
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Transforms/Utils/Cloning.h>
+#include <llvm/Transforms/Utils/Local.h>
 
 namespace {
+// Offsets of the uint32_t fields in struct WGInfo, checked in
+// kernel/formosa/wg_info.h.
+constexpr uint64_t kWGInfoGroupId = 0x4;
+constexpr uint64_t kWGInfoLocalSize = 0x10;
+constexpr uint64_t kWGInfoGlobalOffset = 0x28;
+constexpr uint64_t kWGInfoNumThreads = 0x34;
+
+// Work-item CSRs (machine-mode custom read/write). Kernels read them through
+// these intrinsics; each kernel's <kernel>_wrapper writes the ones it reads,
+// loaded from WGInfo at WGInfoOffset, or computed if WGInfoOffset is 0.
+struct WorkItemCsr {
+  llvm::Intrinsic::ID Intrinsic;
+  const char *Name;
+  uint64_t WGInfoOffset;
+};
+constexpr WorkItemCsr WorkItemCsrs[] = {
+    {llvm::Intrinsic::riscv_fsa_sub_group_size, "xsgsize", 0},
+    {llvm::Intrinsic::riscv_fsa_local_id_x, "xlocalid_x", 0},
+    {llvm::Intrinsic::riscv_fsa_local_id_y, "xlocalid_y", 0},
+    {llvm::Intrinsic::riscv_fsa_local_id_z, "xlocalid_z", 0},
+    {llvm::Intrinsic::riscv_fsa_group_id_x, "xgroupid_x", kWGInfoGroupId},
+    {llvm::Intrinsic::riscv_fsa_group_id_y, "xgroupid_y", kWGInfoGroupId + 4},
+    {llvm::Intrinsic::riscv_fsa_group_id_z, "xgroupid_z", kWGInfoGroupId + 8},
+    {llvm::Intrinsic::riscv_fsa_local_size_x, "xlocalsize_x", kWGInfoLocalSize},
+    {llvm::Intrinsic::riscv_fsa_local_size_y, "xlocalsize_y",
+     kWGInfoLocalSize + 4},
+    {llvm::Intrinsic::riscv_fsa_local_size_z, "xlocalsize_z",
+     kWGInfoLocalSize + 8},
+    {llvm::Intrinsic::riscv_fsa_global_offset_x, "xglobaloffset_x",
+     kWGInfoGlobalOffset},
+    {llvm::Intrinsic::riscv_fsa_global_offset_y, "xglobaloffset_y",
+     kWGInfoGlobalOffset + 4},
+    {llvm::Intrinsic::riscv_fsa_global_offset_z, "xglobaloffset_z",
+     kWGInfoGlobalOffset + 8},
+};
+
+constexpr unsigned indexOf(llvm::Intrinsic::ID ID) {
+  unsigned I = 0;
+  while (I < std::size(WorkItemCsrs) && WorkItemCsrs[I].Intrinsic != ID) ++I;
+  return I;
+}
+// The entries that <kernel>_wrapper computes.
+constexpr unsigned kSubGroupSize =
+    indexOf(llvm::Intrinsic::riscv_fsa_sub_group_size);
+constexpr unsigned kLocalId[] = {
+    indexOf(llvm::Intrinsic::riscv_fsa_local_id_x),
+    indexOf(llvm::Intrinsic::riscv_fsa_local_id_y),
+    indexOf(llvm::Intrinsic::riscv_fsa_local_id_z)};
+static_assert(std::max({kSubGroupSize, kLocalId[0], kLocalId[1], kLocalId[2]}) <
+                  std::size(WorkItemCsrs),
+              "WorkItemCsrs lacks a computed work-item CSR");
+
+// Returns a bit mask of the WorkItemCsrs that F, or a function it calls, may
+// read. A call to anything but a function defined in the module may read any
+// of them, except fsa_local_alloc (kernel_util.cl), which every trampoline
+// calls, and __translate_sampler_initializer, which
+// HandleSamplerInitialization replaces with a constant.
+uint32_t reachableWorkItemCsrs(llvm::Function &F) {
+  const uint32_t All = (1u << std::size(WorkItemCsrs)) - 1;
+  uint32_t Mask = 0;
+  llvm::SmallPtrSet<llvm::Function *, 16> Seen = {&F};
+  llvm::SmallVector<llvm::Function *, 16> Worklist = {&F};
+  while (!Worklist.empty() && Mask != All) {
+    for (auto &I : llvm::instructions(*Worklist.pop_back_val())) {
+      auto *CB = llvm::dyn_cast<llvm::CallBase>(&I);
+      if (CB == nullptr || CB->isInlineAsm()) continue;
+      auto *Callee = llvm::dyn_cast<llvm::Function>(
+          CB->getCalledOperand()->stripPointerCastsAndAliases());
+      if (Callee == nullptr) {
+        Mask = All;
+      } else if (Callee->isIntrinsic()) {
+        for (unsigned I = 0; I < std::size(WorkItemCsrs); ++I)
+          if (Callee->getIntrinsicID() == WorkItemCsrs[I].Intrinsic)
+            Mask |= 1u << I;
+      } else if (Callee->isDeclaration()) {
+        if (Callee->getName() != "fsa_local_alloc" &&
+            Callee->getName() != "__translate_sampler_initializer")
+          Mask = All;
+      } else if (Seen.insert(Callee).second) {
+        Worklist.push_back(Callee);
+      }
+    }
+  }
+  return Mask;
+}
+
+// Returns a bit mask of the WorkItemCsrs that Entry, or a function it calls,
+// may read. Work-item functions are mostly called with a constant dimension,
+// so look at a copy with the calls that reach them inlined and constant
+// branches folded.
+uint32_t usedWorkItemCsrs(llvm::Function &Entry) {
+  const uint32_t All = (1u << std::size(WorkItemCsrs)) - 1;
+  uint32_t Mask = reachableWorkItemCsrs(Entry);
+  if (Mask == 0 || Mask == All) return Mask;
+
+  llvm::ValueToValueMapTy VMap;
+  llvm::Function *Copy = llvm::CloneFunction(&Entry, VMap);
+  llvm::DenseMap<llvm::Function *, bool> Reaches;
+  llvm::SmallVector<llvm::CallBase *, 16> Calls;
+  for (auto &I : llvm::instructions(*Copy))
+    if (auto *CB = llvm::dyn_cast<llvm::CallBase>(&I)) Calls.push_back(CB);
+  for (unsigned Budget = 1000; !Calls.empty() && Budget > 0;) {
+    llvm::CallBase *Call = Calls.pop_back_val();
+    llvm::Function *Callee = Call->getCalledFunction();
+    if (Callee == nullptr || Callee == Copy || Callee->isDeclaration())
+      continue;
+    auto [It, New] = Reaches.try_emplace(Callee);
+    if (New) It->second = reachableWorkItemCsrs(*Callee) != 0;
+    llvm::InlineFunctionInfo IFI;
+    if (!It->second || !llvm::InlineFunction(*Call, IFI).isSuccess()) continue;
+    --Budget;
+    Calls.append(IFI.InlinedCallSites.begin(), IFI.InlinedCallSites.end());
+  }
+  for (bool Changed = true; Changed;) {
+    Changed = false;
+    for (auto &BB : *Copy) {
+      Changed |= llvm::SimplifyInstructionsInBlock(&BB);
+      Changed |= llvm::ConstantFoldTerminator(&BB, true);
+    }
+    Changed |= llvm::removeUnreachableBlocks(*Copy);
+  }
+
+  Mask = reachableWorkItemCsrs(*Copy);
+  Copy->eraseFromParent();
+  return Mask;
+}
+
+// Adds <kernel>_wrapper, which writes the work-item CSRs in Mask and then calls
+// Trampoline. Trampoline stays out of line so that none of its reads can move
+// ahead of the writes.
+void writeWorkItemCsrsBefore(llvm::Function *Trampoline,
+                             llvm::StringRef KernelName, uint32_t Mask) {
+  auto *M = Trampoline->getParent();
+  Trampoline->setLinkage(llvm::GlobalValue::InternalLinkage);
+  Trampoline->addFnAttr(llvm::Attribute::NoInline);
+  auto *Wrapper = llvm::Function::Create(Trampoline->getFunctionType(),
+                                         llvm::GlobalValue::ExternalLinkage,
+                                         KernelName + "_wrapper", M);
+
+  llvm::IRBuilder<> B(
+      llvm::BasicBlock::Create(M->getContext(), "entry", Wrapper));
+  auto *I64 = B.getInt64Ty();
+  // The CSRs read here do not change while the kernel runs, so the compiler
+  // may merge repeated reads.
+  auto Read = [&](const char *Csr) -> llvm::Value * {
+    auto *Asm =
+        llvm::InlineAsm::get(llvm::FunctionType::get(I64, false),
+                             std::string("csrr $0, ") + Csr, "=r", false);
+    auto *Call = B.CreateCall(Asm);
+    Call->setDoesNotAccessMemory();
+    return Call;
+  };
+  auto Write = [&](unsigned Index, llvm::Value *V) {
+    auto *Asm = llvm::InlineAsm::get(
+        llvm::FunctionType::get(B.getVoidTy(), {I64}, false),
+        std::string("csrw ") + WorkItemCsrs[Index].Name + ", $0", "r", true);
+    B.CreateCall(Asm, {V});
+  };
+  auto Has = [&](unsigned Index) {
+    return (Mask >> Index) & 1;
+  };
+  llvm::Value *Info = B.CreateIntToPtr(Read("mscratch"), B.getPtrTy());
+  auto Load = [&](uint64_t Offset) {
+    auto *Ptr = B.CreateConstGEP1_64(B.getInt8Ty(), Info, Offset);
+    return B.CreateZExt(B.CreateLoad(B.getInt32Ty(), Ptr), I64);
+  };
+
+  for (unsigned I = 0; I < std::size(WorkItemCsrs); ++I)
+    if (Has(I) && WorkItemCsrs[I].WGInfoOffset != 0)
+      Write(I, Load(WorkItemCsrs[I].WGInfoOffset));
+
+  // Split the local linear id (mhartid) with x varying fastest.
+  bool NeedYZ = Has(kLocalId[1]) || Has(kLocalId[2]);
+  if (Has(kLocalId[0]) || NeedYZ) {
+    llvm::Value *Id = Read("mhartid");
+    llvm::Value *SizeX = Load(kWGInfoLocalSize);
+    llvm::Value *Rest = NeedYZ ? B.CreateUDiv(Id, SizeX) : nullptr;
+    if (Has(kLocalId[0]))
+      Write(kLocalId[0], Rest ? B.CreateSub(Id, B.CreateMul(Rest, SizeX))
+                              : B.CreateURem(Id, SizeX));
+    if (NeedYZ) {
+      llvm::Value *SizeY = Load(kWGInfoLocalSize + 4);
+      if (Has(kLocalId[1])) Write(kLocalId[1], B.CreateURem(Rest, SizeY));
+      if (Has(kLocalId[2])) Write(kLocalId[2], B.CreateUDiv(Rest, SizeY));
+    }
+  }
+
+  // Sub-group size: the work-items from the warp's first one to the end of
+  // the work-group, at most xlanes.
+  if (Has(kSubGroupSize)) {
+    llvm::Value *First = B.CreateSub(Read("mhartid"), Read("xlaneid"));
+    llvm::Value *Left = B.CreateSub(Load(kWGInfoNumThreads), First);
+    Write(kSubGroupSize,
+          B.CreateBinaryIntrinsic(llvm::Intrinsic::umin, Left, Read("xlanes")));
+  }
+
+  auto *Call = B.CreateCall(Trampoline, {Wrapper->getArg(0)});
+  Call->setTailCall();
+  B.CreateRetVoid();
+}
+
 int createArgumentLayout(llvm::Function *F, llvm::Module *M,
                          size_t ArgBufferOffset,
                          formosa_kernel_layout_t &Layout) {
@@ -165,8 +376,13 @@ bool createTrampolineFunction(llvm::Function *F, llvm::Module *M,
 
   FuncNames.push_back(F->getName().str());
 
-  // Finish
-  llvm::verifyFunction(*TrampolineFunction);
+  // The runtime starts every kernel at <kernel>_wrapper. With no work-item
+  // CSR to write, it is another name for the trampoline.
+  if (uint32_t Mask = usedWorkItemCsrs(*TrampolineFunction))
+    writeWorkItemCsrsBefore(TrampolineFunction, F->getName(), Mask);
+  else
+    llvm::GlobalAlias::create(F->getName() + "_wrapper", TrampolineFunction);
+
   return InlineRes.isSuccess();
 }
 
@@ -198,6 +414,17 @@ int generateTrampolineForKernels(llvm::SmallVector<std::string, 8> &FuncNames,
   }
   // remove original functions if inlined to save code size
   for (auto *F : FunctionsToErase) F->eraseFromParent();
+
+  // Check the trampolines and the work-item CSR wrappers generated above.
+  // Debug-info problems are not a reason to fail the build.
+  std::string Errors;
+  llvm::raw_string_ostream ErrorStream(Errors);
+  bool BrokenDebugInfo = false;
+  if (llvm::verifyModule(*M, &ErrorStream, &BrokenDebugInfo)) {
+    POCL_MSG_ERR("Invalid module after generating trampolines:\n%s\n",
+                 ErrorStream.str().c_str());
+    return CL_BUILD_PROGRAM_FAILURE;
+  }
   return CL_SUCCESS;
 }
 
@@ -306,7 +533,6 @@ uint64_t pocl_fsa_get_symbol_pc(const char *ELFPath, const char *SymbolName) {
       return AddrOrError.get();
     }
   }
-  POCL_MSG_ERR("pocl_fsa_get_symbol_pc: symbol %s not found in %s\n",
-               SymbolName, ELFPath);
+  POCL_MSG_PRINT_LLVM("Symbol %s not found in %s\n", SymbolName, ELFPath);
   return UINT64_MAX;
 }

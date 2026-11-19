@@ -28,6 +28,15 @@ _Static_assert(offsetof(struct WGInfo, stack_base) == 0x48,
 _Static_assert(offsetof(struct WGInfo, printf_buffer) == 0x68,
                "WGInfo.printf_buffer offset mismatch");
 _Static_assert(sizeof(struct WGInfo) == 0x80, "WGInfo size mismatch");
+/* The work-item CSR wrappers from formosa-llvm-util.cc load these. */
+_Static_assert(offsetof(struct WGInfo, wg_id) == 0x4,
+               "WGInfo.wg_id offset mismatch");
+_Static_assert(offsetof(struct WGInfo, local_size) == 0x10,
+               "WGInfo.local_size offset mismatch");
+_Static_assert(offsetof(struct WGInfo, global_offset) == 0x28,
+               "WGInfo.global_offset offset mismatch");
+_Static_assert(offsetof(struct WGInfo, num_threads) == 0x34,
+               "WGInfo.num_threads offset mismatch");
 
 static inline struct WGInfo *get_wg_info() {
   struct WGInfo *info;

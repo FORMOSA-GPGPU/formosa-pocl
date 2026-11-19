@@ -843,12 +843,14 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
     entry_pc = start_off + (uintptr_t)device_kernel_addr;
     POCL_MSG_PRINT_INFO("entry_pc: %lx\n", entry_pc);
 
-    trampoline_name = malloc(strlen(kernel->name) + 13);
+    trampoline_name = malloc(strlen(kernel->name) + sizeof("_wrapper"));
     if (trampoline_name == NULL) {
       errcode = CL_OUT_OF_HOST_MEMORY;
       goto FAIL;
     }
-    sprintf(trampoline_name, "%s_trampolined", kernel->name);
+    /* <kernel>_wrapper writes the work-item CSRs the kernel reads, if any,
+     * and runs <kernel>_trampolined. */
+    sprintf(trampoline_name, "%s_wrapper", kernel->name);
     uint64_t tramp_off =
         pocl_fsa_get_symbol_pc(sz_program_fsabin, trampoline_name);
     if (tramp_off == UINT64_MAX) {

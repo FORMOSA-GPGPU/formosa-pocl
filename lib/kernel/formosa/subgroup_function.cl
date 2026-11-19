@@ -1,14 +1,11 @@
 uint _CL_OVERLOADABLE get_sub_group_id() {
-    size_t mhartid, xlanes;
-    __asm__ volatile("csrr %0, mhartid" : "=r"(mhartid));
+    size_t xlanes;
     __asm__ volatile("csrr %0, xlanes" : "=r"(xlanes));
-    return mhartid / xlanes;
+    return __builtin_riscv_fsa_local_linear_id() / xlanes;
 }
 
 uint _CL_OVERLOADABLE get_sub_group_local_id() {
-    size_t lane_id;
-    __asm__ volatile("csrr %0, xlaneid" : "=r"(lane_id));
-    return lane_id;
+    return __builtin_riscv_fsa_lane_id();
 }
 
 uint _CL_OVERLOADABLE get_max_sub_group_size() {
@@ -18,14 +15,7 @@ uint _CL_OVERLOADABLE get_max_sub_group_size() {
 }
 
 uint _CL_OVERLOADABLE get_sub_group_size() {
-    size_t mhartid, xlanes;
-    __asm__ volatile("csrr %0, mhartid" : "=r"(mhartid));
-    __asm__ volatile("csrr %0, xlanes" : "=r"(xlanes));
-    size_t local_size = get_local_size(0) * get_local_size(1) * get_local_size(2);
-    size_t sgid = mhartid / xlanes;
-    size_t sg_begin = sgid * xlanes;
-    size_t remaining = local_size - sg_begin;
-    return remaining < xlanes ? remaining : xlanes;
+    return __builtin_riscv_fsa_sub_group_size();
 }
 
 uint _CL_OVERLOADABLE get_num_sub_groups() {

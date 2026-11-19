@@ -29,14 +29,15 @@ set(KERNEL_SOURCES ${SOURCES_GENERIC})
 
 foreach(FILE printf.c printf_base.c get_local_id.c get_local_size.c get_group_id.c
     get_global_size.c get_num_groups.c get_work_dim.c get_global_id.c
-    get_global_offset.c barrier.ll erf.cl erfc.cl fdim.cl nextafter.cl
-    kernel_clock.cl lgamma.cl acosh.cl asinh.cl atanh.cl cbrt.cl log1p.cl)
+    get_global_offset.c get_linear_id.cl barrier.ll erf.cl erfc.cl fdim.cl
+    nextafter.cl kernel_clock.cl lgamma.cl acosh.cl asinh.cl atanh.cl cbrt.cl
+    log1p.cl)
   list(REMOVE_ITEM KERNEL_SOURCES "${FILE}")
 endforeach()
 
 foreach(FILE get_local_id.cl get_local_size.cl get_group_id.cl get_global_size.cl
   barrier.cl get_num_groups.cl get_work_dim.cl get_global_id.cl get_global_offset.cl
-  erfF.cl erfD.cl erfcF.cl erfcD.cl subgroup_function.cl kernel_clock.cl lgamma.cl
+  get_linear_id.cl erfF.cl erfD.cl erfcF.cl erfcD.cl subgroup_function.cl kernel_clock.cl lgamma.cl
   cbrt.cl libclc.cl)
   list(APPEND KERNEL_SOURCES "formosa/${FILE}")
 endforeach()
