@@ -44,7 +44,7 @@ function(compile_c_to_bc FILENAME SUBDIR BC_FILE_LIST)
         DEPENDS "${FULL_F_PATH}"
         "${CMAKE_SOURCE_DIR}/include/pocl_types.h"
         "${CMAKE_SOURCE_DIR}/include/_kernel_c.h"
-        COMMAND "${CLANG}" ${CLANG_FLAGS} ${DEVICE_CL_FLAGS}
+        COMMAND "${HOST_CLANG}" ${CLANG_FLAGS} ${DEVICE_CL_FLAGS}
         ${KERNEL_C_FLAGS} "-O0" "-o" "${BC_FILE}" "-c" "${FULL_F_PATH}"
         "-I${CMAKE_SOURCE_DIR}/include"
         "-include" "${CMAKE_SOURCE_DIR}/include/_kernel_c.h"
@@ -64,7 +64,7 @@ function(compile_cc_to_bc FILENAME SUBDIR BC_FILE_LIST)
 
     add_custom_command(OUTPUT "${BC_FILE}"
         DEPENDS "${FULL_F_PATH}"
-        COMMAND  "${CLANGXX}" ${CLANG_FLAGS} ${KERNEL_CXX_FLAGS}
+        COMMAND  "${HOST_CLANGXX}" ${CLANG_FLAGS} ${KERNEL_CXX_FLAGS}
         ${DEVICE_C_FLAGS} "-O0" "-o" "${BC_FILE}" "-c" "${FULL_F_PATH}"
         COMMENT "Building C++ to LLVM bitcode ${BC_FILE}"
         VERBATIM)
@@ -120,7 +120,7 @@ function(compile_cl_to_bc FILENAME SUBDIR BC_FILE_LIST EXTRA_CONFIG)
     add_custom_command( OUTPUT "${BC_FILE}"
         DEPENDS "${FULL_F_PATH}"
           ${DEPENDLIST}
-        COMMAND "${CLANG}" ${CLANG_FLAGS}
+        COMMAND "${HOST_CLANG}" ${CLANG_FLAGS}
         ${KERNEL_CL_FLAGS} ${DEVICE_CL_FLAGS}
         "-o" "${BC_FILE}" "-O0" "-c" "${FULL_F_PATH}"
         ${INCLUDELIST}
@@ -145,7 +145,7 @@ function(compile_sleef_c_to_bc EXT FILENAME SUBDIR BCLIST)
     add_custom_command( OUTPUT "${BC_FILE}"
         DEPENDS "${FULL_F_PATH}"
         ${SLEEF_C_KERNEL_DEPEND_HEADERS}
-        COMMAND "${CLANG}" ${CLANG_FLAGS}
+        COMMAND "${HOST_CLANG}" ${CLANG_FLAGS}
         ${DEVICE_C_FLAGS} ${KERNEL_C_FLAGS} ${ARGN}
         "-I" "${CMAKE_SOURCE_DIR}/lib/kernel/sleef/arch"
         "-I" "${CMAKE_SOURCE_DIR}/lib/kernel/sleef/libm"
@@ -171,7 +171,7 @@ function(compile_ll_to_bc FILENAME SUBDIR BCLIST)
 
     add_custom_command( OUTPUT "${BC_FILE}"
         DEPENDS "${FULL_F_PATH}"
-        COMMAND "${LLVM_AS}" "-o" "${BC_FILE}" "${FULL_F_PATH}"
+        COMMAND "${HOST_LLVM_AS}" "-o" "${BC_FILE}" "${FULL_F_PATH}"
         COMMENT "Building LL to LLVM bitcode ${BC_FILE}" 
         VERBATIM)
 endfunction()
@@ -193,6 +193,70 @@ macro(compile_to_bc SUBDIR OUTPUT_FILE_LIST EXTRA_CONFIG)
   endforeach()
 endmacro()
 
+function(compile_cl_to_cir FILENAME SUBDIR)
+    get_filename_component(FNAME "${FILENAME}" NAME)
+    set(CIR_FILE "${CMAKE_CURRENT_BINARY_DIR}/${SUBDIR}/${FNAME}.cir")
+    if(IS_ABSOLUTE "${FILENAME}")
+      set(FULL_F_PATH "${FILENAME}")
+    else()
+      set(FULL_F_PATH "${CMAKE_SOURCE_DIR}/lib/kernel/${FILENAME}")
+    endif()
+    add_custom_command( OUTPUT "${CIR_FILE}"
+        DEPENDS "${FULL_F_PATH}"
+        "${CMAKE_SOURCE_DIR}/include/pocl_types.h"
+        "${CMAKE_SOURCE_DIR}/include/_kernel_c.h"
+        COMMAND "${HOST_CLANG}" ${CLANG_FLAGS} ${DEVICE_CL_FLAGS} "-O1"
+        "-I${CMAKE_SOURCE_DIR}/include"
+        "-include" "${CMAKE_SOURCE_DIR}/include/_kernel.h"
+        ${KERNEL_CL_FLAGS} "${FULL_F_PATH}" "-o" ${CIR_FILE}
+        COMMENT "Building CL to CIR bytecode ${CIR_FILE}"
+        VERBATIM)
+endfunction()
+
+function(compile_cir_to_mlir FILENAME SUBDIR MLIR_FILE_LIST)
+    get_filename_component(FNAME "${FILENAME}" NAME)
+    set(CIR_FILE "${CMAKE_CURRENT_BINARY_DIR}/${SUBDIR}/${FNAME}.cir")
+    set(MLIR_FILE "${CMAKE_CURRENT_BINARY_DIR}/${SUBDIR}/${FNAME}.mlir")
+    set(${MLIR_FILE_LIST} ${${MLIR_FILE_LIST}} ${MLIR_FILE} PARENT_SCOPE)
+    add_custom_command( OUTPUT "${MLIR_FILE}"
+        DEPENDS "${CIR_FILE}"
+        COMMAND "${CIROPT}" ${CIR_FILE} "-mem2reg" "-cir-mlir-scf-prepare"
+        "-cir-to-mlir" "-mem2reg" "-cse" "-canonicalize"
+        "-o" "${MLIR_FILE}"
+        COMMENT "Building CIR to MLIR bytecode ${MLIR_FILE}"
+        VERBATIM)
+endfunction()
+
+function(compile_mlir_to_mlir FILENAME SUBDIR MLIR_FILE_LIST)
+    get_filename_component(FNAME "${FILENAME}" NAME)
+    set(MLIR_FILE "${CMAKE_CURRENT_BINARY_DIR}/${SUBDIR}/${FNAME}.mlir")
+    set(${MLIR_FILE_LIST} ${${MLIR_FILE_LIST}} ${MLIR_FILE} PARENT_SCOPE)
+    if(IS_ABSOLUTE "${FILENAME}")
+      set(FULL_F_PATH "${FILENAME}")
+    else()
+      set(FULL_F_PATH "${CMAKE_SOURCE_DIR}/lib/kernel/${FILENAME}")
+    endif()
+    add_custom_command( OUTPUT "${MLIR_FILE}"
+        DEPENDS "${FULL_F_PATH}"
+        COMMAND "cp" "${FULL_F_PATH}"
+        "${MLIR_FILE}"
+        COMMENT "Copying MLIR bytecode to output directory ${MLIR_FILE}"
+        VERBATIM)
+endfunction()
+
+macro(compile_to_mlir SUBDIR OUTPUT_FILE_LIST EXTRA_CONFIG)
+  foreach(FILENAME ${ARGN})
+  if(FILENAME MATCHES "[.]cl$")
+    compile_cl_to_cir("${FILENAME}" "${SUBDIR}")
+    compile_cir_to_mlir("${FILENAME}" "${SUBDIR}" ${OUTPUT_FILE_LIST})
+  elseif(FILENAME MATCHES "[.]mlir$")
+    compile_mlir_to_mlir("${FILENAME}" "${SUBDIR}" ${OUTPUT_FILE_LIST})
+  else()
+    message(FATAL_ERROR "Dont know how to compile ${FILENAME} to .mlir !")
+  endif()
+  endforeach()
+endmacro()
+
 function(generate_cuda_spir_wrapper OUTPUT)
   set(FNAME "${CMAKE_CURRENT_BINARY_DIR}/spir_wrapper.ll")
   set(${OUTPUT} "${FNAME}" PARENT_SCOPE)
@@ -200,7 +264,7 @@ function(generate_cuda_spir_wrapper OUTPUT)
 
   add_custom_command( OUTPUT "${FNAME}"
       DEPENDS "${CMAKE_SOURCE_DIR}/lib/kernel/SPIR/generate_spir_wrapper.py"
-      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/lib/kernel/SPIR/generate_spir_wrapper.py" ${EXTRA_OPT} "-t" "cuda" "${FNAME}"
+      COMMAND "${HOST_PYTHON3}" "${CMAKE_SOURCE_DIR}/lib/kernel/SPIR/generate_spir_wrapper.py" ${EXTRA_OPT} "-t" "cuda" "${FNAME}"
       COMMENT "Generating CUDA SPIR wrapper to ${FNAME}"
       VERBATIM)
 endfunction()
@@ -213,9 +277,14 @@ function(generate_cpu_spir_wrapper ARCH SUBDIR SIZE OUTPUT)
     set(EXTRA_OPT "--fp16" "-g")
   endif()
 
+  # clang passes vectors directly on x86-64 MinGW, unlike System V (and MSVC)
+  if(ARCH STREQUAL "cpu_x86" AND LLC_TRIPLE MATCHES "-windows-gnu")
+    list(APPEND EXTRA_OPT "--mingw")
+  endif()
+
   add_custom_command( OUTPUT "${FNAME}"
       DEPENDS "${CMAKE_SOURCE_DIR}/lib/kernel/SPIR/generate_spir_wrapper.py"
-      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/lib/kernel/SPIR/generate_spir_wrapper.py" ${EXTRA_OPT} "-t" "${ARCH}" "-r" "${SIZE}" "${FNAME}"
+      COMMAND "${HOST_PYTHON3}" "${CMAKE_SOURCE_DIR}/lib/kernel/SPIR/generate_spir_wrapper.py" ${EXTRA_OPT} "-t" "${ARCH}" "-r" "${SIZE}" "${FNAME}"
       COMMENT "Generating ${ARCH} ${VECSIZE}-bit wrapper for ${SUBDIR} to ${FNAME}"
       VERBATIM)
 endfunction()
@@ -243,14 +312,14 @@ function(make_kernel_bc OUTPUT_VAR NAME SUBDIR USE_SLEEF EXTRA_BC EXTRA_CONFIG)
     list(APPEND FINAL_LINK_INPUTS "${LINK_OUTPUT}")
     add_custom_command(OUTPUT "${LINK_OUTPUT}"
       DEPENDS ${BC_LIST}
-      COMMAND "${LLVM_LINK}" "--suppress-warnings" "-o" "${LINK_OUTPUT}" ${BC_SUBLIST}
+      COMMAND "${HOST_LLVM_LINK}" "--suppress-warnings" "-o" "${LINK_OUTPUT}" ${BC_SUBLIST}
       COMMENT "Linking part of builtins library"
       VERBATIM)
     math(EXPR INDEX "${INDEX} + ${BCSUBLIST_LENGTH}")
   endwhile()
 
   # optimizing the bitcode library IR has undesirable side-effects. avoid them completely
-  set(LINK_OPT_COMMAND COMMAND "${LLVM_LINK}" "--suppress-warnings" "-o" "${KERNEL_BC}" ${FINAL_LINK_INPUTS})
+  set(LINK_OPT_COMMAND COMMAND "${HOST_LLVM_LINK}" "--suppress-warnings" "-o" "${KERNEL_BC}" ${FINAL_LINK_INPUTS})
 
   if(USE_SLEEF)
     list(APPEND FINAL_LINK_INPUTS "sleef_config_${VARIANT}")
@@ -264,3 +333,29 @@ function(make_kernel_bc OUTPUT_VAR NAME SUBDIR USE_SLEEF EXTRA_BC EXTRA_CONFIG)
 
 endfunction()
 
+function(make_kernel_mlir OUTPUT_VAR NAME SUBDIR USE_SLEEF EXTRA_MLIR EXTRA_CONFIG)
+  set(KERNEL_MLIR "${CMAKE_CURRENT_BINARY_DIR}/kernel-${NAME}.mlir")
+  set(${OUTPUT_VAR} "${KERNEL_MLIR}" PARENT_SCOPE)
+
+  file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${SUBDIR}")
+  compile_to_mlir("${SUBDIR}" MLIR_LIST "${EXTRA_CONFIG}" ${ARGN})
+
+  set(DEPENDLIST ${MLIR_LIST})
+  # fix too long commandline with cat and xargs
+  set(MLIR_LIST_FILE_TXT "")
+  foreach(FILENAME ${MLIR_LIST})
+    # straight parsing semicolon separated list with xargs -d didn't work on windows.. no such switch available
+    set(MLIR_LIST_FILE_TXT "${MLIR_LIST_FILE_TXT} \"${FILENAME}\"")
+  endforeach()
+  set(MLIR_LIST_FILE "${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/kernel_${NAME}_linklist.txt")
+  file(WRITE "${MLIR_LIST_FILE}" "${MLIR_LIST_FILE_TXT}")
+
+  set(LINK_OPT_COMMAND COMMAND "${XARGS_EXEC}" "cat" < "${MLIR_LIST_FILE}" > "${KERNEL_MLIR}")
+
+  add_custom_command( OUTPUT "${KERNEL_MLIR}"
+        DEPENDS ${DEPENDLIST}
+        ${LINK_OPT_COMMAND}
+        COMMENT "Linking & optimizing Kernel bitcode ${KERNEL_MLIR}"
+        VERBATIM)
+
+endfunction()

@@ -6,6 +6,9 @@ permissions:
 
 on:
   workflow_dispatch:
+  schedule:
+# at 1:11 UTC every sunday
+    - cron: '11 1 * * 0'
   pull_request:
     paths-ignore:
       - 'doc/**'
@@ -32,13 +35,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        llvm: [20]
+        llvm: [22]
         # cpu, gpu
         device: [cpu]
 
     steps:
       - name: Checkout
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Load Env vars
         id: load_env
@@ -53,7 +56,7 @@ jobs:
             cmake -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_FLAGS_RELEASE=$BUILD_FLAGS" "-DCMAKE_CXX_FLAGS_RELEASE=$BUILD_FLAGS" \
             -DENABLE_TESTSUITES=AMDSDK3.0 -DTESTSUITE_SOURCE_BASEDIR=${EXAMPLES_DIR}/source -DTESTSUITE_BASEDIR=${EXAMPLES_DIR}/build_amdsdk_bench \
-            -DWITH_LLVM_CONFIG=/usr/bin/llvm-config-${{ matrix.llvm }} -DLLVM_SPIRV=/usr/bin/llvm-spirv-${{ matrix.llvm }} \
+            -DWITH_LLVM_CONFIG=/usr/bin/llvm-config-${{ matrix.llvm }} \
             "$@" -B ${{ github.workspace }}/build ${{ github.workspace }}
           }
 
@@ -83,12 +86,14 @@ jobs:
           cd ${{ github.workspace }}/build/examples/AMDSDK3.0 && make -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh) AMDSDK3.0
 
       # Download previous benchmark result from cache (if exists)
+      # make sure to store with github.ref_name but always restore with 'main' branch,
+      # this way we're always comparing to latest main
       - name: Download previous benchmark data
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: benchmark_cache
-          key: amdsdk-bench-${{ runner.name }}-llvm-${{ matrix.llvm }}-${{ matrix.device }}-${{ github.run_id }}
-          restore-keys: amdsdk-bench-${{ runner.name }}-llvm-${{ matrix.llvm }}-${{ matrix.device }}
+          key: amdsdk_bench-${{ runner.name }}-llvm-${{ matrix.llvm }}-${{ matrix.device }}-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: amdsdk_bench-${{ runner.name }}-llvm-${{ matrix.llvm }}-${{ matrix.device }}-main
 
       - name: Run AMDSDK benchmarks
         env:
@@ -111,12 +116,13 @@ jobs:
 
           # append a closing empty hash (because of comma) and ']' to close the JSON array
           if [ -e "${{ github.workspace }}/build/amdsdk_bench_result.json" ]; then
-            echo '{} ]' >> "${{ github.workspace }}/build/amdsdk_bench_result.json"
+            sed -i '$s/,$/ ]/' "${{ github.workspace }}/build/amdsdk_bench_result.json"
+            cat "${{ github.workspace }}/build/amdsdk_bench_result.json"
           fi
 
       # Run `github-action-benchmark` action
       - name: Store benchmark result
-        uses: benchmark-action/github-action-benchmark@v1
+        uses: benchmark-action/github-action-benchmark@4322e5726e6334590d251fc4f92bec0efafc45dc
         with:
           # What benchmark tool the output.txt came from
           tool: 'customSmallerIsBetter'
@@ -124,7 +130,13 @@ jobs:
           output-file-path: build/amdsdk_bench_result.json
           # Where the previous data file is stored
           external-data-json-path: benchmark_cache/amdsdk_bench_result.json
+          # GitHub API token required for non-PR runs
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           # Enable Job Summary for PRs
           summary-always: true
+          # Workflow will fail when an alert happens
+          fail-on-alert: true
+          # Threshold which determines if an alert should happen
+          alert-threshold: '120%'
 
       # Upload the updated cache file for the next job by actions/cache

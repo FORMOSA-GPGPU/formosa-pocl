@@ -182,8 +182,6 @@ typedef struct remote_connection_s
 {
   transport_domain_t domain;
   int fd;
-  /* Sync objects for avoiding races in reconnect procedures */
-  sync_t setup_guard;
   /* Sync objects for avoiding a race condition between a writer picking up
    * the connection fd, the reader closing it and the writer trying to perform
    * a write with the now incorrect value of the fd. */
@@ -191,14 +189,11 @@ typedef struct remote_connection_s
   /* Running counter so threads can detect a connection change even if the new
    * fd has the same value as the old one. */
   unsigned reconnect_count;
-  /* Pipe endpoint that the reader should include when polling the connection
-   * fd so the writer can wake it up if a reconnect becomes necessary. */
-  int notify_pipe_r;
-  /* Pipe endpoint that the writer should write a single byte to if it detects
-   * the need for reconnecting. */
-  int notify_pipe_w;
   /* Flag for determining the socket options to use when (re)connecting */
   int is_fast;
+  /* Flag indicating whether this connection is used for sending requests or
+   * receiving responses */
+  int is_reader;
   /* Counter to track attempts made for reconnection. Variable is used to be
    * able to give-up after POCL_REMOTE_RECONNECT_MAX_ATTEMPTS. */
   int reconnect_attempts;
@@ -206,6 +201,23 @@ typedef struct remote_connection_s
    * the discovery reconnect function. */
   sync_t discovery_reconnect_guard;
 } remote_connection_t;
+
+typedef struct pocl_remote_timing_s pocl_remote_timing_t;
+struct pocl_remote_timing_s
+{
+  pocl_remote_timing_t *next;
+  enum RequestMessageType kind;
+  int failed;
+  uint64_t qid;
+  uint64_t eid;
+  uint64_t submitted;
+  uint64_t write_start;
+  uint64_t write_end;
+  uint64_t exec_start;
+  uint64_t exec_end;
+  uint64_t read_start;
+  uint64_t read_end;
+};
 
 #define INITIAL_ARRAY_CAP 1024
 
@@ -219,8 +231,7 @@ typedef struct remote_server_data_s
   char address_with_port[MAX_ADDRESS_PORT_SIZE];
   char peer_address[MAX_ADDRESS_SIZE];
   uint64_t peer_id;
-  unsigned slow_port;
-  unsigned fast_port;
+  unsigned client_port;
   unsigned peer_port;
 
   unsigned refcount;
@@ -237,14 +248,18 @@ typedef struct remote_server_data_s
    * purposes: */
   /** Connection optimized for large bulk data transfers, mainly intended for
    * transferring buffer contents */
-  remote_connection_t slow_connection;
+  remote_connection_t slow_read_connection;
+  remote_connection_t slow_write_connection;
   /** Connection optimized for low latency with small messages, used for
    * commands that are not expected to carry large amounts of data */
-  remote_connection_t fast_connection;
+  remote_connection_t fast_read_connection;
+  remote_connection_t fast_write_connection;
 
   uint32_t num_platforms;
   uint32_t num_devices;
   uint32_t *platform_devices;
+  pocl_remote_timing_t *profiling_data;
+  ALIGN_CACHE (pocl_lock_t profiling_lock);
 
   /* network handling threads / ids */
   network_queue *slow_read_queue;
@@ -252,6 +267,7 @@ typedef struct remote_server_data_s
   network_queue *inflight_queue;
   network_queue *slow_write_queue;
   network_queue *fast_write_queue;
+  network_queue *finalize_queue;
 #ifdef ENABLE_RDMA
   network_queue *rdma_read_queue;
   network_queue *rdma_write_queue;
@@ -373,9 +389,11 @@ cl_int pocl_network_free_kernel (remote_device_data_t *ddata,
                                  kernel_data_t *kernel, uint32_t kernel_id,
                                  uint32_t program_id);
 
-cl_int pocl_network_setup_metadata (char *buffer, size_t total_size,
-                                    cl_program program, size_t *num_kernels,
-                                    pocl_kernel_metadata_t **kernel_meta);
+cl_int pocl_network_setup_metadata (char *buffer,
+                                    size_t total_size,
+                                    cl_program program,
+                                    size_t *num_kernels,
+                                    size_t device_i);
 
 cl_int pocl_network_build_or_link_program (remote_device_data_t *ddata,
                                            const void *payload,
@@ -504,6 +522,12 @@ cl_int pocl_network_run_command_buffer (remote_device_data_t *ddata,
                                         network_command_callback cb,
                                         void *arg,
                                         _cl_command_node *node);
+
+cl_int pocl_network_barrier_or_marker (uint32_t cq_id,
+                                       remote_device_data_t *ddata,
+                                       network_command_callback cb,
+                                       void *arg,
+                                       _cl_command_node *node);
 
 /****************************************************************************/
 

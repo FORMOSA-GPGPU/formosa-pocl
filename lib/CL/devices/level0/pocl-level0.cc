@@ -263,6 +263,7 @@ void pocl_level0_init_device_ops(struct pocl_device_ops *Ops) {
   Ops->build_binary = pocl_level0_build_binary;
   Ops->link_program = pocl_level0_link_program;
   Ops->free_program = pocl_level0_free_program;
+  Ops->count_kernels = pocl_level0_count_kernels;
   Ops->setup_metadata = pocl_level0_setup_metadata;
   Ops->supports_binary = pocl_level0_supports_binary;
   Ops->build_poclbinary = pocl_level0_build_poclbinary;
@@ -388,15 +389,19 @@ unsigned int pocl_level0_probe(struct pocl_device_ops *Ops) {
   ze_driver_handle_t DrvHandles[64];
 
 #if ZE_API_VERSION_CURRENT_M >= ZE_MAKE_VERSION(1, 10)
+  ze_init_driver_type_flags_t DeviceTypes = ZE_INIT_DRIVER_TYPE_FLAG_GPU;
+#ifdef ENABLE_NPU
+  DeviceTypes |= ZE_INIT_DRIVER_TYPE_FLAG_NPU;
+#endif
+
   if (LoaderVersion.major == 1 && LoaderVersion.minor > 18) {
 
     ze_init_driver_type_desc_t DriverDesc{};
-    DriverDesc.flags =
-        ZE_INIT_DRIVER_TYPE_FLAG_GPU | ZE_INIT_DRIVER_TYPE_FLAG_NPU;
+    DriverDesc.flags = DeviceTypes;
     Res = zeInitDrivers(&DriverCount, DrvHandles, &DriverDesc);
     if (Res != ZE_RESULT_SUCCESS) {
       // TODO: retry with deprecated zeDriverGet()?
-      POCL_MSG_ERR("zeInitDrivers FAILED\n");
+      POCL_MSG_ERR("zeInitDrivers FAILED (error code: 0x%x)\n", Res);
       return 0;
     }
   } else {
@@ -1049,9 +1054,6 @@ static int pocl_level0_setup_spirv_metadata(cl_device_id Device,
     return 1;
   }
 
-  Program->kernel_meta = (pocl_kernel_metadata_t *)calloc(
-      Program->num_kernels, sizeof(pocl_kernel_metadata_t));
-
 // TODO: currently all metadata is gotten from LLVM instead of the SPIR-V parser
 //  and therefore unnecessary. In the future the LLVM dependency could be
 //  dropped in favor of the SPIR-V parser, see comment:
@@ -1306,6 +1308,23 @@ int pocl_level0_supports_dbk(cl_device_id device, cl_dbk_id_exp kernel_id,
                        "NPU to support tensor DBKs\n");
 #endif
 }
+int pocl_level0_count_kernels(cl_device_id Dev, cl_program Program,
+                              unsigned ProgramDeviceI, size_t *Count) {
+  if (Program->num_builtin_kernels) {
+    *Count = Program->num_builtin_kernels;
+    return 1;
+  }
+
+  if (Program->llvm_irs[ProgramDeviceI] != nullptr) {
+    return pocl_driver_count_kernels(Dev, Program, ProgramDeviceI, Count);
+  }
+
+  if (Program->program_il[ProgramDeviceI] && Program->program_il_size) {
+    // TODO: handle once spirv metadata setup is no longer a no-op
+  }
+
+  return 0;
+}
 
 int pocl_level0_setup_metadata(cl_device_id Dev, cl_program Program,
                                unsigned ProgramDeviceI) {
@@ -1533,6 +1552,16 @@ void pocl_level0_submit(_cl_command_node *Node, cl_command_queue Queue) {
   assert(Ev->data);
   PoclL0EventData *EvData = (PoclL0EventData *)Ev->data;
 
+  /* If a wait-list dependency has failed, this command must not run: fail it via
+   * the error cascade. There is no point waiting for it to become otherwise
+   * ready first. pocl_update_event_failed takes the cq + event locks itself, so
+   * unlock the event we hold and return without unlocking again. */
+  if (Ev->failed_dependency) {
+    POCL_UNLOCK_OBJ(Ev);
+    pocl_update_event_failed(CL_FAILED, nullptr, 0, Ev, nullptr);
+    return;
+  }
+
   if (pocl_level0_queue_supports_batching(Queue, Device)) {
     EvData->CanBeBatched = pocl_level0_can_event_be_batched(Ev);
     BatchType SubmitBatch;
@@ -1554,7 +1583,10 @@ void pocl_level0_notify(cl_device_id ClDev, cl_event Event, cl_event Finished) {
   _cl_command_node *Node = Event->command;
   Level0Device *Device = (Level0Device *)ClDev->data;
 
-  if (Finished->status < CL_COMPLETE) {
+  /* Fail the command if the notifier finished failed, or if any wait-list
+   * dependency has already failed (recorded on the event). In either case the
+   * command MUST NOT execute, so there is no point checking readiness first. */
+  if (Finished->status < CL_COMPLETE || Event->failed_dependency) {
     // remove the Event from unsubmitted list
     PoclL0QueueData *QD = (PoclL0QueueData *)Event->queue->data;
     QD->eraseEvent(Event);
@@ -2059,6 +2091,8 @@ cl_int pocl_level0_set_kernel_exec_info_ext(
   case CL_KERNEL_EXEC_INFO_DEVICE_PTRS_EXT:
   case CL_KERNEL_EXEC_INFO_SVM_PTRS:
   case CL_KERNEL_EXEC_INFO_USM_PTRS_INTEL: {
+    if (param_value_size == 0 && param_value == nullptr)
+      return CL_SUCCESS;
     std::map<void *, size_t> UsedPtrs;
     cl_uint NumElem = param_value_size / sizeof(void *);
     if (NumElem == 0)

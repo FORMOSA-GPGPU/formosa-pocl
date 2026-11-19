@@ -76,6 +76,14 @@ POCL_EXPORT
 char *pocl_cpu_build_hash (cl_device_id device);
 
 POCL_EXPORT
+void pocl_set_device_uuid (cl_uchar *device_uuid,
+                           unsigned dev_i,
+                           const char *extra);
+
+POCL_EXPORT
+void pocl_set_driver_uuid (cl_uchar *device_uuid, const char *extra);
+
+POCL_EXPORT
 void pocl_broadcast (cl_event event);
 
 POCL_EXPORT
@@ -86,6 +94,12 @@ int pocl_check_kernel_disk_cache (char *module_fn,
                                   _cl_command_node *cmd,
                                   int specialized);
 
+#ifdef ENABLE_LLVM
+POCL_EXPORT
+int pocl_link_final_binary (cl_device_id device, const char *objfile,
+                            const char *final_binary_path);
+#endif
+
 POCL_EXPORT
 size_t pocl_cmd_max_grid_dim_width (_cl_command_run *cmd);
 
@@ -95,7 +109,7 @@ void *pocl_check_kernel_dlhandle_cache (_cl_command_node *command,
                                         int specialize);
 
 POCL_EXPORT
-void pocl_release_dlhandle_cache (void *dlhandle_cache_item);
+void pocl_release_dlhandle_cache (void *module_cache_item);
 
 POCL_EXPORT
 void pocl_setup_device_for_system_memory(cl_device_id device);
@@ -113,7 +127,7 @@ void pocl_init_default_device_infos (cl_device_id dev,
                                      const char *device_extensions);
 
 POCL_EXPORT
-void pocl_setup_opencl_c_with_version (cl_device_id dev, int supports_30);
+void pocl_setup_opencl_c_with_version (cl_device_id dev);
 
 POCL_EXPORT
 void pocl_setup_extensions_with_version (cl_device_id dev);

@@ -27,6 +27,7 @@
 #include "printf_buffer.h"
 #include "common.h"
 #include "pocl_compiler_macros.h"
+#include "pocl_cl_half_util.h"
 #include "pocl_debug.h"
 #include "printf_base.h"
 
@@ -101,12 +102,13 @@ DEFINE_PRINT_INTS (ulong, int64_t, uint64_t)
 
 /* Note: NANs are printed always positive.
  * This is required to pass 1.2 conformance test. */
-#define DEFINE_PRINT_FLOATS(FLOAT_TYPE)                                       \
-  void __pocl_print_floats_##FLOAT_TYPE (param_t *p, const void *vals, int n) \
+#define DEFINE_PRINT_FLOATS(NAME, STORAGE_TYPE, TO_FLOAT_T)                   \
+  void __pocl_print_floats_##NAME (param_t *p, const void *vals, int n)       \
   {                                                                           \
     const char *NANs[2] = { "nan", "NAN" };                                   \
     const char *INFs[2] = { "inf", "INF" };                                   \
-    FLOAT_TYPE val;                                                           \
+    STORAGE_TYPE raw;                                                         \
+    FLOAT_T val;                                                              \
     DEBUG_PRINTF (("[printf:floats:n=%d]\n", n));                             \
     flags_t saved_user_flags = p->flags;                                      \
     for (int d = 0; d < n; ++d)                                               \
@@ -115,8 +117,9 @@ DEFINE_PRINT_INTS (ulong, int64_t, uint64_t)
         p->flags = saved_user_flags;                                          \
         if (d != 0)                                                           \
           __pocl_printf_putcf (p, ',');                                       \
-        memcpy (&val, vals, sizeof (FLOAT_TYPE));                             \
-        vals = (char *)vals + sizeof (FLOAT_TYPE);                            \
+        memcpy (&raw, vals, sizeof (STORAGE_TYPE));                           \
+        vals = (char *)vals + sizeof (STORAGE_TYPE);                          \
+        val = TO_FLOAT_T (raw);                                               \
         const char *other = NULL;                                             \
         if (isnan (val))                                                      \
           other = NANs[p->flags.uc];                                          \
@@ -133,17 +136,18 @@ DEFINE_PRINT_INTS (ulong, int64_t, uint64_t)
           }                                                                   \
         else                                                                  \
           {                                                                   \
-            __pocl_printf_float (p, (FLOAT_T)val);                            \
+            __pocl_printf_float (p, val);                                     \
           }                                                                   \
       }                                                                       \
     DEBUG_PRINTF (("[printf:floats:done]\n"));                                \
   }
 
-#ifdef HOST_COMPILER_SUPPORTS_FLOAT16
-DEFINE_PRINT_FLOATS (_Float16)
-#endif
-DEFINE_PRINT_FLOATS (float)
-DEFINE_PRINT_FLOATS (double)
+/* Not _Float16: on x86, GCC lowers its conversions to libgcc helpers that
+   libgcc_s only exports from GCC 12 on, and libpocl then fails to load next
+   to an older libgcc_s. */
+DEFINE_PRINT_FLOATS (half, uint16_t, pocl_half_to_float)
+DEFINE_PRINT_FLOATS (float, float, )
+DEFINE_PRINT_FLOATS (double, double, )
 
 #undef DEFINE_PRINT_FLOATS
 
@@ -422,6 +426,12 @@ __pocl_printf_format_full (param_t *p, char *buffer, uint32_t buffer_size)
                   ch = *format++;
                   element_size = 8; /* "l" -> long */
                 }
+              else if (ch == 'z' || ch == 't')
+                {
+                  ch = *format++;
+                  element_size = pointer_size_bytes; /* "z" -> size_t */
+                }
+
               if (vector_length > 0 && element_size == 0)
                 {
                   POCL_MSG_ERR (
@@ -445,6 +455,9 @@ __pocl_printf_format_full (param_t *p, char *buffer, uint32_t buffer_size)
               DEBUG_PRINTF (("[printf:vector_length=%d]\n", vector_length));
 
               DEBUG_PRINTF (("[printf:elem_length=%d]\n", element_size));
+
+              if (ch == 'o' || ch == 'u' || ch == 'x' || ch == 'X' || ch == 't' || ch == 'z')
+                flags.always_sign = 0;
 
               p->flags = flags;
               p->conv = ch;
@@ -487,30 +500,30 @@ __pocl_printf_format_full (param_t *p, char *buffer, uint32_t buffer_size)
                       case 1:
                         __pocl_print_ints_uchar (p, buffer, vector_length,
                                                  is_unsigned);
-                        /* stores of integers & vectors of size <= 64bits
-                         * are expanded to 64bits in the EmitPrintf. This
+                        /* stores of integers & vectors of size <= NativeIntBits
+                         * are expanded to NativeIntBits in the EmitPrintf. This
                          * is to avoid having to deal with various rules for
                          * int & vector promotions by different backends
                          * (x86, ARM, RISC-V etc...) */
-                        if (vector_length <= 8)
+                        if (vector_length <= pointer_size_bytes)
                           {
-                            alloca_length = 8;
+                            alloca_length = pointer_size_bytes;
                           }
                         break;
                       case 2:
                         __pocl_print_ints_ushort (p, buffer, vector_length,
                                                   is_unsigned);
-                        if (vector_length <= 4)
+                        if (vector_length <= pointer_size_bytes/2)
                           {
-                            alloca_length = 8;
+                            alloca_length = pointer_size_bytes;
                           }
                         break;
                       case 4:
                         __pocl_print_ints_uint (p, buffer, vector_length,
                                                 is_unsigned);
-                        if (vector_length <= 2)
+                        if (vector_length <= pointer_size_bytes/4)
                           {
-                            alloca_length = 8;
+                            alloca_length = pointer_size_bytes;
                           }
                         break;
                       case 8:
@@ -562,19 +575,11 @@ __pocl_printf_format_full (param_t *p, char *buffer, uint32_t buffer_size)
                           }
                           else
                           {
-#ifdef HOST_COMPILER_SUPPORTS_FLOAT16
-                            __pocl_print_floats__Float16 (p, buffer,
-                                                          vector_length);
-#else
-                            POCL_MSG_ERR ("printf error: host-side "
-                                          "support for FP16 missing\n");
-                            __pocl_print_ints_ushort (p, buffer,
-                                                      vector_length,
-                                                      0);
-#endif
+                            __pocl_print_floats_half (p, buffer,
+                                                      vector_length);
                             // half2 vectors <64 bits are stored in 64bits
-                            if (alloca_length < 8)
-                                alloca_length = 8;
+                            if (alloca_length < pointer_size_bytes)
+                                alloca_length = pointer_size_bytes;
                             break;
                           }
                       case 4:
@@ -640,8 +645,8 @@ __pocl_printf_format_full (param_t *p, char *buffer, uint32_t buffer_size)
                     DEBUG_PRINTF (("[printf:char4]\n"));
                     p->bf[0] = (char)*buffer;
                     p->bf[1] = 0;
-                    /* char is always promoted to int64 */
-                    FORWARD_BUFFER (sizeof (int64_t));
+                    /* char is always promoted to native int */
+                    FORWARD_BUFFER (pointer_size_bytes);
                     __pocl_printf_putchw (p);
                     DEBUG_PRINTF (
                       ("[printf:after char:buffer=%p buffer_size=%u]\n",
@@ -792,10 +797,15 @@ pocl_flush_printf_buffer (char *buffer, uint32_t buffer_size)
 
   if (p.printf_buffer_index > 0)
     {
+      /* Best-effort flush; ignore short writes / errors. */
 #ifdef _MSC_VER
-      write (_fileno (stdout), p.printf_buffer, p.printf_buffer_index);
+      if (write (_fileno (stdout), p.printf_buffer, p.printf_buffer_index) < 0)
+        {
+        }
 #else
-      write (STDOUT_FILENO, p.printf_buffer, p.printf_buffer_index);
+      if (write (STDOUT_FILENO, p.printf_buffer, p.printf_buffer_index) < 0)
+        {
+        }
 #endif
     }
 }

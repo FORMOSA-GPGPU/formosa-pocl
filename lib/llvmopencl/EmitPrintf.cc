@@ -40,6 +40,9 @@ using namespace llvm;
 
 #define DEBUG_TYPE "amdgpu-emit-printf"
 
+#undef ENABLE_NON_BUFFERED
+
+#ifdef ENABLE_NON_BUFFERED
 static Value *fitArgInto64Bits(IRBuilder<> &Builder, Value *Arg) {
   auto Int64Ty = Builder.getInt64Ty();
   auto Ty = Arg->getType();
@@ -94,17 +97,18 @@ static Value *appendArg(IRBuilder<> &Builder, Value *Desc, Value *Arg,
   return callAppendArgs(Builder, Desc, 1, Arg0, Zero, Zero, Zero, Zero, Zero,
                         Zero, IsLast);
 }
+#endif
 
 // The device library does not provide strlen, so we build our own loop
 // here. While we are at it, we also include the terminating null in the length.
-static Value *getStrlenWithNull(IRBuilder<> &Builder, Value *Str) {
+static Value *getStrlenWithNull(IRBuilder<> &Builder, Value *Str, unsigned NativeIntBits) {
   auto *Prev = Builder.GetInsertBlock();
   Module *M = Prev->getModule();
 
   auto CharZero = Builder.getInt8(0);
-  auto One = Builder.getInt64(1);
-  auto Zero = Builder.getInt64(0);
-  auto Int64Ty = Builder.getInt64Ty();
+  auto One = Builder.getIntN(NativeIntBits, 1);
+  auto Zero = Builder.getIntN(NativeIntBits, 0);
+  auto NativeIntTy = Builder.getIntNTy(NativeIntBits);
 
   // The length is either zero for a null pointer, or the computed value for an
   // actual string. We need a join block for a phi that represents the final
@@ -148,13 +152,17 @@ static Value *getStrlenWithNull(IRBuilder<> &Builder, Value *Str) {
 
   // Add one to the computed length.
   Builder.SetInsertPoint(WhileDone, WhileDone->begin());
-  auto Begin = Builder.CreatePtrToInt(Str, Int64Ty);
-  auto End = Builder.CreatePtrToInt(PtrPhi, Int64Ty);
+  auto Begin = Builder.CreatePtrToInt(Str, NativeIntTy);
+  auto End = Builder.CreatePtrToInt(PtrPhi, NativeIntTy);
   auto Len = Builder.CreateSub(End, Begin);
   Len = Builder.CreateAdd(Len, One);
 
   // Final join.
+#if LLVM_MAJOR >= 23
+  UncondBrInst::Create(Join, WhileDone);
+#else
   BranchInst::Create(Join, WhileDone);
+#endif
   Builder.SetInsertPoint(Join, Join->begin());
   auto LenPhi = Builder.CreatePHI(Len->getType(), 2);
   LenPhi->addIncoming(Len, WhileDone);
@@ -163,6 +171,7 @@ static Value *getStrlenWithNull(IRBuilder<> &Builder, Value *Str) {
   return LenPhi;
 }
 
+#ifdef ENABLE_NON_BUFFERED
 static Value *callAppendStringN(IRBuilder<> &Builder, Value *Desc, Value *Str,
                                 Value *Length, bool isLast) {
   auto Int64Ty = Builder.getInt64Ty();
@@ -190,6 +199,7 @@ static Value *processArg(IRBuilder<> &Builder, Value *Desc, Value *Arg,
   // argument anyway.
   return appendArg(Builder, Desc, Arg, IsLast);
 }
+#endif
 
 // Scan the format string to locate all specifiers, and mark the ones that
 // specify a string, i.e, the "%s" specifier with optional '*' characters.
@@ -234,7 +244,7 @@ struct StringData {
 static Value *
 callBufferedPrintfStart(IRBuilder<> &Builder, SmallVector<llvm::Value *> &Args,
                         Value *Fmt, unsigned PrintfBufferAS, bool SkipFmtStr,
-                        bool DontAlign, bool PromoteFP64,
+                        bool DontAlign, bool PromoteFP64, unsigned NativeIntBits,
                         SparseBitVector<8> &SpecIsCString,
                         SmallVectorImpl<StringData> &StringContents,
                         Value *&ArgSize, Value *&FmtStrLen) {
@@ -244,6 +254,8 @@ callBufferedPrintfStart(IRBuilder<> &Builder, SmallVector<llvm::Value *> &Args,
   Value *LenWithNullAligned = nullptr;
   Value *TempAdd = nullptr;
   auto DL = M->getDataLayout();
+  // bitmask for alignments
+  unsigned NativeIntMask = NativeIntBits == 32 ? 3U : 7U;
 
   // First 4 bytes to be reserved for control dword
   size_t BufSize = 4;
@@ -251,21 +263,24 @@ callBufferedPrintfStart(IRBuilder<> &Builder, SmallVector<llvm::Value *> &Args,
     // First 8 bytes of MD5 hash
     BufSize += 8;
   else {
-    LenWithNull = getStrlenWithNull(Builder, Fmt);
+    LenWithNull = getStrlenWithNull(Builder, Fmt, NativeIntBits);
 
     if (DontAlign) {
       NonConstStrLen = LenWithNull;
     } else {
-      // Align the computed length to next 8 byte boundary
+      // Align the computed length to next NativeBits byte boundary
       TempAdd = Builder.CreateAdd(LenWithNull,
-                                  ConstantInt::get(LenWithNull->getType(), 7U));
+                                  ConstantInt::get(LenWithNull->getType(), NativeIntMask));
       NonConstStrLen = Builder.CreateAnd(
-          TempAdd, ConstantInt::get(LenWithNull->getType(), ~7U));
+          TempAdd, ConstantInt::get(LenWithNull->getType(), ~NativeIntMask));
     }
 
     StringContents.push_back(
         StringData(StringRef(), LenWithNull, NonConstStrLen, false));
-    FmtStrLen = Builder.CreateTrunc(NonConstStrLen, Builder.getInt32Ty());
+    if (NativeIntBits > 32)
+      FmtStrLen = Builder.CreateTrunc(NonConstStrLen, Builder.getInt32Ty());
+    else
+      FmtStrLen = NonConstStrLen;
   }
 
   for (size_t i = 1; i < Args.size(); i++) {
@@ -296,24 +311,24 @@ callBufferedPrintfStart(IRBuilder<> &Builder, SmallVector<llvm::Value *> &Args,
         if (DontAlign)
           bufStrLen = ArgStr.size() + 1;
         else
-          bufStrLen = alignTo(ArgStr.size() + 1, 8);
+          bufStrLen = alignTo(ArgStr.size() + 1, NativeIntBits/8);
         StringContents.push_back(
             StringData(ArgStr,
-                       /* RealSize */ Builder.getInt64(ArgStr.size() + 1),
-                       /*AlignedSize*/ Builder.getInt64(bufStrLen),
+                       /* RealSize */ Builder.getIntN(NativeIntBits, ArgStr.size() + 1),
+                       /*AlignedSize*/ Builder.getIntN(NativeIntBits, bufStrLen),
                        /*IsConst*/ true));
         BufSize += bufStrLen;
       } else {
-        LenWithNull = getStrlenWithNull(Builder, Args[i]);
+        LenWithNull = getStrlenWithNull(Builder, Args[i], NativeIntBits);
 
         if (DontAlign) {
           LenWithNullAligned = LenWithNull;
         } else {
-          // Align the computed length to next 8 byte boundary
+          // Align the computed length to next NativeW byte boundary
           TempAdd = Builder.CreateAdd(
-              LenWithNull, ConstantInt::get(LenWithNull->getType(), 7U));
+              LenWithNull, ConstantInt::get(LenWithNull->getType(), NativeIntMask));
           LenWithNullAligned = Builder.CreateAnd(
-              TempAdd, ConstantInt::get(LenWithNull->getType(), ~7U));
+              TempAdd, ConstantInt::get(LenWithNull->getType(), ~NativeIntMask));
         }
 
         if (NonConstStrLen) {
@@ -329,11 +344,13 @@ callBufferedPrintfStart(IRBuilder<> &Builder, SmallVector<llvm::Value *> &Args,
     } else {
       Type *T = Args[i]->getType();
       TypeSize AllocSize = DL.getTypeAllocSize(T);
-      // stores of Ints & Vectors(of int,float) <= 64bits are expanded to 64bits
+      // stores of Ints & Vectors(of int,float) <= (NativeIntBits)bits
+      // are expanded to NativeIntBits
+      if ((T->isIntegerTy() || T->isVectorTy()) &&
+          (DL.getTypeSizeInBits(T) < NativeIntBits))
+        AllocSize = TypeSize::get(NativeIntBits, false);
       // Float scalars are expanded to 64bits if device supports FP64
-      if ((T->isIntegerTy() || T->isVectorTy() ||
-           (PromoteFP64 && T->isFloatingPointTy())) &&
-          (DL.getTypeSizeInBits(T) < 64))
+      if (PromoteFP64 && T->isFloatingPointTy())
         AllocSize = TypeSize::get(8, false);
       llvm::AllocaInst *AI = dyn_cast<AllocaInst>(Args[i]);
       if (AI) {
@@ -345,21 +362,25 @@ callBufferedPrintfStart(IRBuilder<> &Builder, SmallVector<llvm::Value *> &Args,
       }
 
       if (!DontAlign)
-        // We end up expanding non string arguments to 8 bytes
-        // (args smaller than 8 bytes)
-        AllocSize = alignTo(AllocSize, 8);
+        // We end up expanding non string arguments
+        // (args smaller than NativeIntBits)
+        AllocSize = alignTo(AllocSize, NativeIntBits);
 
       BufSize += AllocSize.getFixedValue();
     }
   }
 
   // calculate final size value to be passed to printf_alloc
-  Value *SizeToReserve = ConstantInt::get(Builder.getInt64Ty(), BufSize, false);
+  Value *SizeToReserve = ConstantInt::get(Builder.getIntNTy(NativeIntBits),
+                                          BufSize, false);
   SmallVector<Value *, 1> Alloc_args;
   if (NonConstStrLen)
     SizeToReserve = Builder.CreateAdd(NonConstStrLen, SizeToReserve);
 
-  ArgSize = Builder.CreateTrunc(SizeToReserve, Builder.getInt32Ty());
+  if (NativeIntBits > 32)
+    ArgSize = Builder.CreateTrunc(SizeToReserve, Builder.getInt32Ty());
+  else
+    ArgSize = SizeToReserve;
   Alloc_args.push_back(ArgSize);
 
   // call the printf_alloc function
@@ -378,11 +399,15 @@ callBufferedPrintfStart(IRBuilder<> &Builder, SmallVector<llvm::Value *> &Args,
 
 // Prepare constant string argument to push onto the buffer
 static void processConstantStringArg(StringData *SD, IRBuilder<> &Builder,
-                                     bool DontAlign,
+                                     bool DontAlign, unsigned NativeIntBits,
                                      SmallVectorImpl<Value *> &WhatToStore) {
   std::string Str(SD->Str.str() + '\0');
 
+#if LLVM_MAJOR >= 23
+  DataExtractor Extractor(Str, /*IsLittleEndian=*/true);
+#else
   DataExtractor Extractor(Str, /*IsLittleEndian=*/true, 8);
+#endif
   DataExtractor::Cursor Offset(0);
   while (Offset && Offset.tell() < Str.size()) {
     const uint64_t ReadSize = 4;
@@ -415,27 +440,26 @@ static void processConstantStringArg(StringData *SD, IRBuilder<> &Builder,
     Type *IntTy = Type::getIntNTy(Builder.getContext(), IntVal.getBitWidth());
     WhatToStore.push_back(ConstantInt::get(IntTy, IntVal));
   }
-  if (!DontAlign) {
-    // Additional padding for 8 byte alignment
-    int Rem = (Str.size() % 8);
-    if (Rem > 0 && Rem <= 4)
+  // Additional padding for 64b alignment (for 32b its already aligned above)
+  if (!DontAlign && NativeIntBits > 32) {
+    size_t TailBytes = (Str.size() % 8);
+    if (TailBytes > 0 && TailBytes <= 4)
       WhatToStore.push_back(ConstantInt::get(Builder.getInt32Ty(), 0));
   }
 }
 
 static Value *processNonStringArg(Value *Arg, IRBuilder<> &Builder,
-                                  bool PromoteFP64) {
+                                  bool PromoteFP64, unsigned NativeIntBits) {
   const DataLayout &DL = Builder.GetInsertBlock()->getModule()->getDataLayout();
   auto Ty = Arg->getType();
 
-  // store at least 64 bits for every Int & Vector smaller than 64bits.
+  // store at least NativeIntBits for every Int & Vector smaller than NativeIntBits.
   // This is to avoid having to deal with various rules for
   // int & vector promotions by different backends
   // (x86, ARM, RISC-V etc...) */
-
   if (auto IntTy = dyn_cast<IntegerType>(Ty)) {
-    if (IntTy->getBitWidth() < 64) {
-      return Builder.CreateZExt(Arg, Builder.getInt64Ty());
+    if (IntTy->getBitWidth() < NativeIntBits) {
+      return Builder.CreateZExt(Arg, Builder.getIntNTy(NativeIntBits));
     }
   }
 
@@ -447,10 +471,10 @@ static Value *processNonStringArg(Value *Arg, IRBuilder<> &Builder,
   }
 
   auto VecTy = dyn_cast<VectorType>(Ty);
-  if (VecTy && (DL.getTypeSizeInBits(Ty) < 64)) {
+  if (VecTy && (DL.getTypeSizeInBits(Ty) < NativeIntBits)) {
     Type *IntT = IntegerType::get(Ty->getContext(), DL.getTypeSizeInBits(VecTy));
     Value *VecAsInt = Builder.CreateBitCast(Arg, IntT);
-    Type *ExtT = IntegerType::get(Ty->getContext(), 64);
+    Type *ExtT = Builder.getIntNTy(NativeIntBits);
     return Builder.CreateZExt(VecAsInt, ExtT);
   }
 
@@ -470,7 +494,8 @@ callBufferedPrintfArgPush(IRBuilder<> &Builder,
                           SmallVector<llvm::Value *> &Args, Value *PtrToStore,
                           SparseBitVector<8> &SpecIsCString,
                           SmallVectorImpl<StringData> &StringContents,
-                          bool SkipFmtStr, bool DontAlign, bool PromoteFP64) {
+                          bool SkipFmtStr, bool DontAlign, bool PromoteFP64,
+                          unsigned NativeIntBits) {
   Module *M = Builder.GetInsertBlock()->getModule();
   const DataLayout &DL = M->getDataLayout();
   auto StrIt = StringContents.begin();
@@ -479,7 +504,7 @@ callBufferedPrintfArgPush(IRBuilder<> &Builder,
     SmallVector<Value *, 8> WhatToStore;
     if ((i == 0) || SpecIsCString.test(i)) {
       if (StrIt->IsConst && !DontAlign) {
-        processConstantStringArg(StrIt, Builder, DontAlign, WhatToStore);
+        processConstantStringArg(StrIt, Builder, DontAlign, NativeIntBits, WhatToStore);
         StrIt++;
       } else {
         // This copies the contents of the string, however the next offset
@@ -504,7 +529,7 @@ callBufferedPrintfArgPush(IRBuilder<> &Builder,
         continue;
       }
     } else {
-      WhatToStore.push_back(processNonStringArg(Args[i], Builder, PromoteFP64));
+      WhatToStore.push_back(processNonStringArg(Args[i], Builder, PromoteFP64, NativeIntBits));
     }
 
     for (Value *toStore : WhatToStore) {
@@ -544,6 +569,7 @@ Value *pocl::emitPrintfCall(IRBuilder<> &Builder,
   auto Fmt = Args[0];
   SparseBitVector<8> SpecIsCString;
   StringRef FmtStr;
+  unsigned NativeIntBits = Flags.Pointers32Bit ? 32 : 64;
 
   if (getConstantStringInfo(Fmt, FmtStr))
     locateCStrings(SpecIsCString, FmtStr);
@@ -561,8 +587,8 @@ Value *pocl::emitPrintfCall(IRBuilder<> &Builder,
     // this truncates ArgSize to int32
     Value *StartPtr = callBufferedPrintfStart(
         Builder, Args, Fmt, Flags.PrintfBufferAS, SkipFmtStr, Flags.DontAlign,
-        Flags.ArgPromotionFP64, SpecIsCString, StringContents, ArgSize,
-        FmtStrLen);
+        Flags.ArgPromotionFP64, NativeIntBits, SpecIsCString, StringContents,
+        ArgSize, FmtStrLen);
 
     // The buffered version still follows OpenCL printf standards for
     // printf return value, i.e 0 on success, -1 on failure.
@@ -585,19 +611,21 @@ Value *pocl::emitPrintfCall(IRBuilder<> &Builder,
         Ctx, "argpush.block", Builder.GetInsertBlock()->getParent());
 
     // if the allocation returned null, jump to end BB
+#if LLVM_MAJOR >= 23
+    CondBrInst::Create(Cmp, ArgPush, End, LastBB);
+#else
     BranchInst::Create(ArgPush, End, Cmp, LastBB);
+#endif
 
     Builder.SetInsertPoint(ArgPush);
 
     // Create controlDWord and store as the first entry, format as follows
     // Bit 0 (LSB) -> stream (1 if stderr, 0 if stdout,
     // Bit 1 -> constant format string (1 if constant)
-    // Bit 2 -> char & short promotion to int
-    // Bit 3 -> char2 promotion to int
     // Bit 4 -> float promotion to double
-    // Bit 5 -> 1 = big-endian, 0 = little-endian
-    // Bits 6-31 -> size
-    // of printf data frame
+    // Bit 5 -> 1 = big-endian, 0 = little-endian << BROKEN & UNUSED
+    // Bit 6 -> 1 = using 32bit pointers & word size
+    // Bits 7-31 -> size of printf data frame
 
     auto ControlDWord = Builder.CreateShl(
         ArgSize, Builder.getInt32(PRINTF_BUFFER_CTWORD_FLAG_BITS));
@@ -616,6 +644,7 @@ Value *pocl::emitPrintfCall(IRBuilder<> &Builder,
           Builder.CreateOr(ControlDWord, Builder.getInt32(FlagsOrValue));
     createAlignedStore(Builder, ControlDWord, StartPtr, Flags.DontAlign);
 
+    // pointer beyond the flags
     Value *Ptr = Builder.CreateConstInBoundsGEP1_32(Int8Ty, StartPtr, 4);
 
     // Create MD5 hash for costant format string, push low 64 bits of the
@@ -624,8 +653,12 @@ Value *pocl::emitPrintfCall(IRBuilder<> &Builder,
     if (SkipFmtStr) {
       if (Flags.StorePtrInsteadOfMD5) {
         createAlignedStore(Builder, Fmt, Ptr, Flags.DontAlign);
+        // 8 bytes are always reserved for the address
         Ptr = Builder.CreateConstInBoundsGEP1_32(Int8Ty, Ptr, 8);
       } else {
+        // NOTE: currently unsupported by code in devices/printf_buffer.c
+        // and linker.cpp should set flags such that this code is never called
+        assert(false);
         MD5 Hasher;
         MD5::MD5Result Hash;
         Hasher.update(FmtStr);
@@ -658,8 +691,8 @@ Value *pocl::emitPrintfCall(IRBuilder<> &Builder,
 
     // Push The printf arguments onto buffer
     callBufferedPrintfArgPush(Builder, Args, Ptr, SpecIsCString, StringContents,
-                              SkipFmtStr, Flags.DontAlign,
-                              Flags.ArgPromotionFP64);
+                              SkipFmtStr, Flags.DontAlign, Flags.ArgPromotionFP64,
+                              NativeIntBits);
 
     // flush the buffer if requested by calling
     // void pocl_flush_printf_buffer(void* buffer, uint32_t bytes);
@@ -684,15 +717,17 @@ Value *pocl::emitPrintfCall(IRBuilder<> &Builder,
     }
 
     // End block, returns -1 on failure
-    BranchInst::Create(End, ArgPush);
-#if LLVM_MAJOR > 17
-    Builder.SetInsertPoint(End->getFirstInsertionPt());
+#if LLVM_MAJOR >= 23
+    UncondBrInst::Create(End, ArgPush);
 #else
-    Builder.SetInsertPoint(&*End->getFirstInsertionPt());
+    BranchInst::Create(End, ArgPush);
 #endif
+    Builder.SetInsertPoint(End->getFirstInsertionPt());
     return Builder.CreateSExt(Builder.CreateNot(Cmp), Int32Ty, "printf_result");
   }
 
+  assert(Flags.IsBuffered);
+/*
   auto Desc = callPrintfBegin(Builder, Builder.getIntN(64, 0));
   Desc = appendString(Builder, Desc, Fmt, NumOps == 1);
 
@@ -706,4 +741,6 @@ Value *pocl::emitPrintfCall(IRBuilder<> &Builder,
   }
 
   return Builder.CreateTrunc(Desc, Builder.getInt32Ty());
+*/
+  return nullptr;
 }

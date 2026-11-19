@@ -48,6 +48,12 @@
 // of the commands in the work queue.
 //#define CPU_RANDOMIZE_QUEUE
 
+/* Kernels keep each work-item's private data that outlives a parallel region
+   on the worker's stack, replicated over the work-group, so large work-groups
+   need far more stack than the platform's default for secondary threads
+   (512 KiB on macOS). */
+#define WORKER_STACK_SIZE (8 * 1024 * 1024)
+
 static void* pocl_pthread_driver_thread (void *p);
 
 struct pool_thread_data
@@ -66,11 +72,18 @@ struct pool_thread_data
   /* printf buffer*/
   void *printf_buffer;
   size_t thread_stack_size;
+  /* signaled to wake up this thread, with wake_lock held */
+  pocl_lock_t wake_lock;
+  pocl_cond_t wake;
+  /* set when this thread goes to sleep, with wq_lock_fast held; cleared
+   * atomically by the thread that wakes it up, which then signals 'wake'.
+   * The thread sleeps for as long as it is set. 64-bit for the Windows
+   * atomics. */
+  int64_t sleeping;
 };
 
 typedef struct scheduler_data_
 {
-  POCL_ALIGNAS(HOST_CPU_CACHELINE_SIZE) pocl_cond_t wake_pool;
   POCL_ALIGNAS(HOST_CPU_CACHELINE_SIZE) pocl_lock_t wq_lock_fast;
   POCL_ALIGNAS(HOST_CPU_CACHELINE_SIZE) _cl_command_node *work_queue;
 
@@ -104,17 +117,21 @@ pthread_scheduler_init (cl_device_id device)
 #endif
   POCL_INIT_LOCK (scheduler.wq_lock_fast);
 
-  POCL_INIT_COND (scheduler.wake_pool);
-
-  POCL_LOCK (scheduler.wq_lock_fast);
-  VG_ASSOC_COND_VAR (scheduler.wake_pool, scheduler.wq_lock_fast);
-  POCL_UNLOCK (scheduler.wq_lock_fast);
-
   scheduler.thread_pool = pocl_aligned_malloc (
       HOST_CPU_CACHELINE_SIZE,
       num_worker_threads * sizeof (struct pool_thread_data));
   memset (scheduler.thread_pool, 0,
           num_worker_threads * sizeof (struct pool_thread_data));
+
+  POCL_LOCK (scheduler.wq_lock_fast);
+  for (i = 0; i < num_worker_threads; ++i)
+    {
+      POCL_INIT_LOCK (scheduler.thread_pool[i].wake_lock);
+      POCL_INIT_COND (scheduler.thread_pool[i].wake);
+      VG_ASSOC_COND_VAR (scheduler.thread_pool[i].wake,
+                         scheduler.thread_pool[i].wake_lock);
+    }
+  POCL_UNLOCK (scheduler.wq_lock_fast);
 
   scheduler.num_threads = num_worker_threads;
   assert (num_worker_threads > 0);
@@ -133,12 +150,9 @@ pthread_scheduler_init (cl_device_id device)
   for (i = 0; i < num_worker_threads; ++i)
     {
       scheduler.thread_pool[i].index = i;
-      POCL_CREATE_THREAD (scheduler.thread_pool[i].thread,
-                          pocl_pthread_driver_thread,
-                          (void *)&scheduler.thread_pool[i]);
-#ifdef ENABLE_SIGFPE_HANDLER
-      pocl_ignore_sigfpe_for_thread (scheduler.thread_pool[i].thread);
-#endif
+      POCL_CREATE_THREAD_WITH_STACK_SIZE (
+        scheduler.thread_pool[i].thread, pocl_pthread_driver_thread,
+        (void *)&scheduler.thread_pool[i], WORKER_STACK_SIZE);
     }
 
   POCL_WAIT_BARRIER (scheduler.init_barrier);
@@ -160,6 +174,8 @@ pthread_scheduler_init (cl_device_id device)
   return CL_SUCCESS;
 }
 
+static void wake_threads (unsigned start, unsigned end, size_t n);
+
 void
 pthread_scheduler_uninit ()
 {
@@ -167,39 +183,88 @@ pthread_scheduler_uninit ()
 
   POCL_LOCK (scheduler.wq_lock_fast);
   scheduler.thread_pool_shutdown_requested = 1;
-  POCL_BROADCAST_COND (scheduler.wake_pool);
   POCL_UNLOCK (scheduler.wq_lock_fast);
+  wake_threads (0, scheduler.num_threads, scheduler.num_threads);
 
   for (i = 0; i < scheduler.num_threads; ++i)
     {
       POCL_JOIN_THREAD (scheduler.thread_pool[i].thread);
+      POCL_DESTROY_COND (scheduler.thread_pool[i].wake);
+      POCL_DESTROY_LOCK (scheduler.thread_pool[i].wake_lock);
     }
   scheduler.thread_pool_shutdown_requested = 0;
   pocl_aligned_free (scheduler.thread_pool);
 
   POCL_DESTROY_LOCK (scheduler.wq_lock_fast);
-  POCL_DESTROY_COND (scheduler.wake_pool);
   POCL_DESTROY_BARRIER (scheduler.init_barrier);
 }
 
-/* push_command and push_kernel MUST use broadcast and wake up all threads,
-   because commands can be for subdevices (= not all threads) */
+/* The threads [*START, *END) that run commands for DEVICE, i.e., the
+   threads of its CUs if it's a subdevice. */
+static void
+device_threads (cl_device_id device, unsigned *start, unsigned *end)
+{
+  *start = 0;
+  *end = scheduler.num_threads;
+  if (device->parent_device)
+    {
+      *start = device->core_start;
+      *end = min (*start + device->core_count, scheduler.num_threads);
+    }
+}
+
+/* Wakes up to N sleeping threads among the threads [START, END). Waking
+   all threads would make every command pay for the whole pool, which
+   dominates the launch time of small kernels. Threads that are awake check
+   the queues before going to sleep, so they don't need to be woken.
+
+   Call this after queueing the work and releasing wq_lock_fast, so that the
+   woken threads don't have to wait for it. A thread that missed the work
+   marked itself as sleeping while the lock was held, so it is found here,
+   but it may not be waiting on its condition variable yet. Signaling it
+   under its wake_lock, after clearing its flag, makes sure that it either
+   sees the flag cleared or receives the signal. */
+static void
+wake_threads (unsigned start, unsigned end, size_t n)
+{
+  for (unsigned i = start; i < end && n > 0; ++i)
+    {
+      struct pool_thread_data *td = &scheduler.thread_pool[i];
+      if (POCL_ATOMIC_CAS (&td->sleeping, 1, 0) == 1)
+        {
+          POCL_LOCK (td->wake_lock);
+          POCL_SIGNAL_COND (td->wake);
+          POCL_UNLOCK (td->wake_lock);
+          --n;
+        }
+    }
+}
+
 void pthread_scheduler_push_command (_cl_command_node *cmd)
 {
+  /* once the lock is released, the command can run and complete, and its
+   * (sub)device can be released */
+  unsigned start, end;
+  device_threads (cmd->device, &start, &end);
   POCL_LOCK (scheduler.wq_lock_fast);
   DL_APPEND (scheduler.work_queue, cmd);
-  POCL_BROADCAST_COND (scheduler.wake_pool);
   POCL_UNLOCK (scheduler.wq_lock_fast);
+  wake_threads (start, end, 1);
 }
 
 #ifndef ENABLE_HOST_CPU_DEVICES_OPENMP
 static void
 pthread_scheduler_push_kernel (kernel_run_command *run_cmd)
 {
+  /* every thread runs at least one WG, and the thread pushing the kernel
+   * (which can run it) picks it up itself */
+  unsigned start, end;
+  device_threads (run_cmd->device, &start, &end);
+  size_t num_threads = run_cmd->remaining_wgs - 1;
   POCL_LOCK (scheduler.wq_lock_fast);
   DL_APPEND (scheduler.kernel_queue, run_cmd);
-  POCL_BROADCAST_COND (scheduler.wake_pool);
   POCL_UNLOCK (scheduler.wq_lock_fast);
+  wake_threads (start, end, num_threads);
 }
 
 /* Maximum and minimum chunk sizes for get_wg_index_range().
@@ -278,9 +343,12 @@ work_group_scheduler (kernel_run_command *k,
   unsigned start_index;
   unsigned end_index;
   int last_wgs = 0;
+  /* only the CUs of a subdevice run its kernels */
+  unsigned num_threads = k->device->parent_device ? k->device->core_count
+                                                  : thread_data->num_threads;
 
   if (!get_wg_index_range (k, &start_index, &end_index, &last_wgs,
-                           thread_data->num_threads))
+                           num_threads))
     return;
 
   assert (end_index >= start_index);
@@ -328,7 +396,7 @@ work_group_scheduler (kernel_run_command *k,
         }
     }
   while (get_wg_index_range (k, &start_index, &end_index, &last_wgs,
-                             thread_data->num_threads));
+                             num_threads));
 
 #ifndef ENABLE_PRINTF_IMMEDIATE_FLUSH
   pocl_write_printf_buffer ((char *)pc.printf_buffer, position);
@@ -679,7 +747,13 @@ RETRY:
   /* if neither a command nor a kernel was available, sleep */
   if ((cmd == NULL) && (run_cmd == NULL) && (do_exit == 0))
     {
-      POCL_WAIT_COND (scheduler.wake_pool, scheduler.wq_lock_fast);
+      POCL_ATOMIC_STORE (td->sleeping, 1);
+      POCL_UNLOCK (scheduler.wq_lock_fast);
+      POCL_LOCK (td->wake_lock);
+      while (POCL_ATOMIC_LOAD (td->sleeping))
+        POCL_WAIT_COND (td->wake, td->wake_lock);
+      POCL_UNLOCK (td->wake_lock);
+      POCL_LOCK (scheduler.wq_lock_fast);
       goto RETRY;
     }
 
@@ -702,8 +776,6 @@ pocl_pthread_driver_thread (void *p)
                                            scheduler.printf_buf_size);
 
 #ifdef HOST_CPU_ENABLE_STACK_SIZE_CHECK
-  /* Try to set the stack size to 8MB */
-  POCL_SET_THREAD_STACK_SIZE (8 * 1024 * 1024);
   size_t stack_size = POCL_GET_THREAD_STACK_SIZE ();
   /* if the call fails, set a safe minimum */
   if (stack_size == 0)

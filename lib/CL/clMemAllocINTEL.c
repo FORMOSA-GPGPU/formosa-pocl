@@ -148,9 +148,13 @@ pocl_usm_alloc (unsigned alloc_type, cl_context context, cl_device_id device,
   item->usm_properties.alloc_type = alloc_type;
   item->usm_properties.flags = flags;
   int inserted = pocl_raw_ptr_set_insert (context->raw_ptrs, item);
-  assert (inserted);
-  (void)inserted;
   POCL_UNLOCK_OBJ (context);
+
+  if (!inserted) {
+      POCL_MEM_FREE (item);
+      device->ops->usm_free (device, ptr);
+      goto ERROR;
+  }
 
   /* Create a shadow cl_mem object for keeping track of the USM
      allocation and to implement automated migrations, cl_pocl_content_size,
@@ -168,7 +172,8 @@ pocl_usm_alloc (unsigned alloc_type, cl_context context, cl_device_id device,
       POCL_UNLOCK_OBJ (context);
       device->ops->usm_free (device, ptr);
       POCL_MSG_ERR ("Failed to allocate memory a shadow cl_mem object.\n");
-      return NULL;
+      ptr = NULL;
+      goto ERROR;
     }
 
   item->shadow_cl_mem = clmem_shadow;

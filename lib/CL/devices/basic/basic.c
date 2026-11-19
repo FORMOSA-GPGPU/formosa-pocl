@@ -115,6 +115,7 @@ pocl_basic_init_device_ops(struct pocl_device_ops *ops)
   ops->link_program = pocl_driver_link_program;
   ops->build_binary = pocl_driver_build_binary;
   ops->free_program = pocl_basic_free_program;
+  ops->count_kernels = pocl_driver_count_kernels;
   ops->setup_metadata = pocl_driver_setup_metadata;
   ops->supports_binary = pocl_driver_supports_binary;
   ops->build_poclbinary = pocl_driver_build_poclbinary;
@@ -122,9 +123,6 @@ pocl_basic_init_device_ops(struct pocl_device_ops *ops)
   ops->build_builtin = pocl_driver_build_opencl_builtins;
   ops->build_defined_builtin = pocl_cpu_build_defined_builtin;
   ops->supports_dbk = pocl_cpu_supports_dbk;
-#ifdef CPU_USE_LLD_LINK_WIN32
-  ops->finalize_binary = pocl_cpu_finalize_binary;
-#endif
 
   ops->join = pocl_basic_join;
   ops->submit = pocl_basic_submit;
@@ -208,7 +206,7 @@ pocl_basic_init (unsigned j, cl_device_id device, const char* parameters)
   device->data = d;
   device->available = &d->available;
 
-  ret = pocl_cpu_init_common (device);
+  ret = pocl_cpu_init_common (device, j);
   if (ret != CL_SUCCESS)
     return ret;
 
@@ -293,8 +291,12 @@ pocl_basic_run (void *data, _cl_command_node *cmd)
           else
             {
               arguments[i] = malloc (sizeof (void *));
-              *(void **)(arguments[i]) =
-                pocl_aligned_malloc(MAX_EXTENDED_ALIGNMENT, al->size);
+              if (al->size == 0)
+                *(void **)(arguments[i]) = NULL;
+              else {
+                *(void **)(arguments[i]) =
+                  pocl_aligned_malloc(MAX_EXTENDED_ALIGNMENT, al->size);
+              }
             }
         }
       else if (meta->arg_info[i].type == POCL_ARG_TYPE_POINTER)
@@ -499,7 +501,7 @@ static void
 basic_command_scheduler (pocl_basic_data_t *d)
 {
   _cl_command_node *node;
-  
+
   /* execute commands from ready list */
   while ((node = d->ready_list))
     {
@@ -539,6 +541,19 @@ pocl_basic_submit (_cl_command_node *node, cl_command_queue cq)
     }
 
   node->state = POCL_COMMAND_READY;
+
+  /* If a wait-list dependency has failed, this command must not run: fail it via
+   * the error cascade. There is no point waiting for it to become otherwise
+   * ready first. pocl_update_event_failed takes the cq + event locks itself, so
+   * unlock the event we hold and return without unlocking again. */
+  if (node->sync.event.event->failed_dependency)
+    {
+      POCL_UNLOCK_OBJ (node->sync.event.event);
+      pocl_update_event_failed (CL_FAILED, NULL, 0, node->sync.event.event,
+                                NULL);
+      return;
+    }
+
   POCL_LOCK (d->cq_lock);
   pocl_command_push(node, &d->ready_list, &d->command_list);
 
@@ -576,7 +591,10 @@ pocl_basic_notify (cl_device_id device, cl_event event, cl_event finished)
   pocl_basic_data_t *d = (pocl_basic_data_t *)device->data;
   _cl_command_node * volatile node = event->command;
 
-  if (finished->status < CL_COMPLETE)
+  /* Fail the command if the notifier finished failed, or if any wait-list
+   * dependency has already failed (recorded on the event). In either case the
+   * command MUST NOT execute, so there is no point checking readiness first. */
+  if (finished->status < CL_COMPLETE || event->failed_dependency)
     {
       /* Unlock the finished event in order to prevent a lock order violation
        * with the command queue that will be locked during
@@ -638,6 +656,7 @@ pocl_basic_free_program (cl_device_id device, cl_program program,
   pocl_driver_free_program (device, program, dev_i);
   program->global_var_total_size[dev_i] = 0;
   pocl_aligned_free (program->gvar_storage[dev_i]);
+  program->gvar_storage[dev_i] = NULL;
   return 0;
 }
 /*********************** IMAGES ********************************/
@@ -896,10 +915,9 @@ pocl_basic_get_device_info_ext (cl_device_id device, cl_device_info param_name,
         /* We can basically support fixing any WG size with the CPU devices,
            but let's report something semi-sensible here for vectorization aid.
          */
-        size_t *sizes = alloca (sizeof (size_t) * device->max_work_group_size);
-        for (unsigned i = 0; i < device->max_work_group_size; ++i)
-          sizes[i] = i;
-        POCL_RETURN_GETINFO_ARRAY (size_t, device->max_work_group_size, sizes);
+        size_t sizes[] = { 1, 2, 4, 8, 16, 32, 64, 128, 256, 512 };
+        POCL_RETURN_GETINFO_ARRAY (size_t, sizeof (sizes) / sizeof (size_t),
+                                   sizes);
       }
     default:
       POCL_MSG_ERR ("Unknown param_name for get_device_info_ext: %u\n",
@@ -919,25 +937,32 @@ pocl_basic_get_subgroup_info_ext (cl_device_id device,
                                   void *param_value,
                                   size_t *param_value_size_ret)
 {
+  /* The SG size is the size required with the intel_reqd_sub_group_size
+     kernel attribute, otherwise WG_x. This must be kept in sync with the
+     device-side implementation in lib/kernel/subgroups.cl. */
+  size_t sg_size = kernel->meta->reqd_sub_group_size;
+  if (sg_size == 0 && input_value != NULL && input_value_size >= sizeof (size_t))
+    sg_size = ((size_t *)input_value)[0];
+
   switch (param_name)
     {
     case CL_KERNEL_MAX_SUB_GROUP_SIZE_FOR_NDRANGE:
       {
-        /* For now assume SG == WG_x. */
-        POCL_RETURN_GETINFO (size_t, ((size_t *)input_value)[0]);
+        POCL_RETURN_GETINFO (size_t, sg_size);
       }
     case CL_KERNEL_SUB_GROUP_COUNT_FOR_NDRANGE:
       {
-        /* For now assume SG == WG_x and thus we have WG_size_y*WG_size_z of
-           them per WG. */
-        POCL_RETURN_GETINFO (
-          size_t,
-          min (device->max_num_sub_groups,
-               (input_value_size > sizeof (size_t) ? ((size_t *)input_value)[1]
-                                                   : 1)
-                 * (input_value_size > sizeof (size_t) * 2
-                      ? ((size_t *)input_value)[2]
-                      : 1)));
+        size_t wg_size = ((size_t *)input_value)[0]
+                         * (input_value_size > sizeof (size_t)
+                              ? ((size_t *)input_value)[1]
+                              : 1)
+                         * (input_value_size > sizeof (size_t) * 2
+                              ? ((size_t *)input_value)[2]
+                              : 1);
+        /* Round up to account for a possibly smaller last SG. */
+        size_t sg_count = sg_size ? (wg_size + sg_size - 1) / sg_size : 0;
+        POCL_RETURN_GETINFO (size_t,
+                             min (device->max_num_sub_groups, sg_count));
       }
     case CL_KERNEL_LOCAL_SIZE_FOR_SUB_GROUP_COUNT:
       {

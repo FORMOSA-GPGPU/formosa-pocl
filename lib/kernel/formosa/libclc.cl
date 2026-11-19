@@ -25,8 +25,6 @@
 #include "../libclc/misc.h"
 #include "../libclc/vtables.h"
 
-DEFINE_EXPR_V_VVV (pocl_fma, fma (a, b, c))
-
 /* Keep vector elements sequential to fit the per-thread stack. */
 #define VECTOR_OVERLOAD(NAME, TYPE, WIDTH)                                     \
   TYPE##WIDTH _CL_OVERLOADABLE NAME (TYPE##WIDTH x)                              \

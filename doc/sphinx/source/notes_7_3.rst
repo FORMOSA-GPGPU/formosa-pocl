@@ -1,0 +1,112 @@
+**************************
+Release Notes for PoCL 7.3
+**************************
+
+===========================
+Release highlights
+===========================
+
+* TBD: Conformance results were submitted for OpenCL 3.0 conformance,
+* TBD: Support for LLVM version XX with CUDA, LevelZero and CPU devices
+* TBD: Support for LLVM version 24 with CPU device
+
+================
+CMake changes
+================
+
+* Added an `ENABLE_CUDA_IMAGES` option. Note that image support in the CUDA
+  driver is still experimental and very incomplete.
+* Removed the `ENABLE_SIGFPE_HANDLER` option and the SIGFPE handler, which
+  replaced the host application's handler. CPU devices on x86 now always avoid
+  integer division exceptions with an LLVM pass. Program binaries built for
+  CPU devices by earlier versions have to be rebuilt.
+
+==========================
+Runtime fixes & features
+==========================
+
+* TBD: OpenCL-CTS updated to upstream tag v20XX-YY-ZZ-00 and fixed related bugs:
+* Implemented the deprecated `clEnqueueWaitForEvents`, which used to return
+  `CL_INVALID_OPERATION`.
+
+* Rectangular buffer copies (`clEnqueueCopyBufferRect`) now detect overlap with
+  the current specification's algorithm; the older one missed some real
+  overlaps and reported false ones.
+
+* `clGetProgramInfo` now returns `CL_PROGRAM_BINARY_SIZES` and
+  `CL_PROGRAM_BINARIES` for programs that have not been built, instead of
+  `CL_INVALID_PROGRAM`.
+
+* `cl_khr_command_buffer` has been updated to version 1.0.0, together with
+  `cl_khr_command_buffer_multi_device` 0.9.2 and
+  `cl_khr_command_buffer_mutable_dispatch` 0.9.4. A command buffer can be
+  enqueued again while a previous submission is in flight, there is no longer
+  a pending state, and `CL_COMMAND_BUFFER_SIMULTANEOUS_USE_KHR` now requires
+  `cl_khr_command_buffer_mutable_dispatch`. Substitute queues passed to
+  `clEnqueueCommandBufferKHR` only need to target the same device, and
+  commands recorded with an in-order queue stay ordered on any queue.
+
+===========================
+Driver-specific features
+===========================
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+CUDA driver
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* Initial bits for images support. Currently only the `IMAGE1D_BUFFER` image
+  type is supported.
+* Make event synchronisation (clFinish and clWaitEvents) thread safe with non
+  threaded queue handling
+* Remove threaded queue handling and POCL_CUDA_DISABLE_QUEUE_THREADS
+  environment variable
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Remote driver
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* Barriers and markers are now handled server-side.
+* Various server-side command buffer implementation fixes
+* Remote now always advertises `cl_khr_command_buffer` even if the server-side
+  OpenCL driver does not (pocld provides server-side emulation in that case).
+* Remote command handling has been reworked to avoid blocking remote commands
+  in the client's submit queue and pocld's reply queue.
+* Fixed some issues where one of the client-server sockets would abruptly
+  disconnect for no obvious reason.
+* Server-to-server completion notifications are elided when possible to reduce
+  overhead in setups with a large number of servers in the same context
+* Server-to-server buffer migrations are now properly asynchronous
+* Fixes for compiling kernels for multiple devices
+* Fixed fetching program binaries and recreating programs from previously built
+  binaries
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+OpenASIP (ttasim) driver
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+CPU driver
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* FP16 support is now complete and enabled by default on Linux.
+  Note that this support has a few requirements:
+   - host compiler must support _Float16 (GCC since 12)
+   - sufficiently new LLVM which supports _Float16 (since LLVM 19)
+   - x86_64, RISC-V 64 or ARM 64
+* The pthread driver now only wakes up as many worker threads as a command
+  can use, and only those of the subdevice it targets. This reduces the launch
+  latency of small kernels, especially on subdevices.
+
+* `sinpi`, `cospi`, `tanpi` and `atanpi` now return correctly signed exact
+  zeros (found by the CTS `math_edge_cases` test).
+
+* Fixed use of an uninitialised kernel-library fallback name when
+  `LLC_HOST_CPU` is set.
+
+===================================
+Deprecation/feature removal notices
+===================================
+
+===================================
+Experimental and work-in-progress
+===================================

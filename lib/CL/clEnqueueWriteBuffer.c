@@ -23,6 +23,7 @@
 */
 
 #include "pocl_cl.h"
+#include "pocl_cmdbuf.h"
 #include "pocl_mem_management.h"
 #include "pocl_shared.h"
 #include "pocl_util.h"
@@ -110,7 +111,7 @@ pocl_write_buffer_common (cl_command_buffer_khr command_buffer,
     }
   else
     {
-      errcode = pocl_create_recorded_command (
+      errcode = pocl_cmdbuf_create_command (
         cmd, command_buffer, command_queue, CL_COMMAND_WRITE_BUFFER,
         num_items_in_wait_list, sync_point_wait_list,
         pocl_append_unique_migration_info (NULL, buffer, rdonly));
@@ -145,8 +146,9 @@ POname (clEnqueueWriteBuffer) (cl_command_queue command_queue,
   POCL_RETURN_ERROR_COND ((!IS_CL_OBJECT_VALID (command_queue)),
                           CL_INVALID_COMMAND_QUEUE);
 
-  POCL_RETURN_ERROR_COND ((*(command_queue->device->available) == CL_FALSE),
-                          CL_DEVICE_NOT_AVAILABLE);
+  POCL_RETURN_ERROR_COND (
+    (POCL_ATOMIC_LOAD_PTR (command_queue->device->available) == CL_FALSE),
+    CL_DEVICE_NOT_AVAILABLE);
 
   errcode = pocl_write_buffer_common (
       NULL, command_queue, buffer, offset, size, ptr, num_events_in_wait_list,

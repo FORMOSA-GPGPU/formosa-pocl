@@ -53,13 +53,6 @@ uint32_t pocl_byteswap_uint32_t (uint32_t word, char should_swap);
 float byteswap_float (float word, char should_swap);
 
 
-#ifdef ENABLE_SIGFPE_HANDLER
-void pocl_install_sigfpe_handler ();
-void pocl_destroy_sigfpe_handler ();
-POCL_EXPORT
-void pocl_ignore_sigfpe_for_thread (pocl_thread_t thr);
-#endif
-
 #ifdef ENABLE_SIGUSR2_HANDLER
 void pocl_install_sigusr2_handler ();
 #endif
@@ -123,6 +116,9 @@ pocl_create_command_struct (_cl_command_node **cmd,
 
 int pocl_create_event_sync (cl_event notifier_event, cl_event waiting_event);
 
+int pocl_preallocate_buffers (cl_device_id dev,
+                              pocl_buffer_migration_info *migration_infos);
+
 cl_int pocl_create_command_migrate (
   _cl_command_node **cmd,
   cl_command_queue command_queue,
@@ -132,32 +128,8 @@ cl_int pocl_create_command_migrate (
   const cl_event *wait_list,
   pocl_buffer_migration_info *migration_infos);
 
-cl_int pocl_command_record (cl_command_buffer_khr command_buffer,
-                            _cl_command_node *cmd,
-                            cl_sync_point_khr *sync_point);
-
-cl_int
-pocl_create_recorded_command (_cl_command_node **cmd,
-                              cl_command_buffer_khr command_buffer,
-                              cl_command_queue command_queue,
-                              cl_command_type command_type,
-                              cl_uint num_sync_points_in_wait_list,
-                              const cl_sync_point_khr *sync_point_wait_list,
-                              pocl_buffer_migration_info *migration_infos);
-
 void pocl_command_enqueue (cl_command_queue command_queue,
                           _cl_command_node *node);
-
-cl_int
-pocl_cmdbuf_choose_recording_queue (cl_command_buffer_khr command_buffer,
-                                    cl_command_queue *command_queue);
-
-cl_int pocl_cmdbuf_validate_queue_list (cl_uint num_queues,
-                                        const cl_command_queue *queues);
-
-cl_command_buffer_properties_khr
-pocl_cmdbuf_get_property (cl_command_buffer_khr command_buffer,
-                          cl_command_buffer_properties_khr name);
 
 POCL_EXPORT
 int pocl_alloc_or_retain_mem_host_ptr (cl_mem mem);
@@ -209,6 +181,15 @@ check_copy_overlap(const size_t src_offset[3],
                    const size_t dst_offset[3],
                    const size_t region[3],
                    const size_t row_pitch, const size_t slice_pitch);
+
+int pocl_check_subbuffer_copy_overlap (size_t src_base,
+                                       const size_t src_origin[3],
+                                       size_t src_row_pitch,
+                                       size_t src_slice_pitch, size_t dst_base,
+                                       const size_t dst_origin[3],
+                                       size_t dst_row_pitch,
+                                       size_t dst_slice_pitch,
+                                       const size_t region[3]);
 
 /**
  * Push a command into ready list if all previous events are completed or
@@ -512,50 +493,6 @@ while (0)
   size_t px = (mem->image_elem_size * mem->image_channels);                   \
   size_t i1d_origin[3] = { o[0] * px, o[1], o[2] };                           \
   size_t i1d_region[3] = { r[0] * px, r[1], r[2] };
-
-#define CMDBUF_VALIDATE_COMMON_HANDLES                                        \
-  do                                                                          \
-    {                                                                         \
-      POCL_RETURN_ERROR_COND ((!IS_CL_OBJECT_VALID (command_buffer)),         \
-                              CL_INVALID_COMMAND_BUFFER_KHR);                 \
-      cl_device_id dev = command_buffer->queues[0]->device;                   \
-      if (strstr (dev->extensions, "cl_khr_command_buffer_multi_device"))     \
-        {                                                                     \
-          POCL_RETURN_ERROR_COND (                                            \
-            (command_queue == NULL && command_buffer->num_queues > 1),        \
-            CL_INVALID_COMMAND_QUEUE);                                        \
-          int queue_in_buffer = 0;                                            \
-          for (unsigned ii = 0; ii < command_buffer->num_queues; ++ii)        \
-            {                                                                 \
-              queue_in_buffer                                                 \
-                |= (command_queue == command_buffer->queues[ii]);             \
-            }                                                                 \
-          POCL_RETURN_ERROR_COND (                                            \
-            (command_queue != NULL && !queue_in_buffer),                      \
-            CL_INVALID_COMMAND_QUEUE);                                        \
-        }                                                                     \
-      else                                                                    \
-        {                                                                     \
-          POCL_RETURN_ERROR_ON (                                              \
-            (command_queue != NULL), CL_INVALID_COMMAND_QUEUE,                \
-            "device does not support cl_khr_command_buffer_multi_device");    \
-        }                                                                     \
-      if (dev->cmdbuf_mutable_dispatch_capabilities == 0)                     \
-        {                                                                     \
-          POCL_RETURN_ERROR_COND ((mutable_handle != NULL),                   \
-                                  CL_INVALID_VALUE);                          \
-        }                                                                     \
-      errcode = pocl_cmdbuf_choose_recording_queue (command_buffer,           \
-                                                    &command_queue);          \
-      if (errcode != CL_SUCCESS)                                              \
-        return errcode;                                                       \
-    }                                                                         \
-  while (0)
-
-#define SETUP_MUTABLE_HANDLE                                                  \
-  _cl_command_node *cmd_temp = NULL;                                          \
-  if (mutable_handle == NULL)                                                 \
-    mutable_handle = &cmd_temp;
 
 /*  A class implemented with C macros, resembling LLVM's SmallVector
  *  includes locking for access

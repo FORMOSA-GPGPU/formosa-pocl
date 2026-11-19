@@ -283,23 +283,21 @@ bool WorkgroupImpl::runOnModule(Module &M, llvm::FunctionAnalysisManager &FAM) {
   SizeT = pocl::SizeT(&M);
 
   llvm::Type *Int32T = Type::getInt32Ty(*C);
-  llvm::Type *Int8T = Type::getInt8Ty(*C);
   PoclContextT = StructType::get(
       ArrayType::get(SizeT, 3),                   // NUM_GROUPS
       ArrayType::get(SizeT, 3),                   // GLOBAL_OFFSET
       ArrayType::get(SizeT, 3),                   // LOCAL_SIZE
-      PointerType::get(Int8T, DeviceGlobalASid),  // PRINTF_BUFFER
-      PointerType::get(Int32T, DeviceGlobalASid), // PRINTF_BUFFER_POSITION
-      Int32T,                                     // PRINTF_BUFFER_CAPACITY
-      PointerType::get(Int8T, DeviceGlobalASid),  // GLOBAL_VAR_BUFFER
-      Int32T,                                     // WORK_DIM
-      Int32T);                                    // EXECUTION_FAILED
+      PointerType::get(*C, DeviceGlobalASid),  // PRINTF_BUFFER
+      PointerType::get(*C, DeviceGlobalASid),  // PRINTF_BUFFER_POSITION
+      Int32T,                                  // PRINTF_BUFFER_CAPACITY
+      PointerType::get(*C, DeviceGlobalASid),  // GLOBAL_VAR_BUFFER
+      Int32T,                                  // WORK_DIM
+      Int32T);                                 // EXECUTION_FAILED
 
   LauncherFuncT = FunctionType::get(
       Type::getVoidTy(*C),
-      {PointerType::get(PointerType::get(Type::getInt8Ty(*C), 0),
-                        DeviceArgsASid),
-       PointerType::get(PoclContextT, DeviceContextASid), SizeT, SizeT, SizeT},
+      {PointerType::get(*C, DeviceArgsASid),
+       PointerType::get(*C, DeviceContextASid), SizeT, SizeT, SizeT},
       false);
 
   assert ((SizeTWidth == 64 || SizeTWidth == 32) &&
@@ -360,7 +358,7 @@ bool WorkgroupImpl::runOnModule(Module &M, llvm::FunctionAnalysisManager &FAM) {
     }
   }
 
-  if (!DeviceUsingArgBufferLauncher && DeviceIsSPMD) {
+  if (DeviceIsSPMD) {
     regenerate_kernel_metadata(M, KernelsMap);
   }
 
@@ -472,84 +470,7 @@ bool WorkgroupImpl::runOnModule(Module &M, llvm::FunctionAnalysisManager &FAM) {
     F->eraseFromParent();
   }
 
-  // Unify some attributes among all functions; this is necessary because
-  // -O0 compiled builtin library has many attributes setup differently than
-  // -O2 compiled user code, and the inliner will check&refuse to inline.
-  // See hasCompatibleFnAttrs in llvm/include/llvm/IR/Attributes.inc
-  // and getAttributeBasedInliningDecision in llvm/lib/Analysis/InlineCost.cpp
-  std::string TargetCPU;
-  std::string TargetFeatures;
-  for (Function &F : M) {
-    if (TargetCPU.empty() && F.hasFnAttribute("target-cpu")) {
-      TargetCPU = F.getFnAttribute("target-cpu").getValueAsString().str();
-    }
-    if (TargetFeatures.empty() && F.hasFnAttribute("target-features")) {
-      TargetFeatures =
-          F.getFnAttribute("target-features").getValueAsString().str();
-    }
-  }
-
-  for (Function &F : M.functions()) {
-    if (F.isDeclaration())
-      continue;
-
-    // removes optnone/noinline/alwaysinline from F & its callsites
-    markFunctionAlwaysInline(&F);
-    F.removeFnAttr(Attribute::AlwaysInline);
-
-    // these are checked in LLVM's areInlineCompatible -> hasCompatibleFnArgs
-    F.removeFnAttr(Attribute::SafeStack);
-    F.removeFnAttr(Attribute::ShadowCallStack);
-    F.removeFnAttr(Attribute::NoProfile);
-    F.removeFnAttr(Attribute::StackProtect);
-    F.removeFnAttr(Attribute::StackProtectReq);
-    F.removeFnAttr(Attribute::StackProtectStrong);
-    // denorm & strictFP must be compatible
-    // TODO strictfp should depend on program's build opts
-    // denormals are handled by the driver / execution environment
-    F.removeFnAttr(Attribute::StrictFP);
-    F.removeFnAttr("denormal-fp-math");
-    F.removeFnAttr("denormal-fp-math-f32");
-    // prevents vectorizing/inlining of functions with builtins (llvm.sin.f32 etc)
-    F.removeFnAttr("no-builtins");
-    F.addFnAttr("no-trapping-math", "true");
-    // required because the InlineCost -> areInlineCompatible also calls
-    // TTI->areInlineCompatible; X86TTIImpl::areInlineCompatible checks CPU
-    // features; this might require even more attrs (target-abi?) for RISC-V
-    if (!TargetCPU.empty())
-      F.addFnAttr("target-cpu", TargetCPU);
-    if (!TargetFeatures.empty())
-      F.addFnAttr("target-features", TargetFeatures);
-
-    // the following settings are not necessary for inlining,
-    // but should improve optimization
-    F.removeFnAttr("use-sample-profile");
-    F.removeFnAttr("stack-protector-buffer-size");
-    if (IsDebugEnabled)
-      F.addFnAttr("frame-pointer", "all");
-    else
-      F.removeFnAttr("frame-pointer");
-
-    // these should be safe to enable
-    F.addFnAttr(Attribute::NoFree);
-    // recursion forbidden by OpenCL
-    F.addFnAttr(Attribute::NoRecurse);
-    // no exceptions or return by callback
-    F.addFnAttr(Attribute::NoCallback);
-    F.addFnAttr(Attribute::NoUnwind);
-#if 0
-    // It appears OpenCL follows C99 in which they are NOT UB.
-    // This breaks infinite for loops when enabled.
-    F.addFnAttr(Attribute::WillReturn);
-#endif
-
-    // Override the preferred vector width on x86 targets.
-    // By default, clang uses 256-bit even if a processor supports 512-bit SIMD.
-    if (int VecWidth =
-            pocl_get_int_option("POCL_VECTORIZER_PREFER_VECTOR_WIDTH", 0)) {
-      F.addFnAttr("prefer-vector-width", std::to_string(VecWidth));
-    }
-  }
+  unifyLLVMFunctionAttributes(M, true);
 
   return true;
 }
@@ -928,11 +849,11 @@ Function *WorkgroupImpl::createWrapper(Function *F,
     FuncParams.push_back(i->getType());
 
   if (!DeviceUsingArgBufferLauncher && DeviceIsSPMD) {
-    FuncParams.push_back(PointerType::get(PoclContextT, DeviceContextASid));
+    FuncParams.push_back(PointerType::get(C, DeviceContextASid));
     HiddenArgs = 1;
   } else {
     // pocl_context
-    FuncParams.push_back(PointerType::get(PoclContextT, DeviceContextASid));
+    FuncParams.push_back(PointerType::get(C, DeviceContextASid));
     // group_x
     FuncParams.push_back(SizeT);
     // group_y
@@ -1355,9 +1276,12 @@ void WorkgroupImpl::createDefaultWorkgroupLauncher(llvm::Function *F) {
 
   WorkGroup->setLinkage(Function::ExternalLinkage);
   Triple TT(F->getParent()->getTargetTriple());
-  if (TT.getEnvironment() == llvm::Triple::MSVC) {
-    // dllexport is needed for exposing the symbol in the kernel module
-    // when MSVC-based toolchain is used.
+  if (TT.isOSWindows()) {
+    // A DLL only exposes dllexport'ed symbols in its export table, so without
+    // this GetProcAddress() cannot find the work-group function. This holds
+    // for any COFF link that doesn't auto-export (lld-link never does; MinGW
+    // linkers stop doing it as soon as one symbol is marked), so mark the
+    // function for MinGW triples too rather than relying on auto-export.
     WorkGroup->setDLLStorageClass(GlobalValue::DLLExportStorageClass);
   }
 
@@ -1388,7 +1312,7 @@ void WorkgroupImpl::createDefaultWorkgroupLauncher(llvm::Function *F) {
     Type* I32Ty = Type::getInt32Ty(M->getContext());
 
     Type *I8Ty = Type::getInt8Ty(M->getContext());
-    Type *I8PtrTy = I8Ty->getPointerTo(0);
+    Type *I8PtrTy = PointerType::get(M->getContext(), 0);
     Value *GEP = Builder.CreateGEP(I8PtrTy, AI, ConstantInt::get(I32Ty, i));
     Value *Pointer = Builder.CreateLoad(I8PtrTy, GEP);
 
@@ -1563,7 +1487,7 @@ LLVMValueRef WorkgroupImpl::createAllocaMemcpyForStruct(
     args[1] = CARG1;
     args[2] = Size;
 
-    LLVMTypeRef FnTy = LLVMGetCalledFunctionType(MemCpy4);
+    LLVMTypeRef FnTy = LLVMGlobalGetValueType(MemCpy4);
     LLVMBuildCall2(Builder, FnTy, MemCpy4, args, 3, "");
   } else {
     LLVMTypeRef i8PtrAS0 = LLVMPointerType(Int8Type, 0);
@@ -1578,7 +1502,7 @@ LLVMValueRef WorkgroupImpl::createAllocaMemcpyForStruct(
     args[1] = CARG1;
     args[2] = Size;
 
-    LLVMTypeRef FnTy = LLVMGetCalledFunctionType(MemCpy1);
+    LLVMTypeRef FnTy = LLVMGlobalGetValueType(MemCpy1);
     LLVMBuildCall2(Builder, FnTy, MemCpy1, args, 3, "");
   }
 

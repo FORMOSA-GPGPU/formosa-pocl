@@ -262,9 +262,22 @@ extern pocl_obj_id_t last_object_id;
 #ifdef __APPLE__
 /* Note: OSX doesn't support aliases because it doesn't use ELF */
 
+#if defined(RENAME_POCL) && !defined(BUILD_ICD)
+/* Rename the OpenCL API entrypoints to PO<name>, so the (directly linkable)
+ * library can coexist with another OpenCL implementation in the same process.
+ * Apple has no ELF-style symbol aliases, so unlike the ELF path we cannot also
+ * export the unprefixed cl* names; only the PO-prefixed ones are provided.
+ * As on the ELF path, POdeclsym forward-declares the PO-prefixed entrypoints
+ * (so internal callers see a prototype) and POCL_EXPORT gives them default
+ * visibility so they are exported from the library. */
+#  define POname(name) PO##name
+#  define POdeclsym(name) POCL_EXPORT __typeof__ (name) PO##name;
+#  define POdeclsymExport(name) POdeclsym(name)
+#else
 #  define POname(name) name
 #  define POdeclsym(name)
 #  define POdeclsymExport(name)
+#endif
 #  define POsym(name)
 #  define POsymAlways(name)
 
@@ -836,6 +849,21 @@ struct pocl_device_ops {
                        unsigned program_device_i);
 
   /**
+   * Compute program->num_kernels from driver-specific program data.
+   *
+   * Called before setup_metadata on device drivers that do NOT populate
+   * program->pocl_binaries. For devices that do populate
+   * program->pocl_binaries this information is obtained directly from said
+   * binary instead.
+   *
+   * \return Zero on error or if program is not an executable binary
+   */
+  int (*count_kernels) (cl_device_id device,
+                        cl_program program,
+                        unsigned program_device_i,
+                        size_t *count);
+
+  /**
    * The driver should setup kernel metadata here, if it can, and return
    * non-zero on success.
    *
@@ -1188,6 +1216,10 @@ struct _cl_device_id {
    * This pass adds checks of input operands to div/rem so that UB is
    * never triggered. */
   cl_bool run_sanitize_divrem_pass;
+  /* CL_TRUE for CPU host devices that load kernel objects in-process via the
+   * ORC/JITLink JIT; latched in pocl_cpu_init_common() (see
+   * pocl_cpu_device_uses_jit()). */
+  cl_bool uses_cpu_jit;
 
   /* If CL_TRUE, pocl_llvm_build_program will ignore pocl's OpenCL headers
    * that perform built-in renames during OpenCL C build and relies on
@@ -1431,6 +1463,21 @@ struct _cl_device_id {
   struct _cl_device_id *next;
 };
 
+/* Whether a CPU host device loads kernel objects in-process via the ORC/JITLink
+   JIT (HOST_CPU_ENABLE_JIT) instead of linking them into a shared library and
+   dlopen()ing it. Latched for the device's lifetime in pocl_cpu_init_common():
+   a device qualifies when it has no custom binary finalizer (custom back-ends
+   set finalize_binary and keep the link path), POCL_CPU_JIT is left on, and the
+   process-global JIT came up. This single gate decides codegen's code model and
+   the cached artifact variant. JIT devices use OBJ_EXT; non-JIT devices use
+   SHARED_LIB_EXT, linking a cached OBJ_EXT fallback only when LLVM is available
+   (see pocl_check_kernel_disk_cache()). */
+static inline int
+pocl_cpu_device_uses_jit (cl_device_id device)
+{
+  return device->uses_cpu_jit;
+}
+
 #define DEVICE_SVM_FINEGR(dev) (dev->svm_caps & (CL_DEVICE_SVM_FINE_GRAIN_BUFFER \
                                               | CL_DEVICE_SVM_FINE_GRAIN_SYSTEM))
 #define DEVICE_SVM_ATOM(dev) (dev->svm_caps & CL_DEVICE_SVM_ATOMICS)
@@ -1561,10 +1608,13 @@ struct _pocl_data_sync_item {
   pocl_data_sync_item *next;
 };
 
+#define POCL_MAX_QUEUE_PROPS 6
+
 struct _cl_event;
 struct _cl_command_queue {
   POCL_ICD_OBJECT
   POCL_OBJECT;
+  int user_refcount;
   /* queries */
   cl_context context;
   cl_device_id device;
@@ -1581,7 +1631,7 @@ struct _cl_command_queue {
   /* The event of the last command pushed to the queue. */
   pocl_data_sync_item last_event;
 
-  cl_queue_properties queue_properties[10];
+  cl_queue_properties queue_properties[POCL_MAX_QUEUE_PROPS];
   unsigned num_queue_properties;
 
   cl_queue_priority_khr priority;
@@ -1616,15 +1666,17 @@ struct _cl_command_buffer_khr
   cl_uint num_properties;
   cl_command_buffer_properties_khr *properties;
 
-  /** recording / ready / pending (executing) / invalid */
+  /** recording / executable */
   cl_command_buffer_state_khr state;
-  /** Number of currently in-flight instances of this command buffer */
-  cl_uint pending;
 
   /** Number of currently allocated sync points in this command buffer.
    * Used for generating the next sync point id and for validating sync point
    * wait lists when recording commands. */
   cl_uint num_syncpoints;
+
+  /** Sync point of the last command recorded with each queue (0 if none).
+   * Commands recorded with an in-order queue depend on it. */
+  cl_sync_point_khr *last_sync_points;
 
   _cl_command_node *cmds;
   cl_bool is_mutable;
@@ -1861,6 +1913,32 @@ struct _cl_mem_list_item_t
 
 typedef uint8_t SHA1_digest_t[SHA1_DIGEST_SIZE * 2 + 1];
 
+/** Per-device kernel metadata */
+typedef struct pocl_device_kernel_metadata_s
+{
+  /****** subgroups *******/
+  /* CL_KERNEL_MAX_NUM_SUB_GROUPS */
+  size_t max_subgroups;
+  /* per-device value for CL_KERNEL_COMPILE_NUM_SUB_GROUPS */
+  size_t compile_subgroups;
+
+  /****** workgroups *******/
+  /* per-device value for CL_KERNEL_WORK_GROUP_SIZE */
+  size_t max_workgroup_size;
+  /* per-device value for CL_KERNEL_PREFERRED_WORK_GROUP_SIZE_MULTIPLE */
+  size_t preferred_wg_multiple;
+  /* per-device value for CL_KERNEL_LOCAL_MEM_SIZE */
+  cl_ulong local_mem_size;
+  /* per-device value for CL_KERNEL_PRIVATE_MEM_SIZE */
+  cl_ulong private_mem_size;
+  /* per-device value for CL_KERNEL_SPILL_MEM_SIZE_INTEL */
+  cl_ulong spill_mem_size;
+
+  /* driver-specific data */
+  void *driver_data;
+} pocl_kernel_device_metadata_t;
+
+/** Device agnostic kernel metadata */
 typedef struct pocl_kernel_metadata_s
 {
   cl_uint num_args;
@@ -1873,28 +1951,13 @@ typedef struct pocl_kernel_metadata_s
   size_t reqd_wg_size[OPENCL_MAX_DIMENSION];
   size_t wg_size_hint[OPENCL_MAX_DIMENSION];
   char vectypehint[16];
+  /* required sub-group size set with the intel_reqd_sub_group_size kernel
+     attribute; 0 if not set */
+  size_t reqd_sub_group_size;
 
   /* if we know the size of _every_ kernel argument, we store
    * the total size here. see struct _cl_kernel on why */
   size_t total_argument_storage_size;
-
-  /****** subgroups *******/
-  /* per-device value for CL_KERNEL_MAX_NUM_SUB_GROUPS */
-  size_t *max_subgroups;
-  /* per-device value for CL_KERNEL_COMPILE_NUM_SUB_GROUPS */
-  size_t *compile_subgroups;
-
-  /****** workgroups *******/
-  /* per-device value for CL_KERNEL_WORK_GROUP_SIZE */
-  size_t *max_workgroup_size;
-  /* per-device value for CL_KERNEL_PREFERRED_WORK_GROUP_SIZE_MULTIPLE */
-  size_t *preferred_wg_multiple;
-  /* per-device value for CL_KERNEL_LOCAL_MEM_SIZE */
-  cl_ulong *local_mem_size;
-  /* per-device value for CL_KERNEL_PRIVATE_MEM_SIZE */
-  cl_ulong *private_mem_size;
-  /* per-device value for CL_KERNEL_SPILL_MEM_SIZE_INTEL */
-  cl_ulong *spill_mem_size;
 
   /* per-device array of hashes */
   pocl_kernel_hash_t *build_hash;
@@ -1907,8 +1970,9 @@ typedef struct pocl_kernel_metadata_s
    * Only applies to builtin kernels */
   size_t_3 builtin_max_global_work;
 
-  /* device-specific METAdata, void* array[program->num_devices] */
-  void **data;
+  /* Array with one entry for each associated device for device-specific
+   * metadata */
+  pocl_kernel_device_metadata_t *devices;
 } pocl_kernel_metadata_t;
 
 #define MAIN_PROGRAM_LOG_SIZE 6400
@@ -2001,6 +2065,8 @@ typedef struct _pocl_ptr_list_node pocl_ptr_list;
 struct _pocl_ptr_list_node
 {
   void *ptr;
+  /* The clSetKernelExecInfo() parameter that registered this pointer. */
+  cl_kernel_exec_info param_name;
   struct _pocl_ptr_list_node *prev, *next;
 };
 
@@ -2134,6 +2200,28 @@ struct _cl_event {
 
   /* The execution status of the command this event is monitoring. */
   cl_int status;
+
+  /* Set to 1 when one of this command's wait-list dependencies has failed
+   * (finished with a negative status) and therefore this command must not run
+   * but must instead be terminated with the error cascade (OpenCL spec: a
+   * command whose wait-list event has a negative status is terminated and the
+   * error propagated). It is set in two situations the normal
+   * broadcast -> notify failure path cannot cover on its own:
+   *   - In pocl_create_event_sync, when the dependency is ALREADY failed at the
+   *     moment the sync edge would be wired. No edge is created (the notifier
+   *     has already broadcast and will not do so again), so without this flag
+   *     the waiter would be left ready with an empty wait_list and run.
+   *   - In pocl_broadcast, when a dependency finishes failed but the target is
+   *     transiently not in a failable state (e.g. a concurrent broadcast for a
+   *     different, completed dependency is mid-flight), so the immediate notify
+   *     cannot fail it.
+   * The device submit and notify paths check this flag and fail the command via
+   * pocl_update_event_failed. The flag (rather than an inline fail at the set
+   * sites) is required because both set sites hold locks (the command-queue lock
+   * in pocl_create_event_sync, the event lock in pocl_broadcast) under which
+   * failing the event inline would deadlock. */
+  cl_int failed_dependency;
+
   /* implicit event = an event for pocl's internal use, not visible to user */
   char implicit_event;
 
@@ -2145,8 +2233,8 @@ struct _cl_event {
    * profiling is enabled on all queues of the cmdbuffer */
   char profiling_available;
 
-  /* reset command buffer when the event is finished */
-  char reset_command_buffer;
+  /* release command_buffer when the event is finished */
+  char release_command_buffer;
   cl_command_buffer_khr command_buffer;
 
   _cl_event *next;

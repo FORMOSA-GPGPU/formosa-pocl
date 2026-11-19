@@ -23,7 +23,7 @@
 */
 
 #include "pocl_cl.h"
-#include "pocl_image_util.h"
+#include "pocl_cmdbuf.h"
 #include "pocl_mem_management.h"
 #include "pocl_shared.h"
 #include "pocl_util.h"
@@ -52,14 +52,14 @@ pocl_validate_rect_copy (cl_command_queue command_queue,
                          size_t mod_src_origin[3],
                          size_t mod_dst_origin[3])
 {
+  POCL_RETURN_ERROR_COND ((!IS_CL_OBJECT_VALID (src)), CL_INVALID_MEM_OBJECT);
+  POCL_RETURN_ERROR_COND ((!IS_CL_OBJECT_VALID (dst)), CL_INVALID_MEM_OBJECT);
+
   POCL_RETURN_ERROR_ON (
       ((command_queue->context != src->context)
        || (command_queue->context != dst->context)),
       CL_INVALID_CONTEXT,
       "src, dst and command_queue are not from the same context\n");
-
-  POCL_RETURN_ERROR_COND ((!IS_CL_OBJECT_VALID (src)), CL_INVALID_MEM_OBJECT);
-  POCL_RETURN_ERROR_COND ((!IS_CL_OBJECT_VALID (dst)), CL_INVALID_MEM_OBJECT);
   POCL_RETURN_ERROR_COND((src_origin == NULL), CL_INVALID_VALUE);
   POCL_RETURN_ERROR_COND((dst_origin == NULL), CL_INVALID_VALUE);
   POCL_RETURN_ERROR_COND((region == NULL), CL_INVALID_VALUE);
@@ -198,6 +198,21 @@ pocl_validate_rect_copy (cl_command_queue command_queue,
           "src and dst are the same object,"
           "and source and destination regions overlap\n");
     }
+  else if (!src_is_image && !dst_is_image && src->parent && dst->parent
+           && src->parent == dst->parent)
+    {
+      /* Different sub-buffers of the same buffer: the specification
+         requires CL_MEM_COPY_OVERLAP when their regions overlap in the
+         parent, as pocl_buffers_overlap already checks for plain copies. */
+      POCL_RETURN_ERROR_ON (
+          (pocl_check_subbuffer_copy_overlap (
+              src->origin, mod_src_origin, *src_row_pitch, *src_slice_pitch,
+              dst->origin, mod_dst_origin, *dst_row_pitch, *dst_slice_pitch,
+              mod_region)),
+          CL_MEM_COPY_OVERLAP,
+          "src and dst are sub-buffers of the same buffer, "
+          "and source and destination regions overlap in it\n");
+    }
 
   return CL_SUCCESS;
 }
@@ -290,7 +305,7 @@ pocl_rect_copy (cl_command_buffer_khr command_buffer,
     }
   else
     {
-      errcode = pocl_create_recorded_command (
+      errcode = pocl_cmdbuf_create_command (
         cmd, command_buffer, command_queue, command_type,
         num_items_in_wait_list, sync_point_wait_list, migr_infos);
     }

@@ -25,7 +25,7 @@
 
 include("bitcode_rules")
 
-set(KERNEL_SOURCES ${SOURCES_GENERIC})
+set(KERNEL_SOURCES ${SOURCES_GENERIC} ${FORMOSA_MATH_SOURCES})
 
 foreach(FILE printf.c printf_base.c get_local_id.c get_local_size.c get_group_id.c
     get_global_size.c get_num_groups.c get_work_dim.c get_global_id.c
@@ -52,7 +52,6 @@ list(APPEND KERNEL_SOURCES
   get_image_channel_order.cl get_image_depth.cl get_image_dim.cl
   get_image_height.cl get_image_width.cl read_image.cl write_image.cl)
 
-list(APPEND KERNEL_SOURCES "formosa/printf_globals.c")
 list(APPEND KERNEL_SOURCES "formosa/printf_alloc.c")
 # Reuse PoCL's old-style and C11 atomics, including generic-AS overloads.
 # Zacas provides compare-exchange without per-lane LR/SC reservations.

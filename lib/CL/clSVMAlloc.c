@@ -111,9 +111,13 @@ POname(clSVMAlloc)(cl_context context,
   item->vm_ptr = ptr;
   item->size = size;
   int inserted = pocl_raw_ptr_set_insert (context->raw_ptrs, item);
-  assert (inserted);
-  (void)inserted;
   POCL_UNLOCK_OBJ (context);
+
+  if (!inserted) {
+      POCL_MEM_FREE (item);
+      context->svm_allocdev->ops->svm_free (context->svm_allocdev, ptr);
+      return NULL;
+  }
 
   /* Create a shadow cl_mem object for keeping track of the SVM
      allocation and to implement automated migrations, cl_pocl_content_size,
@@ -133,7 +137,6 @@ POname(clSVMAlloc)(cl_context context,
       POCL_LOCK_OBJ (context);
       pocl_raw_ptr_set_erase (context->raw_ptrs, item);
       POCL_UNLOCK_OBJ (context);
-      POCL_MEM_FREE (item);
       context->svm_allocdev->ops->svm_free (context->svm_allocdev, ptr);
       POCL_MSG_ERR ("Failed to allocate memory a shadow cl_mem object.\n");
       return NULL;

@@ -26,9 +26,6 @@
 # do not link test_dlopen with -lOpenCL
 if (UNIX AND HAVE_DLFCN_H)
   add_executable("test_dlopen" "test_dlopen.c")
-  if(SANITIZER_OPTIONS)
-    target_link_libraries("test_dlopen" ${SANITIZER_LIBS})
-  endif()
   target_link_libraries("test_dlopen" ${DL_LIB})
   add_symlink_to_built_opencl_dynlib(test_dlopen)
 endif ()
@@ -40,14 +37,22 @@ set(C_PROGRAMS_TO_BUILD test_clFinish test_clGetDeviceInfo test_clGetEventInfo
   test_clSetEventCallback test_clEnqueueNativeKernel test_clBuildProgram
   test_clCreateKernelsInProgram test_clCreateKernel test_clGetKernelArgInfo
   test_version test_kernel_cache_includes test_event_cycle test_link_error
-  test_read-copy-write-buffer test_buffer-image-copy test_clCreateSubDevices test_event_free
-  test_event_double_wait test_buffer_migration test_buffer_ping_pong
+  test_read-copy-write-buffer test_buffer-image-copy test_clCreateSubDevices
+  test_program_binary_subdevices test_event_free
+  test_event_double_wait test_event_failed_dependency test_buffer_migration
+  test_buffer_ping_pong
   test_enqueue_kernel_from_binary test_user_event test_fill-buffer
   test_clSetMemObjectDestructorCallback test_dbk_jpeg
   test_cl_pocl_content_size test_cl_pocl_content_size_migration
   test_deviceside_enqueue test_command_buffer test_command_buffer_images
+  test_command_buffer_in_order
   test_command_buffer_multi_device test_queue_creation_with_hints
-  test_remote_discovery test_dbk_color_convert)
+  test_remote_discovery test_dbk_color_convert test_subgroup_queries
+  test_image_normalized_conv)
+
+if(HAVE_LLVM_SPIRV_LIB_ERROR_HANDLING)
+  list(APPEND C_PROGRAMS_TO_BUILD test_clBuildProgram_unsupported_spirv)
+endif()
 
 if(ENABLE_FORMOSA)
   list(APPEND C_PROGRAMS_TO_BUILD test_formosa_extension_discovery)
@@ -55,6 +60,10 @@ endif()
 
 if(HAVE_ONNXRT)
   list(APPEND C_PROGRAMS_TO_BUILD test_dbk_onnx_inference)
+endif()
+
+if(ENABLE_HOST_CPU_DEVICES AND NOT ENABLE_HOST_CPU_DEVICES_OPENMP)
+  list(APPEND C_PROGRAMS_TO_BUILD test_worker_wakeup)
 endif()
 
 set(CXX_PROGRAMS_TO_BUILD test_device_address test_svm test_large_buf
@@ -95,6 +104,15 @@ add_test_pocl(NAME "runtime/clBuildProgram"
               COMMAND "test_clBuildProgram"
               WORKITEM_HANDLER "loopvec")
 
+if(HAVE_LLVM_SPIRV_LIB_ERROR_HANDLING)
+  # A SPIR-V module the reader rejects must produce a build error, not kill the
+  # host process.
+  add_test_pocl(NAME "runtime/clBuildProgram_unsupported_spirv"
+                COMMAND "test_clBuildProgram_unsupported_spirv"
+                "${CMAKE_CURRENT_SOURCE_DIR}/test_clBuildProgram_unsupported_spirv.spv"
+                WORKITEM_HANDLER "loopvec")
+endif()
+
 add_test_pocl(NAME "runtime/test_kernel_cache_includes"
               WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
               COMMAND "test_kernel_cache_includes"
@@ -116,6 +134,20 @@ add_test_pocl(NAME "runtime/clCreateKernel" COMMAND "test_clCreateKernel" WORKIT
 
 add_test_pocl(NAME "runtime/clGetKernelArgInfo" COMMAND "test_clGetKernelArgInfo" WORKITEM_HANDLER "loopvec")
 
+add_test_pocl(NAME "runtime/test_subgroup_queries" COMMAND "test_subgroup_queries" WORKITEM_HANDLER "loopvec")
+
+if(ENABLE_HOST_CPU_DEVICES AND NOT ENABLE_HOST_CPU_DEVICES_OPENMP)
+  # relies on the pthread scheduler running one work-group per compute unit
+  # concurrently, which other tests running in parallel can get in the way of
+  add_test_pocl(NAME "runtime/test_worker_wakeup" COMMAND "test_worker_wakeup" WORKITEM_HANDLER "loopvec")
+  set_property(TEST "runtime/test_worker_wakeup"
+               APPEND PROPERTY ENVIRONMENT "POCL_DEVICES=cpu")
+  set_tests_properties("runtime/test_worker_wakeup"
+    PROPERTIES
+      RUN_SERIAL TRUE
+      DEPENDS "pocl_version_check")
+endif()
+
 add_test_pocl(NAME "runtime/clSetEventCallback"
               COMMAND "test_clSetEventCallback"
               EXPECTED_OUTPUT "test_clSetEventCallback_expout.txt"
@@ -123,17 +155,31 @@ add_test_pocl(NAME "runtime/clSetEventCallback"
 
 add_test(NAME "runtime/clGetSupportedImageFormats" COMMAND "test_clGetSupportedImageFormats")
 
+add_test(NAME "runtime/test_image_normalized_conv" COMMAND "test_image_normalized_conv")
+
 add_test_pocl(NAME "runtime/clCreateKernelsInProgram" COMMAND "test_clCreateKernelsInProgram" WORKITEM_HANDLER "loopvec")
 
 add_test(NAME "runtime/clCreateSubDevices" COMMAND  "test_clCreateSubDevices")
+
+# two root devices, one of them partitionable; skips (77) where there aren't
+add_test(NAME "runtime/test_program_binary_subdevices" COMMAND "test_program_binary_subdevices")
+set_tests_properties("runtime/test_program_binary_subdevices" PROPERTIES
+  ENVIRONMENT "POCL_DEVICES=pthread basic"
+  SKIP_RETURN_CODE 77)
 
 add_test_pocl(NAME "runtime/test_event_free" COMMAND  "test_event_free" WORKITEM_HANDLER "loopvec")
 
 add_test_pocl(NAME "runtime/test_event_double_wait" COMMAND  "test_event_double_wait" WORKITEM_HANDLER "loopvec")
 
+add_test_pocl(NAME "runtime/test_event_failed_dependency" COMMAND  "test_event_failed_dependency" WORKITEM_HANDLER "loopvec")
+
 add_test_pocl(NAME "runtime/test_enqueue_kernel_from_binary" COMMAND "test_enqueue_kernel_from_binary" WORKITEM_HANDLER "loopvec")
 
 add_test_pocl(NAME "runtime/test_user_event" COMMAND  "test_user_event" WORKITEM_HANDLER "loopvec")
+# Without queue threads, the CUDA driver aborts on commands that wait on
+# user events.
+set_property(TEST "runtime/test_user_event"
+  APPEND PROPERTY ENVIRONMENT "POCL_CUDA_DISABLE_QUEUE_THREADS=0")
 
 add_test(NAME "runtime/test_buffer_migration" COMMAND "test_buffer_migration")
 
@@ -148,6 +194,8 @@ add_test_pocl(NAME "runtime/test_deviceside_enqueue" COMMAND "test_deviceside_en
 add_test(NAME "runtime/test_command_buffer" COMMAND "test_command_buffer")
 
 add_test(NAME "runtime/test_command_buffer_images" COMMAND "test_command_buffer_images")
+
+add_test(NAME "runtime/test_command_buffer_in_order" COMMAND "test_command_buffer_in_order")
 
 add_test(NAME "runtime/test_command_buffer_multi_device" COMMAND "test_command_buffer_multi_device")
 
@@ -239,11 +287,13 @@ set_tests_properties( "runtime/clGetDeviceInfo" "runtime/clEnqueueNativeKernel"
   "runtime/test_read-copy-write-buffer" "runtime/test_buffer-image-copy"
   "runtime/clCreateKernel" "runtime/test_fill-buffer"
   "runtime/test_event_free" "runtime/test_event_double_wait"
+  "runtime/test_event_failed_dependency"
   "runtime/test_enqueue_kernel_from_binary" "runtime/test_user_event"
   "runtime/test_buffer_migration" "runtime/test_buffer_ping_pong"
   "runtime/clSetMemObjectDestructorCallback" "runtime/test_link_error"
   "runtime/test_cl_pocl_content_size" "runtime/test_deviceside_enqueue"
   "runtime/test_command_buffer" "runtime/test_command_buffer_images"
+  "runtime/test_command_buffer_in_order"
   "runtime/test_command_buffer_multi_device"
   "runtime/test_device_address" "runtime/test_svm"
   "runtime/test_device_address" "runtime/test_svm"
@@ -251,6 +301,8 @@ set_tests_properties( "runtime/clGetDeviceInfo" "runtime/clEnqueueNativeKernel"
   "runtime/test_queue_creation_with_hints"
   "runtime/clGetKernelArgInfo"
   "runtime/clCreateSubDevices"
+  "runtime/test_subgroup_queries"
+  "runtime/test_image_normalized_conv"
   PROPERTIES
     COST 2.0
     PROCESSORS 1
@@ -266,10 +318,12 @@ set_tests_properties(
   "runtime/clEnqueueNativeKernel"
   "runtime/test_command_buffer"
   "runtime/test_command_buffer_images"
+  "runtime/test_command_buffer_in_order"
   "runtime/test_command_buffer_multi_device"
   "runtime/test_device_address"
   "runtime/test_svm"
   "runtime/test_large_buf"
+  "runtime/test_image_normalized_conv"
   PROPERTIES SKIP_RETURN_CODE 77)
 
 if(ENABLE_REMOTE_CLIENT AND ENABLE_REMOTE_SERVER AND ENABLE_HOST_CPU_DEVICES)
@@ -301,6 +355,8 @@ if(ENABLE_REMOTE_CLIENT AND ENABLE_REMOTE_SERVER AND ENABLE_HOST_CPU_DEVICES)
            COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/scripts/test_remote_runner_single.sh" "${CMAKE_BINARY_DIR}" "tests/runtime/test_clCreateKernelsInProgram")
   add_test(NAME "remote/clCreateSubDevices"
            COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/scripts/test_remote_runner_single.sh" "${CMAKE_BINARY_DIR}" "tests/runtime/test_clCreateSubDevices")
+  add_test(NAME "remote/test_compile_n_link"
+           COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/scripts/test_remote_runner_single.sh" "${CMAKE_BINARY_DIR}" "tests/runtime/test_compile_n_link")
   add_test(NAME "remote/test_event_free"
            COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/scripts/test_remote_runner_single.sh" "${CMAKE_BINARY_DIR}" "tests/runtime/test_event_free")
   add_test(NAME "remote/test_event_double_wait"
@@ -327,6 +383,8 @@ if(ENABLE_REMOTE_CLIENT AND ENABLE_REMOTE_SERVER AND ENABLE_HOST_CPU_DEVICES)
            COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/scripts/test_remote_runner_single.sh" "${CMAKE_BINARY_DIR}" "tests/runtime/test_command_buffer")
   add_test(NAME "remote/test_command_buffer_images"
            COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/scripts/test_remote_runner_single.sh" "${CMAKE_BINARY_DIR}" "tests/runtime/test_command_buffer_images")
+  add_test(NAME "remote/test_command_buffer_in_order"
+           COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/scripts/test_remote_runner_single.sh" "${CMAKE_BINARY_DIR}" "tests/runtime/test_command_buffer_in_order")
   add_test(NAME "remote/test_command_buffer_multi_device"
            COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/scripts/test_remote_runner_multi.sh" "${CMAKE_BINARY_DIR}" "tests/runtime/test_command_buffer_multi_device")
   add_test(NAME "remote/test_device_address"
@@ -348,6 +406,7 @@ if(ENABLE_REMOTE_CLIENT AND ENABLE_REMOTE_SERVER AND ENABLE_HOST_CPU_DEVICES)
     "remote/clEnqueueNativeKernel"
     "remote/test_command_buffer"
     "remote/test_command_buffer_images"
+    "remote/test_command_buffer_in_order"
     "remote/test_command_buffer_multi_device"
     "remote/test_device_address"
     "remote/test_svm"
@@ -368,11 +427,12 @@ if(ENABLE_REMOTE_CLIENT AND ENABLE_REMOTE_SERVER AND ENABLE_HOST_CPU_DEVICES)
     "remote/test_enqueue_kernel_from_binary" "remote/test_user_event"
     "remote/test_buffer_migration" "remote/test_buffer_ping_pong"
     "remote/clSetMemObjectDestructorCallback" "remote/test_link_error"
-    "remote/test_cl_pocl_content_size"
+    "remote/test_compile_n_link" "remote/test_cl_pocl_content_size"
     "remote/test_cl_pocl_content_size_migration_host_remote"
     "remote/test_cl_pocl_content_size_migration_remote_remote"
     "remote/test_deviceside_enqueue"
     "remote/test_command_buffer" "remote/test_command_buffer_images"
+    "remote/test_command_buffer_in_order"
     "remote/test_command_buffer_multi_device"
     "remote/test_device_address" "remote/test_svm"
     "remote/test_queue_creation_with_hints"
@@ -472,6 +532,7 @@ set_property(TEST
   "runtime/test_event_cycle"
   "runtime/test_event_free"
   "runtime/test_event_double_wait"
+  "runtime/test_event_failed_dependency"
   "runtime/test_user_event"
   "runtime/clSetMemObjectDestructorCallback"
   "runtime/test_deviceside_enqueue"
@@ -521,6 +582,7 @@ set_property(TEST
   "runtime/clGetSupportedImageFormats"
   "runtime/test_event_cycle"
   "runtime/test_event_free"
+  "runtime/test_event_failed_dependency"
   "runtime/test_user_event"
   "runtime/clSetMemObjectDestructorCallback"
   "runtime/test_queue_creation_with_hints"
@@ -531,6 +593,7 @@ set_property(TEST
   "runtime/clGetEventInfo"
   "runtime/test_event_cycle"
   "runtime/test_event_free"
+  "runtime/test_event_failed_dependency"
   "runtime/test_user_event"
   "runtime/clSetMemObjectDestructorCallback"
   "runtime/test_queue_creation_with_hints"
@@ -555,6 +618,7 @@ set_property(TEST
   "runtime/test_read-copy-write-buffer" "runtime/test_buffer-image-copy"
   "runtime/test_fill-buffer"
   "runtime/test_event_free" "runtime/test_event_double_wait" "runtime/clCreateSubDevices"
+  "runtime/test_event_failed_dependency"
   "runtime/test_enqueue_kernel_from_binary" "runtime/test_user_event"
   "runtime/test_buffer_migration"
   "runtime/test_buffer_ping_pong"

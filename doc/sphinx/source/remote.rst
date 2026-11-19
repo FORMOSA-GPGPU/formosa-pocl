@@ -137,7 +137,7 @@ Known Bugs/Issues in OpenCL Implementations
 
 .. _tree-sitter grammar: https://github.com/lefp/tree-sitter-opencl.git
 
-.. _remote-how-to-build-label:
+.. _remote-how-to-build:
 
 How to Build
 -------------
@@ -372,6 +372,30 @@ involved machines (1 microsecond or so should be good enough). The simplest
 way to achieve that seems to have all machines are equipped with an Intel NIC,
 and then setup PTP (Precision time protocol). Note that PTP requires hardware
 support from *every* network device in path to achieve sub-microsecond precision.
+
+Network Event Traces
+~~~~~~~~~~~~~~~~~~~~
+
+PoCL-Remote also has a bespoke performance tracing function for network commands
+specifically. This is mainly intended as a tool for developers to help diagnose
+performance bottlenecks in PoCL-Remote itself and as such is *not* part of the
+PoCL build. The traces come in the form of a minimal binary trace file format
+and a SDL3-based standalone viewer, the sources of which can be found under
+``tools/remote-trace-viewer``.
+
+To create a trace, assign the desired output file name to the
+``POCL_REMOTE_NETWORK_TRACE`` environment variable before launching the OpenCL
+application to be traced. Afterwards launch the viewer with the trace file as
+the its command line argument::
+
+    export POCL_DEVICES=remote
+    export POCL_REMOTE0_PARAMETERS=localhost:7777/0
+    export POCL_REMOTE_NETWORK_TRACE=remote-clinfo.trace
+    clinfo
+    tools/remote-trace-viewer/build/viewer remote-clinfo.trace
+
+.. note::
+    The file will only be created once the application exits.
 
 Distributed SYCL Execution Using PoCL-R
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

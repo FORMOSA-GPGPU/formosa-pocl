@@ -29,7 +29,10 @@
 #include "CompilerWarnings.h"
 IGNORE_COMPILER_WARNING("-Wmaybe-uninitialized")
 #include <llvm/ADT/StringRef.h>
+#include <llvm/ADT/StringSet.h>
 #include <llvm/ADT/Twine.h>
+#include <llvm/IR/InstIterator.h>
+#include <llvm/IR/InstrTypes.h>
 #include <llvm/TargetParser/Triple.h>
 POP_COMPILER_DIAGS
 IGNORE_COMPILER_WARNING("-Wunused-parameter")
@@ -46,11 +49,10 @@ IGNORE_COMPILER_WARNING("-Wunused-parameter")
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Linker/Linker.h>
-#if LLVM_MAJOR >= 18
 #include <llvm/Support/CodeGen.h>
-#endif
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Target/TargetOptions.h>
+#include <llvm/Transforms/IPO/Internalize.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 // legacy PassManager is needed for CodeGen, even if new PM is used for IR
 #include <llvm/IR/LegacyPassManager.h>
@@ -59,9 +61,7 @@ IGNORE_COMPILER_WARNING("-Wunused-parameter")
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Passes/StandardInstrumentations.h>
 #include <llvm/Transforms/Scalar/LoopPassManager.h>
-#if LLVM_MAJOR >= 18
 #include <llvm/Frontend/Driver/CodeGenOptions.h>
-#endif
 
 #include "LLVMUtils.h"
 POP_COMPILER_DIAGS
@@ -72,6 +72,7 @@ POP_COMPILER_DIAGS
 #include "pocl_file_util.h"
 #include "pocl_llvm.h"
 #include "pocl_llvm_api.h"
+#include "pocl_run_command.h"
 #include "pocl_spir.h"
 #include "pocl_util.h"
 
@@ -106,29 +107,72 @@ POP_COMPILER_DIAGS
 
 using namespace llvm;
 
+static bool verifyIR() {
+  return pocl_get_bool_option("POCL_LLVM_VERIFY", LLVM_VERIFY_MODULE_DEFAULT);
+}
+
+static bool enableDebugLogs() {
+  bool Enable = pocl_get_bool_option("POCL_DEBUG_LLVM_PASSES", 0);
+  Enable |= pocl_is_option_set("POCL_DEBUG_LLVM_OPTS");
+  return Enable;
+}
+
 // Returns the TargetMachine instance or zero if no triple is provided.
-static TargetMachine *GetTargetMachine(const char* TTriple,
+// ForJIT selects a code model suitable for the in-process ORC/JITLink JIT (see
+// pocl_llvm_orc.cc); it only changes codegen on COFF targets.
+static TargetMachine *GetTargetMachine(const char* TripleStr,
                                        const char* MCPU = "",
-                                       const char* Features = "") {
+                                       const char* Features = "",
+                                       bool ForJIT = false) {
 
   std::string Error;
 
-  const Target *TheTarget = TargetRegistry::lookupTarget(TTriple,
+  // Normalize the triple before handing it to codegen. A configure-time triple
+  // like "x86_64-w64-mingw32" (LLVM's own default target triple on MinGW, so
+  // what LLC_TRIPLE picks up from a cmake LLVM package) has an OS component
+  // ("mingw32") that llvm::Triple does not recognize, so it falls back to the
+  // ELF object format and the System V ABI -- yielding kernels the COFF/Win64
+  // host then calls with the wrong calling convention (a crash). clang and llc
+  // normalize the triple to "x86_64-w64-windows-gnu" (OS=Win32 => COFF) before
+  // codegen; do the same here so both the object format and the code-model
+  // decision below match the host ABI. A no-op for already-canonical triples.
+  std::string TripleNorm = llvm::Triple::normalize(TripleStr);
+  llvm::Triple TheTriple(TripleNorm);
+
+#if LLVM_MAJOR < 22
+  const Target *TheTarget = TargetRegistry::lookupTarget(TripleNorm,
                                                          Error);
+#else
+  const Target *TheTarget = TargetRegistry::lookupTarget(TheTriple,
+                                                         Error);
+#endif
 
   // OpenASIP targets are not in the registry
   if (!TheTarget) {
     return nullptr;
   }
 
+  // JITLink's COFF/x86-64 backend does not synthesize far-call stubs (its ELF
+  // and Mach-O backends do). Under the small code model a kernel's +-2GB
+  // PC-relative call to a runtime helper mapped far from the JIT-allocated code
+  // overflows: the libgcc stack probe (___chkstk_ms) and msvcrt's mem* helpers
+  // both live in libraries outside that range. The large code model emits
+  // 64-bit indirect calls instead, so they resolve wherever they are. Hence the
+  // COFF JIT only; ELF/Mach-O and the linker-based paths are fine with small +
+  // PIC.
+  CodeModel::Model CM = CodeModel::Small;
+  if (ForJIT && TheTriple.isOSBinFormatCOFF())
+    CM = CodeModel::Large;
+
   TargetMachine *TM = TheTarget->createTargetMachine(
-      TTriple, MCPU, Features, TargetOptions(),
-      Reloc::PIC_, CodeModel::Small,
-#if LLVM_MAJOR >= 18
-      CodeGenOptLevel::Aggressive);
+#if LLVM_MAJOR < 22
+      TripleNorm,
 #else
-      CodeGenOpt::Aggressive);
+      TheTriple,
 #endif
+      MCPU, Features, TargetOptions(),
+      Reloc::PIC_, CM,
+      CodeGenOptLevel::Aggressive);
 
   assert(TM != NULL && "llvm target has no targetMachine constructor");
 
@@ -148,19 +192,16 @@ class PoCLModulePassManager {
 #ifdef PER_STAGE_TARGET_MACHINE
   std::unique_ptr<llvm::TargetMachine> Machine;
 #endif
-#ifdef DEBUG_NEW_PASS_MANAGER
   PrintPassOptions PrintPassOpts;
   PassInstrumentationCallbacks PIC;
   llvm::LLVMContext Context; // for SI
-#endif
   std::unique_ptr<PassBuilder> PassB;
   unsigned OptimizeLevel;
-  unsigned SizeLevel;
   bool Vectorize = false;
 
 public:
   PoCLModulePassManager() = default;
-  llvm::Error build(std::string PoclPipeline, unsigned OLevel, unsigned SLevel,
+  llvm::Error build(std::string PoclPipeline, unsigned OLevel,
                     bool EnableVectorizers,
 #ifndef PER_STAGE_TARGET_MACHINE
                     TargetMachine *TM,
@@ -170,7 +211,7 @@ public:
 };
 
 llvm::Error PoCLModulePassManager::build(std::string PoclPipeline,
-                                         unsigned OLevel, unsigned SLevel,
+                                         unsigned OLevel,
                                          bool EnableVectorizers,
 #ifndef PER_STAGE_TARGET_MACHINE
                                          TargetMachine *TM,
@@ -189,26 +230,24 @@ llvm::Error PoCLModulePassManager::build(std::string PoclPipeline,
   PTO.UnifiedLTO = false;
   PTO.SLPVectorization = PTO.LoopVectorization = Vectorize = EnableVectorizers;
   OptimizeLevel = OLevel;
-  SizeLevel = SLevel;
 
-#ifdef DEBUG_NEW_PASS_MANAGER
-  PrintPassOpts.Verbose = true;
-  PrintPassOpts.SkipAnalyses = false;
+  PrintPassOpts.Verbose = false;
+  PrintPassOpts.SkipAnalyses = true;
   PrintPassOpts.Indent = true;
   SI.reset(new StandardInstrumentations(Context,
-                                        true, // debug logging
-                                        false, // verify each
+                                        enableDebugLogs(), // debug logging
+                                        verifyIR(),        // verify each
                                         PrintPassOpts));
   SI->registerCallbacks(PIC, &MAM);
-#endif
+
   // Create the new pass manager builder.
   // Take a look at the PassBuilder constructor parameters for more
   // customization, e.g. specifying a TargetMachine or various debugging
   // options.
-#ifdef DEBUG_NEW_PASS_MANAGER
-  PassB.reset(new PassBuilder(TM, PTO, std::nullopt, &PIC));
+#if LLVM_MAJOR >= 24
+  PassB.reset(new PassBuilder(Context, TM, PTO, std::nullopt, &PIC));
 #else
-  PassB.reset(new PassBuilder(TM, PTO));
+  PassB.reset(new PassBuilder(TM, PTO, std::nullopt, &PIC));
 #endif
   PassBuilder &PB = *PassB.get();
 
@@ -259,11 +298,7 @@ llvm::Error PoCLModulePassManager::build(std::string PoclPipeline,
   pocl::registerPassBuilderPasses(PB);
 
 #ifndef SEPARATE_OPTIMIZATION_FROM_POCL_PASSES
-  OptimizationLevel Opt;
-  if (SizeLevel > 0)
-    PoclPipeline += ",default<Os>";
-  else {
-    switch (OptimizeLevel) {
+  switch (OptimizeLevel) {
     case 0:
       PoclPipeline += ",default<O0>";
       break;
@@ -287,7 +322,7 @@ llvm::Error PoCLModulePassManager::build(std::string PoclPipeline,
 void PoCLModulePassManager::run(llvm::Module &Bitcode) {
   PM.run(Bitcode, MAM);
 #ifdef SEPARATE_OPTIMIZATION_FROM_POCL_PASSES
-  populateModulePM(nullptr, (void *)&Bitcode, OptimizeLevel, SizeLevel,
+  populateModulePM(nullptr, (void *)&Bitcode, OptimizeLevel,
                    Vectorize, Machine.get());
 #endif
 }
@@ -316,16 +351,16 @@ class TwoStagePoCLModulePassManager {
 public:
   TwoStagePoCLModulePassManager() = default;
   llvm::Error build(cl_device_id Dev, const std::string &Stage1Pipeline,
-                    unsigned Stage1OLevel, unsigned Stage1SLevel,
+                    unsigned Stage1OLevel,
                     const std::string &Stage2Pipeline,
-                    unsigned Stage2OLevel, unsigned Stage2SLevel);
+                    unsigned Stage2OLevel);
   void run(llvm::Module &Bitcode);
 };
 
 llvm::Error TwoStagePoCLModulePassManager::build(
     cl_device_id Dev, const std::string &Stage1Pipeline, unsigned Stage1OLevel,
-    unsigned Stage1SLevel, const std::string &Stage2Pipeline,
-    unsigned Stage2OLevel, unsigned Stage2SLevel) {
+    const std::string &Stage2Pipeline,
+    unsigned Stage2OLevel) {
 
   // Do not vectorize in the first round of (cleanup) optimizations to avoid
   // ending up with only vectorizing across the k-loops before the wi-loops have
@@ -338,7 +373,7 @@ llvm::Error TwoStagePoCLModulePassManager::build(
   TargetMachine *TMach = Machine.get();
 #endif
   llvm::Error E1 =
-      Stage1.build(Stage1Pipeline, Stage1OLevel, Stage1SLevel, Vectorize,
+      Stage1.build(Stage1Pipeline, Stage1OLevel, Vectorize,
 #ifndef PER_STAGE_TARGET_MACHINE
                    TMach,
 #endif
@@ -351,7 +386,7 @@ llvm::Error TwoStagePoCLModulePassManager::build(
   Vectorize = ((CurrentWgMethod == "loopvec" || CurrentWgMethod == "cbs") &&
                (!Dev->spmd));
 
-  return Stage2.build(Stage2Pipeline, Stage2OLevel, Stage2SLevel, Vectorize,
+  return Stage2.build(Stage2Pipeline, Stage2OLevel, Vectorize,
 #ifndef PER_STAGE_TARGET_MACHINE
                       TMach,
 #endif
@@ -466,6 +501,8 @@ static void addStage1PassesToPipeline(cl_device_id Dev,
   // don't forget to register it in registerPassBuilderPasses
   addPass(Passes, "fix-min-legal-vec-size", PassType::Module);
   addPass(Passes, "inline-kernels");
+  // Sanitize integer div/rem before optimizing: LLVM treats division by zero
+  // as UB, and can e.g. remove a later check of the divisor against zero.
   if (Dev->run_sanitize_divrem_pass)
     addPass(Passes, "sanitize-ub-of-div-rem");
 
@@ -647,7 +684,7 @@ static bool runKernelCompilerPasses(cl_device_id Device, llvm::Module &Mod,
   addStage2PassesToPipeline(Device, Passes2);
   std::string P2 = convertPassesToPipelineString(Passes2);
 
-  Error E = PM.build(Device, P1, Optimize ? 1 : 0, 0, P2, Optimize ? 3 : 0, 0);
+  Error E = PM.build(Device, P1, Optimize ? 1 : 0, P2, Optimize ? 3 : 0);
   if (E) {
     std::cerr << "LLVM: failed to create compilation pipeline";
     return false;
@@ -709,7 +746,7 @@ public:
       return false;
     }
 
-    if (pocl_get_bool_option("POCL_LLVM_VERIFY", LLVM_VERIFY_MODULE_DEFAULT)) {
+    if (verifyIR()) {
       std::string ErrorLog;
       llvm::raw_string_ostream Errs(ErrorLog);
       if (llvm::verifyModule(*ProgramGVarsNonKernelsBC.get(), &Errs)) {
@@ -736,7 +773,7 @@ public:
 
     copyKernelFromBitcode(KernelName, KernelBC.get(), ProgramBC.get(), nullptr);
 
-    if (pocl_get_bool_option("POCL_LLVM_VERIFY", LLVM_VERIFY_MODULE_DEFAULT)) {
+    if (verifyIR()) {
       llvm::raw_string_ostream Errs(*BuildLog);
       if (llvm::verifyModule(*KernelBC.get(), &Errs)) {
         POCL_MSG_ERR("Failed to verify Kernel Module:\n%s\n",
@@ -945,6 +982,121 @@ pocl_llvm_run_pocl_passes(llvm::Module *Bitcode,
   return 0;
 }
 
+#ifdef HOST_CPU_ENABLE_JIT
+/* Whether the work-group module could still need symbols from the kernel
+   library: a referenced declaration the object would leave undefined, or a
+   direct call whose callee Function belongs to another module (the two cases
+   linkKernelLibraryForJIT() exists to fix). Modules without either are
+   already self-contained. Deciding this before touching the kernel library
+   keeps the fast path from loading the shared builtin module, selectively
+   linking it, and re-optimizing the result during the first kernel launch. */
+static bool workGroupModuleIsSelfContained(llvm::Module *ParallelBC) {
+  for (const llvm::GlobalVariable &GV : ParallelBC->globals())
+    if (GV.isDeclaration() && !GV.use_empty())
+      return false;
+  for (llvm::Function &F : *ParallelBC) {
+    if (F.isDeclaration() && !F.isIntrinsic() && !F.use_empty())
+      return false;
+    for (llvm::Instruction &I : llvm::instructions(F)) {
+      auto *CB = llvm::dyn_cast<llvm::CallBase>(&I);
+      if (CB == nullptr)
+        continue;
+      llvm::Function *Callee = CB->getCalledFunction();
+      if (Callee != nullptr && !Callee->isIntrinsic() &&
+          Callee->getParent() != ParallelBC)
+        return false;
+    }
+  }
+  return true;
+}
+
+/* Make an in-process JIT work-group object self-contained.
+
+   The JIT links each kernel object in isolation, so every builtin the kernel
+   references must be defined in the object. Two things leave them unresolved:
+
+   - A pocl pass can leave a call whose callee Function still belongs to the
+     program / kernel-library module (they share the LLVMContext). Such a
+     cross-module reference is absent from this module's symbol table.
+   - clBuildProgram's callgraph-selective link only copied the builtins the
+     program IR referenced at that point; e.g. FP16 vector math helpers
+     (_cl_sinDv4_Dh, ...) can still be referenced but undefined here.
+
+   The shared-library path resolves both at the final .so link. Do the
+   equivalent at IR time: localize the cross-module references, copy the
+   referenced builtin bodies from the device kernel library, then internalize
+   everything but the launcher(s) and run GlobalDCE so the object neither
+   leaves builtins undefined nor exports them. Mirrors the CUDA linkLibDevice
+   flow. */
+static int linkKernelLibraryForJIT(llvm::Module *ParallelBC,
+                                   cl_device_id Device,
+                                   PoclLLVMContextData *PoCLLLVMContext) {
+  if (workGroupModuleIsSelfContained(ParallelBC))
+    return 0;
+
+  llvm::Module *KernelLib = getKernelLibrary(Device, PoCLLLVMContext);
+  if (KernelLib == nullptr) {
+    POCL_MSG_ERR("pocl_jit: cannot load the kernel library to finalize the "
+                 "work-group object\n");
+    return -1;
+  }
+
+  // Rewrite calls whose callee still lives in another module to a local
+  // declaration of the same name, so the selective linker below -- which finds
+  // undefined symbols by walking this module's function list -- resolves them
+  // like any other builtin. Restricted to builtins the kernel library actually
+  // defines; anything else (libc/libm/compiler-rt) is left for the JIT to
+  // resolve from process symbols. That also covers pocl host callbacks such as
+  // pocl_flush_printf_buffer when ENABLE_PRINTF_IMMEDIATE_FLUSH is enabled:
+  // defineHostSymbols() provides it as an absolute ORC symbol, and the
+  // program-stage link inserts the declaration only after its unresolved-symbol
+  // check has already run.
+  for (llvm::Function &F : *ParallelBC) {
+    for (llvm::Instruction &I : llvm::instructions(F)) {
+      auto *CB = llvm::dyn_cast<llvm::CallBase>(&I);
+      if (CB == nullptr)
+        continue;
+      llvm::Function *Callee = CB->getCalledFunction();
+      if (Callee == nullptr || Callee->getParent() == ParallelBC ||
+          Callee->isIntrinsic())
+        continue;
+      llvm::Function *LibFunc = KernelLib->getFunction(Callee->getName());
+      if (LibFunc == nullptr || LibFunc->isDeclaration())
+        continue;
+      llvm::FunctionCallee Local = ParallelBC->getOrInsertFunction(
+          Callee->getName(), Callee->getFunctionType());
+      if (auto *LF = llvm::dyn_cast<llvm::Function>(Local.getCallee()))
+        LF->copyAttributesFrom(Callee);
+      CB->setCalledFunction(Local);
+    }
+  }
+
+  // The Workgroup pass leaves only the launcher(s) with external linkage, and
+  // the builtins the link is about to copy in arrive external too. Remember the
+  // current entry points so we can internalize the copied builtins afterwards.
+  llvm::StringSet<> EntryPoints;
+  for (llvm::Function &F : *ParallelBC)
+    if (!F.isDeclaration() && !F.hasLocalLinkage())
+      EntryPoints.insert(F.getName());
+
+  std::string Log;
+  if (link(ParallelBC, KernelLib, Log, Device, /*StripAllDebugInfo=*/true,
+           /*ErrorOnUnresolved=*/false)) {
+    POCL_MSG_ERR("pocl_jit: linking the kernel library into the work-group "
+                 "object failed:\n%s\n",
+                 Log.c_str());
+    return -1;
+  }
+
+  auto PreserveEntryPoints = [&EntryPoints](const llvm::GlobalValue &GV) {
+    return EntryPoints.contains(GV.getName());
+  };
+  internalizeModule(*ParallelBC, PreserveEntryPoints);
+  populateModulePM(nullptr, ParallelBC, /*OptL=*/3);
+  return 0;
+}
+#endif
+
 int pocl_llvm_generate_workgroup_function_nowrite(
     unsigned DeviceI, cl_device_id Device, cl_kernel Kernel,
     _cl_command_node *Command, void **Output, int Specialize) {
@@ -980,15 +1132,22 @@ int pocl_llvm_generate_workgroup_function_nowrite(
                                       PoCLLLVMContext, Program, Kernel, Device,
                                       Specialize);
 
+#ifdef HOST_CPU_ENABLE_JIT
+  // The JIT links each kernel object in isolation, so it must carry every
+  // builtin it references (see linkKernelLibraryForJIT). The shared-library
+  // path resolves those at the final link and is left untouched.
+  if (res == 0 && pocl_cpu_device_uses_jit(Device))
+    res = linkKernelLibraryForJIT(ParallelBC, Device, PoCLLLVMContext);
+#endif
+
   std::string FinalizerCommand =
       pocl_get_string_option("POCL_BITCODE_FINALIZER", "");
   if (!FinalizerCommand.empty()) {
     // Run a user-defined command on the final bitcode.
     char TempParallelBCFileName[POCL_MAX_PATHNAME_LENGTH];
-    int FD = -1, Err = 0;
+    int Err = 0;
 
-    Err = pocl_mk_tempname(TempParallelBCFileName, "/tmp/pocl-parallel", ".bc",
-                           &FD);
+    Err = pocl_cache_tempname(TempParallelBCFileName, ".bc", nullptr);
     POCL_RETURN_ERROR_ON((Err != 0), CL_FAILED,
                          "Failed to create "
                          "temporary file %s\n",
@@ -999,19 +1158,33 @@ int pocl_llvm_generate_workgroup_function_nowrite(
                          "into temporary file %s\n",
                          TempParallelBCFileName);
 
-    std::string Command = std::regex_replace(
-        FinalizerCommand, std::regex(R"(%\(bc\))"), TempParallelBCFileName);
-    Err = system(Command.c_str());
-    POCL_RETURN_ERROR_ON((Err != 0), CL_FAILED,
-                         "Failed to execute "
-                         "bitcode finalizer\n");
+    std::vector<std::string> FinalizerArgsStr;
+    std::stringstream SS(FinalizerCommand);
+    std::string Token;
+    while (SS >> Token) {
+      if (Token == "%(bc)")
+        FinalizerArgsStr.push_back(TempParallelBCFileName);
+      else
+        FinalizerArgsStr.push_back(Token);
+    }
+    if (FinalizerArgsStr.size() > 0) {
+      std::vector<const char *> FinalizerArgs;
+      for (std::string &Str : FinalizerArgsStr)
+        FinalizerArgs.push_back(Str.c_str());
+      FinalizerArgs.push_back(nullptr);
 
-    llvm::Module *NewBitcode =
-        parseModuleIR(TempParallelBCFileName, LLVMContext);
-    POCL_RETURN_ERROR_ON((NewBitcode == nullptr), CL_FAILED,
-                         "failed to parse bitcode from finalizer\n");
-    delete ParallelBC;
-    ParallelBC = NewBitcode;
+      Err = pocl_run_command(FinalizerArgs.data());
+      POCL_RETURN_ERROR_ON((Err != 0), CL_FAILED,
+                           "Failed to execute "
+                           "bitcode finalizer\n");
+
+      llvm::Module *NewBitcode =
+          parseModuleIR(TempParallelBCFileName, LLVMContext);
+      POCL_RETURN_ERROR_ON((NewBitcode == nullptr), CL_FAILED,
+                           "failed to parse bitcode from finalizer\n");
+      delete ParallelBC;
+      ParallelBC = NewBitcode;
+    }
   }
 
   assert(Output != NULL);
@@ -1104,7 +1277,12 @@ int pocl_llvm_read_program_llvm_irs(cl_program program, unsigned device_i,
     assert(program_bc_path);
     M = parseModuleIR(program_bc_path, llvm_ctx->Context);
   }
-  assert(M);
+  if (M == nullptr) {
+    POCL_MSG_ERR("pocl: failed to parse program IR for device %u; the cached "
+                 "program.bc may be corrupt (try clearing the kernel cache)\n",
+                 device_i);
+    return CL_BUILD_ERROR;
+  }
   program->llvm_irs[device_i] = M;
   if (dev->run_program_scope_variables_pass)
     parseModuleGVarSize(program, device_i, M);
@@ -1208,7 +1386,7 @@ static TargetLibraryInfoImpl *initPassManagerForCodeGen(legacy::PassManager &PM,
  * Output native object file (<kernel>.so.o). */
 int pocl_llvm_codegen2(const char* TTriple, const char* MCPU,
                        const char *Features, cl_device_type DevType,
-                       pocl_lock_t *Lock, void *Modp, int EmitAsm,
+                       int ForJIT, pocl_lock_t *Lock, void *Modp, int EmitAsm,
                        int EmitObj, char **Output, uint64_t *OutputSize) {
 
   PoclCompilerMutexGuard LockHolder(Lock);
@@ -1218,7 +1396,23 @@ int pocl_llvm_codegen2(const char* TTriple, const char* MCPU,
   *Output = nullptr;
   std::unique_ptr<llvm::TargetLibraryInfoImpl> TLIIPtr;
 
-  std::unique_ptr<llvm::TargetMachine> TM(GetTargetMachine(TTriple, MCPU, Features));
+  // Outline-atomics lowers integer atomicrmw to libgcc __aarch64_* helpers that
+  // are static-only (absent from any dlopen-able lib), so in-process-linked
+  // kernels leave them unresolved and the atomics silently no-op. Emit inline.
+  if (llvm::Triple(TTriple).isAArch64()) {
+    for (llvm::Function &F : *Input) {
+      llvm::Attribute A = F.getFnAttribute("target-features");
+      std::string TF = A.isValid() ? A.getValueAsString().str() : std::string();
+      // A trailing "-outline-atomics" wins: LLVM applies features left-to-right.
+      if (!TF.empty())
+        TF += ",";
+      TF += "-outline-atomics";
+      F.addFnAttr("target-features", TF);
+    }
+  }
+
+  std::unique_ptr<llvm::TargetMachine> TM(
+      GetTargetMachine(TTriple, MCPU, Features, ForJIT));
   llvm::TargetMachine *Target = TM.get();
 
   // First try direct object code generation from LLVM, if supported by the
@@ -1236,12 +1430,8 @@ int pocl_llvm_codegen2(const char* TTriple, const char* MCPU,
     TLIIPtr.reset(initPassManagerForCodeGen(PMObj, TTriple, DevType));
 
     cannotEmitFile = Target->addPassesToEmitFile(PMObj, SOS, nullptr,
-  #if LLVM_MAJOR < 18
-                                                 llvm::CGFT_ObjectFile);
-  #else
                                                  llvm::CodeGenFileType::
-                                                     ObjectFile);
-  #endif
+                                                 ObjectFile);
     LLVMGeneratesObjectFiles = !cannotEmitFile;
 
     if (LLVMGeneratesObjectFiles) {
@@ -1280,12 +1470,7 @@ int pocl_llvm_codegen2(const char* TTriple, const char* MCPU,
     // to produce the binary.
 
     if (Target->addPassesToEmitFile(PMAsm, SOS, nullptr,
-  #if LLVM_MAJOR < 18
-                                    llvm::CGFT_AssemblyFile)
-  #else
-                                    llvm::CodeGenFileType::AssemblyFile)
-  #endif
-    ) {
+                                    llvm::CodeGenFileType::AssemblyFile)) {
       POCL_MSG_ERR(
           "llvm_codegen: The target supports neither obj nor asm emission!");
       return -1;
@@ -1356,12 +1541,13 @@ int pocl_llvm_codegen(cl_device_id Device, cl_program Program,
   PoclLLVMContextData *LLVMCtx = (PoclLLVMContextData *)Ctx->llvm_context_data;
 
   return pocl_llvm_codegen2 (Device->llvm_target_triplet, Device->llvm_cpu,
-                            Features, Device->type, &LLVMCtx->Lock,
+                            Features, Device->type,
+                            pocl_cpu_device_uses_jit (Device), &LLVMCtx->Lock,
                             Modp, EmitAsm, EmitObj, Output, OutputSize);
 }
 
 void populateModulePM([[maybe_unused]] void *Passes, void *Module,
-                      unsigned OptL, unsigned SizeL, bool Vectorize,
+                      unsigned OptL, bool Vectorize,
                       TargetMachine *TM) {
 
   PipelineTuningOptions PTO;
@@ -1379,23 +1565,23 @@ void populateModulePM([[maybe_unused]] void *Passes, void *Module,
   CGSCCAnalysisManager CGAM;
   ModuleAnalysisManager MAM;
 
-#ifdef DEBUG_NEW_PASS_MANAGER
   PrintPassOptions PrintPassOpts;
   PassInstrumentationCallbacks PIC;
   llvm::LLVMContext Context; // for SI
   std::unique_ptr<StandardInstrumentations> SI;
-  PrintPassOpts.Verbose = true;
-  PrintPassOpts.SkipAnalyses = false;
+  PrintPassOpts.Verbose = false;
+  PrintPassOpts.SkipAnalyses = true;
   PrintPassOpts.Indent = true;
   SI.reset(new StandardInstrumentations(Context,
-                                        true,  // debug logging
-                                        false, // verify each
+                                        enableDebugLogs(), // debug logging
+                                        verifyIR(),        // verify each
                                         PrintPassOpts));
   SI->registerCallbacks(PIC, &MAM);
 
-  PassBuilder PB(TM, PTO, std::nullopt, &PIC);
+#if LLVM_MAJOR >= 24
+  PassBuilder PB(Context, TM, PTO, std::nullopt, &PIC);
 #else
-  PassBuilder PB(TM, PTO);
+  PassBuilder PB(TM, PTO, std::nullopt, &PIC);
 #endif
 
   // Register all the basic analyses with the managers.
@@ -1407,10 +1593,7 @@ void populateModulePM([[maybe_unused]] void *Passes, void *Module,
 
   // Opt constructior is private
   OptimizationLevel Opt;
-  if (SizeL > 0)
-    Opt = OptimizationLevel::Os;
-  else {
-    switch (OptL) {
+  switch (OptL) {
     case 0:
       Opt = OptimizationLevel::O0;
       break;
@@ -1424,7 +1607,6 @@ void populateModulePM([[maybe_unused]] void *Passes, void *Module,
     case 3:
       Opt = OptimizationLevel::O3;
       break;
-    }
   }
   ModulePassManager MPM;
   if (Opt == OptimizationLevel::O0)

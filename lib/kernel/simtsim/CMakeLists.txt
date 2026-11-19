@@ -1,6 +1,6 @@
 include("bitcode_rules")
 
-set(KERNEL_SOURCES ${SOURCES_GENERIC})
+set(KERNEL_SOURCES ${SOURCES_GENERIC} ${FORMOSA_MATH_SOURCES})
 
 foreach(FILE atomics.cl printf.c printf_base.c get_local_id.c get_local_size.c get_group_id.c
     get_global_size.c get_num_groups.c get_work_dim.c get_global_id.c

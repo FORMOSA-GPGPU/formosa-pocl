@@ -91,7 +91,7 @@ void free_kernel_run_command (kernel_run_command *k);
 #endif
 
 POCL_EXPORT
-cl_int pocl_cpu_init_common (cl_device_id device);
+cl_int pocl_cpu_init_common (cl_device_id device, unsigned dev_i);
 
 POCL_EXPORT
 int pocl_cpu_supports_dbk (cl_device_id device,
@@ -109,11 +109,6 @@ int pocl_cpu_execute_dbk (cl_program program,
 
 POCL_EXPORT
 void pocl_cpu_probe ();
-
-POCL_EXPORT
-int pocl_cpu_finalize_binary (cl_device_id dev,
-                              const char *output_binary,
-                              const char *input_binary);
 
 POCL_EXPORT
 void pocl_setup_kernel_arg_array (kernel_run_command *k);

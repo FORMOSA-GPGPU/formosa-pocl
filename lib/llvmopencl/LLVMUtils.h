@@ -24,6 +24,8 @@
 #ifndef POCL_LLVM_UTILS_H
 #define POCL_LLVM_UTILS_H
 
+#include "config.h"
+
 #include "CompilerWarnings.h"
 IGNORE_COMPILER_WARNING("-Wmaybe-uninitialized")
 #include <llvm/ADT/Twine.h>
@@ -34,11 +36,18 @@ IGNORE_COMPILER_WARNING("-Wunused-parameter")
 #include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
 #include <llvm/Passes/PassBuilder.h>
+#if LLVM_MAJOR < 22
 #include <llvm/Passes/PassPlugin.h>
+#elif defined(ENABLE_MLIR)
+#include <llvm/Passes/PassPlugin.h>
+#else
+#include <llvm/Plugins/PassPlugin.h>
+#endif
 #include <llvm/Transforms/Utils/Cloning.h> // for CloneFunctionIntoAbs
 POP_COMPILER_DIAGS
 
 #include <map>
+#include <set>
 #include <string>
 
 #include "pocl.h"
@@ -78,6 +87,8 @@ void regenerate_kernel_metadata(llvm::Module &M, FunctionMapping &kernels);
 
 void breakConstantExpressions(llvm::Value *Val, llvm::Function *Func);
 
+void eraseInvalidLifetimeMarkers(llvm::Function *F);
+
 /**
  * @brief Inlines (when possible) and then removes
  * Clang-generated stub functions (__clang_ocl_kern_imp_<name>)
@@ -98,6 +109,8 @@ POCL_EXPORT
 void eraseFunctionAndCallers(llvm::Function *Function);
 
 bool isAutomaticLocal(llvm::Function *F, llvm::GlobalVariable &Var);
+
+void unifyLLVMFunctionAttributes(llvm::Module &M, bool TouchAlwaysInline);
 
 /// Returns true if the function is a compiler-expandable work-item function
 /// all call of which in the Module are compiler-expandable.

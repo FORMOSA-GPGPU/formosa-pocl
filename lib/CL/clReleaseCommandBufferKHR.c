@@ -24,6 +24,7 @@
 #include "pocl_cl.h"
 #include "pocl_mem_management.h"
 #include "pocl_util.h"
+#include "pocl_shared.h"
 
 CL_API_ENTRY cl_int CL_API_CALL
 POname (clReleaseCommandBufferKHR) (cl_command_buffer_khr command_buffer)
@@ -63,7 +64,9 @@ POname (clReleaseCommandBufferKHR) (cl_command_buffer_khr command_buffer)
           if (!is_freed)
             {
               int errcode = CL_SUCCESS;
-              if (q->device->ops->free_command_buffer)
+              // Make sure to match the logic in clFinalizeCommandBufferKHR.c
+              if ((!command_buffer->is_multi_device)
+                  && q->device->ops->free_command_buffer)
                 errcode = q->device->ops->free_command_buffer (q->device,
                                                                command_buffer);
               if (errcode != CL_SUCCESS)
@@ -71,7 +74,7 @@ POname (clReleaseCommandBufferKHR) (cl_command_buffer_khr command_buffer)
 
               freed_devs[num_freed++] = q->device;
             }
-          POname (clReleaseCommandQueue) (q);
+          PoCLReleaseCommandQueue (q);
         }
 
       pocl_buffer_migration_info *mi, *tmp;
@@ -138,6 +141,7 @@ POname (clReleaseCommandBufferKHR) (cl_command_buffer_khr command_buffer)
 
       POCL_DESTROY_OBJECT (command_buffer);
       POCL_MEM_FREE (command_buffer->queues);
+      POCL_MEM_FREE (command_buffer->last_sync_points);
       POCL_MEM_FREE (command_buffer->properties);
       POCL_MEM_FREE (command_buffer->data);
       POCL_MEM_FREE (command_buffer);

@@ -42,10 +42,17 @@ class Region;
 
 namespace pocl {
   // View CFG with visual aids to debug kernel compiler problems.
-void dumpCFG(llvm::Function &F, std::string fname = "",
+void dumpCFG(llvm::Function &F, std::string Filename,
              const std::vector<llvm::Region *> *Regions = nullptr,
              const ParallelRegion::ParallelRegionVector *ParRegions = nullptr,
              const std::set<llvm::BasicBlock *> *highlights = nullptr);
+
+/// Overloads for debbuggers (the above is too complicated to be called in gdb).
+void dumpCFG(llvm::Function &F);
+void dumpCFG(llvm::Function &F, const char *Filename);
+
+/// Opens CFG graph in a viewer.
+void viewCFG(llvm::Function &F);
 
 // Split large basic blocks to smaller one so dot doesn't crash when
 // calling viewCFG on it. This should be fixed in LLVM upstream.
@@ -53,23 +60,29 @@ void dumpCFG(llvm::Function &F, std::string fname = "",
 // @return True in case the function was changed.
 bool chopBBs (llvm::Function &F, llvm::Pass &P);
 
-  class PoCLCFGPrinter : public llvm::PassInfoMixin<PoCLCFGPrinter> {
-  public:
-    explicit PoCLCFGPrinter(llvm::raw_ostream &OutS, llvm::StringRef Pref = "")
-        : OS(OutS) {
-      Prefix = Pref.str();
-      Prefix += "_";
-    }
-    static void registerWithPB(llvm::PassBuilder &B);
-    llvm::PreservedAnalyses run(llvm::Module &M,
-                                llvm::ModuleAnalysisManager &AM);
-    static bool isRequired() { return true; }
+class PoCLCFGPrinter
+#if LLVM_MAJOR >= 23
+    : public llvm::RequiredPassInfoMixin<PoCLCFGPrinter> {
+#else
+    : public llvm::PassInfoMixin<PoCLCFGPrinter> {
+#endif
+public:
+  explicit PoCLCFGPrinter(llvm::raw_ostream &OutS, llvm::StringRef Pref = "")
+      : OS(OutS) {
+    Prefix = Pref.str();
+    Prefix += "_";
+  }
+  static void registerWithPB(llvm::PassBuilder &B);
+  llvm::PreservedAnalyses run(llvm::Module &M, llvm::ModuleAnalysisManager &AM);
+#if LLVM_MAJOR < 23
+  static bool isRequired() { return true; }
+#endif
 
-  private:
-    std::string Prefix;
-    llvm::raw_ostream &OS;
-    void dumpModule(llvm::Module &M);
-  };
+private:
+  std::string Prefix;
+  llvm::raw_ostream &OS;
+  void dumpModule(llvm::Module &M);
+};
 };
 
 // Controls the debug output from BarrierTailReplication.cc.

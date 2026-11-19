@@ -25,45 +25,42 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  POCL_MAX_WORK_GROUP_SIZE: "1024"
+  POCL_MAX_WORK_GROUP_SIZE: "2048"
   CCACHE_BASEDIR: "${{ github.workspace }}"
   CCACHE_DIR: "${{ github.workspace }}/../../../../ccache_storage"
   EXAMPLES_DIR: "${{ github.workspace }}/../../../../examples"
   BUILD_DIR: "${{ github.workspace }}/build"
 
 jobs:
-  arm64_matrix:
-    name: LLVM ${{ matrix.llvm }} - RISC-V 64 ${{ matrix.config }}
-    runs-on: [self-hosted, linux, RISCV64]
+  riscv_matrix:
+    name: LLVM ${{ matrix.llvm }} - RISC-V CrossComp
+    runs-on: [self-hosted, linux, x64, RISCV64_CC]
     strategy:
       fail-fast: false
       matrix:
-        llvm: [20]
-        config: [basic]
+        llvm: [22, 23]
 
     steps:
       - name: Checkout
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Load Env vars
         id: load-env
         run: |
           cat ${{ github.workspace }}/.github/variables.txt >> $GITHUB_ENV
+          cat $RISCV_CROSS_ENVIRONMENT >> $GITHUB_ENV
 
       - name: Run CMake
         id: cmake
         run: |
-          runCMake() {
-            BUILD_FLAGS="-O1 -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
-            cmake -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DHOST_CPU_TARGET_ABI=lp64d -DLLC_HOST_CPU=sifive-u74 \
-            -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_FLAGS_RELEASE=$BUILD_FLAGS" "-DCMAKE_CXX_FLAGS_RELEASE=$BUILD_FLAGS" \
-            -DWITH_LLVM_CONFIG=/usr/bin/llvm-config-${{ matrix.llvm }} \
-            "$@" -B $BUILD_DIR ${{ github.workspace }}
-          }
-
           rm -rf $BUILD_DIR
           mkdir -p $BUILD_DIR
-          runCMake -DENABLE_ICD=1
+          cmake -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_MAKE_PROGRAM=/usr/bin/make -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_DIR=${TARGET_ROOT}/opt/LLVM_${{ matrix.llvm }} -DWITH_LLVM_CONFIG=/usr/bin/llvm-config-${{ matrix.llvm }} \
+            -DHOST_DEVICE_BUILD_HASH=${TARGET_TRIPLE} -DCMAKE_TOOLCHAIN_FILE=${TARGET_TOOLCHAIN_FILE}  \
+            -DLLC_TRIPLE=${TARGET_TRIPLE} -DLLC_HOST_CPU=${TARGET_CPU} -DCMAKE_PREFIX_PATH=${TARGET_ROOT} \
+            -DENABLE_ICD=ON -DENABLE_LOADABLE_DRIVERS=0 -DKERNELLIB_HOST_CPU_VARIANTS=${TARGET_CPU} \
+            -DENABLE_SPIRV=1 "$@" -B ${BUILD_DIR} ${{ github.workspace }}
 
       - name: Run Build
         id: build
@@ -76,6 +73,17 @@ jobs:
         id: ctest
         timeout-minutes: 120
         run: |
-          rm -rf ${{ env.POCL_CACHE_DIR }}
-          mkdir ${{ env.POCL_CACHE_DIR }}
-          cd $BUILD_DIR && ${{ github.workspace }}/tools/scripts/run_cpu_tests -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh) $CTEST_FLAGS -LE 'long'
+          ${{ github.workspace }}/tools/scripts/run_cross_compiled_cpu_tests ${{ github.workspace }} ${BUILD_DIR} ${REMOTE_ADDRESS} ${REMOTE_USER} ctest --output-on-failure -LE cpu_fail -E test_large_buf -j8
+
+      - name: Archive Artifacts
+        run: |
+          cd $BUILD_DIR && make install DESTDIR=/tmp/pocl_llvm_${{ matrix.llvm }}_${{ github.sha }}
+          tar -C /tmp -cavf /tmp/pocl_llvm_${{ matrix.llvm }}_${{ github.sha }}.tar.zst pocl_llvm_${{ matrix.llvm }}_${{ github.sha }}
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: "PoCL-RISCV-LLVM_${{ matrix.llvm }}-${{ github.sha }}"
+          path: "/tmp/pocl_llvm_${{ matrix.llvm }}_${{ github.sha }}.tar.zst"
+          if-no-files-found: error
+          archive: false

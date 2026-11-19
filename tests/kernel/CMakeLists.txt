@@ -52,6 +52,12 @@ add_test_pocl(NAME "kernel/test_convert_type_8"
 add_test_pocl(NAME "kernel/test_convert_type_16"
               COMMAND "kernel" "test_convert_type_16")
 
+add_test_pocl(NAME "kernel/test_abs"
+              COMMAND "kernel" "test_abs")
+
+add_test_pocl(NAME "kernel/test_abs_diff"
+              COMMAND "kernel" "test_abs_diff")
+
 add_test_pocl(NAME "kernel/test_bitselect"
               COMMAND "kernel" "test_bitselect")
 
@@ -63,6 +69,12 @@ add_test_pocl(NAME "kernel/test_min_max"
 
 add_test_pocl(NAME "kernel/test_length_distance"
               COMMAND "kernel" "test_length_distance")
+if(ENABLE_HOST_CPU_VECTORIZE_BUILTINS)
+  add_cpu_jit_test("vector_math" kernel "test_length_distance")
+endif()
+
+add_test_pocl(NAME "kernel/test_dot"
+              COMMAND "kernel" "test_dot")
 
 add_test_pocl(NAME "kernel/test_fmin_fmax_fma"
               COMMAND "kernel" "test_fmin_fmax_fma")
@@ -97,6 +109,9 @@ add_test_pocl(NAME "kernel/test_short16"
 add_test_pocl(NAME "kernel/test_frexp_modf"
               COMMAND "kernel" "test_frexp_modf")
 
+add_test_pocl(NAME "kernel/test_fp16_math_builtins"
+              COMMAND "kernel" "test_fp16_math_builtins")
+
 if(HOST_CPU_ENABLE_CL_KHR_KERNEL_CLOCK)
   add_test_pocl(NAME "kernel/test_kernel_clock"
                 COMMAND "kernel" "test_kernel_clock")
@@ -104,6 +119,16 @@ endif()
 
 add_test_pocl(NAME "kernel/test_halfs"
               COMMAND "kernel" "test_halfs")
+if(HOST_CPU_ENABLE_CL_KHR_FP16)
+  add_cpu_jit_test("compiler_rt_fp16" kernel "test_halfs")
+  # without F16C, the half <-> float conversions also need the runtime routines
+  if(ENABLE_HOST_CPU_DEVICES AND HOST_CPU_ENABLE_JIT
+     AND X86 AND KERNELLIB_HOST_DISTRO_VARIANTS)
+    add_cpu_jit_test("compiler_rt_fp16_sse2" kernel "test_halfs")
+    set_property(TEST "cpu_jit/compiler_rt_fp16_sse2" APPEND PROPERTY
+                 ENVIRONMENT "POCL_KERNELLIB_NAME=sse2")
+  endif()
+endif()
 
 # convert_type_{4,8,16} + hadd/as_type/bitselect produce very large kernels
 # that can cause LLVM to spend extremely long time on optimization,
@@ -116,6 +141,7 @@ foreach(VARIANT ${VARIANTS})
     "kernel/test_convert_type_1_${VARIANT}" "kernel/test_convert_type_2_${VARIANT}" "kernel/test_convert_type_4_${VARIANT}"
     "kernel/test_convert_type_8_${VARIANT}" "kernel/test_convert_type_16_${VARIANT}"
     "kernel/test_hadd_${VARIANT}" "kernel/test_rotate_${VARIANT}"
+    "kernel/test_abs_${VARIANT}" "kernel/test_abs_diff_${VARIANT}"
     PROPERTIES
       COST 40.0
       PROCESSORS 1
@@ -140,7 +166,8 @@ foreach(VARIANT ${VARIANTS})
     "kernel/test_convert_sat_regression_${VARIANT}"   "kernel/test_fabs_${VARIANT}"
     "kernel/test_rotate_${VARIANT}" "kernel/test_copy_signbit_${VARIANT}" "kernel/test_ilogb_${VARIANT}"
     "kernel/test_ldexp_${VARIANT}" "kernel/test_isnan_${VARIANT}" "kernel/test_short16_${VARIANT}"
-    "kernel/test_frexp_modf_${VARIANT}" ${ENABLE_CPU_TESTS}
+    "kernel/test_frexp_modf_${VARIANT}" "kernel/test_fp16_math_builtins_${VARIANT}"
+    "kernel/test_dot_${VARIANT}" ${ENABLE_CPU_TESTS}
     PROPERTIES
       COST 4.0
       PROCESSORS 1
@@ -232,6 +259,9 @@ add_test_pocl(NAME "kernel/test_ucharn"
 add_test_pocl(NAME "kernel/test_printf"
               EXPECTED_OUTPUT "test_printf_expout.txt"
               COMMAND "kernel" "test_printf")
+if(ENABLE_PRINTF_IMMEDIATE_FLUSH)
+  add_cpu_jit_test("printf_flush" kernel "test_printf")
+endif()
 
 add_test_pocl(NAME "kernel/test_printf_vectors"
               EXPECTED_OUTPUT "test_printf_vectors_expout.txt"
@@ -249,6 +279,7 @@ if(NOT HOST_CPU_ENABLE_CL_KHR_FP16)
   foreach(VARIANT ${VARIANTS})
   set_tests_properties("kernel/test_printf_vectors_halfn_${VARIANT}"
     "kernel/test_shuffle_half_${VARIANT}" "kernel/test_halfs_${VARIANT}"
+    "kernel/test_fp16_math_builtins_${VARIANT}"
     PROPERTIES
       PROCESSORS 1
       COST 120
@@ -436,6 +467,12 @@ set_property(TEST
   "kernel/test_ucharn_loopvec"
   "kernel/test_image_query_funcs_loopvec"
   APPEND PROPERTY LABELS "level0")
+
+if(ENABLE_MLIR)
+set_property(TEST
+  "kernel/test_convert_sat_regression_cbs"
+  APPEND PROPERTY LABELS "mlir")
+endif()
 
 add_symlink_to_built_opencl_dynlib(
   kernel test_shuffle image_query_funcs sampler_address_clamp)

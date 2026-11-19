@@ -35,9 +35,7 @@ IGNORE_COMPILER_WARNING("-Wunused-parameter")
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/SourceMgr.h>
 
-#if LLVM_MAJOR >= 18
 #include <llvm/Frontend/Driver/CodeGenOptions.h>
-#endif
 #include <llvm/Support/CommandLine.h>
 
 #include "LLVMUtils.h"
@@ -217,6 +215,13 @@ SPIRV::TranslatorOpts setupTranslOpts(const std::string &SupportedSPVExts,
   }
 
   SPIRV::TranslatorOpts Opts(TargetVersionEnum, EnabledExts);
+#ifdef HAVE_LLVM_SPIRV_LIB_ERROR_HANDLING
+  /* A module the translator cannot accept must not take the calling
+   * application down. Every caller below reads the failure back from the
+   * return value and the error string, so keep the error out of
+   * SPIRVErrorLog::checkError()'s std::exit() path. */
+  Opts.setErrorHandlingKind(SPIRV::SPIRVDbgErrorHandlingKinds::Ignore);
+#endif
   return Opts;
 }
 #endif
@@ -269,8 +274,12 @@ int pocl_regen_spirv_binary(cl_program Program, cl_uint DeviceI) {
   uint64_t ContentSize = 0;
 
   if (!readSpirv(LLVMCtx, Opts, InputSS, Mod, Errors)) {
-    POCL_MSG_ERR("LLVMSPIRVLib failed to read SPIR-V with errors:\n%s\n",
-                 Errors.c_str());
+    /* The reason belongs in the build log, which is where an application that
+     * gets CL_BUILD_PROGRAM_FAILURE goes looking for it. */
+    std::string Log("LLVMSPIRVLib failed to read SPIR-V with errors:\n");
+    Log.append(Errors);
+    Log.append("\n");
+    appendToProgramBuildLog(Program, DeviceI, Log);
     return CL_INVALID_BINARY;
   }
   std::string OutputBC;
@@ -297,7 +306,15 @@ int pocl_get_program_spec_constants(cl_program program, char *spirv_path,
   std::string InputS((const char *)spirv_content, spirv_len);
   std::stringstream InputSS(InputS);
   std::vector<llvm::SpecConstInfoTy> SpecConstInfoVec;
+#ifdef HAVE_LLVM_SPIRV_LIB_ERROR_HANDLING
+  /* Options carried only for the non fatal error handling; the partial decode
+   * getSpecConstInfo() does is otherwise unaffected by them. */
+  SPIRV::TranslatorOpts Opts;
+  Opts.setErrorHandlingKind(SPIRV::SPIRVDbgErrorHandlingKinds::Ignore);
+  if (!llvm::getSpecConstInfo(InputSS, Opts, SpecConstInfoVec))
+#else
   if (!llvm::getSpecConstInfo(InputSS, SpecConstInfoVec))
+#endif
     return CL_INVALID_BINARY;
 
   size_t NumConst = SpecConstInfoVec.size();
@@ -785,10 +802,8 @@ static int convertBCorSPV(char *InputPath,
   case 105:
     Triple = "spirv64v1.5-unknown-unknown";
     break;
-#if LLVM_MAJOR >= 18
-    case 106:
+  case 106:
     Triple = "spirv64v1.6-unknown-unknown";
-#endif
     break;
   }
 
@@ -800,7 +815,7 @@ static int convertBCorSPV(char *InputPath,
   }
   pocl_lock_t Lock;
   POCL_INIT_LOCK(Lock);
-  if (pocl_llvm_codegen2(Triple, "", "", CL_DEVICE_TYPE_GPU, &Lock,
+  if (pocl_llvm_codegen2(Triple, "", "", CL_DEVICE_TYPE_GPU, /*ForJIT=*/0, &Lock,
                          Mod, CL_FALSE, CL_TRUE, &Content, &ContentSize) != CL_SUCCESS) {
     BuildLog->append("failed to convert LLVM IR to SPIR-V "
                      "using LLVM SPIRV backend\n");

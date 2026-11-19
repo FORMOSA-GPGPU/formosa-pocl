@@ -25,12 +25,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        llvm: [21]
+        llvm: [23]
         config: [full_cts_cpu, full_cts_cpu_spirv]
 
     steps:
       - name: Checkout
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Load Env vars
         id: load-env
@@ -49,7 +49,7 @@ jobs:
           BUILD_FLAGS="-O2 -march=native"
           cmake -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
           -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_FLAGS_RELEASE=$BUILD_FLAGS" "-DCMAKE_CXX_FLAGS_RELEASE=$BUILD_FLAGS" \
-          -DWITH_LLVM_CONFIG=/usr/bin/llvm-config-${{ matrix.llvm }} -DLLVM_SPIRV=/usr/bin/llvm-spirv-${{ matrix.llvm }} \
+          -DWITH_LLVM_CONFIG=/usr/bin/llvm-config-${{ matrix.llvm }} \
           -DTESTSUITE_SOURCE_BASEDIR=${EXAMPLES_DIR}/source -DTESTSUITE_BASEDIR=${EXAMPLES_DIR}/build_${{ matrix.llvm }}_${{ matrix.config }} -DENABLE_TESTSUITES=conformance -DENABLE_CONFORMANCE=ON \
           -B ${{ github.workspace }}/build ${{ github.workspace }}
 
@@ -72,18 +72,12 @@ jobs:
         run: |
           cd ${{ github.workspace }}/build && make -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh) && make -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh) prepare_examples
 
-      - name: Get CMake version
-        id: cmake_version
-        run: echo "version=$(cmake --version | head -n 1)" >> $GITHUB_OUTPUT
-        shell: bash
-
-      - name: Cache CTest timings
-        id: cache_ctest
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+      - name: Restore cached CTest timings
+        id: restore_ctest_cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ${{ github.workspace }}/build/Testing/Temporary/CTestCostData.txt
-          key: ctest-cache-${{ steps.cmake_version.outputs.version }}-${{ runner.name }}-${{ matrix.config }}-${{ github.run_id }}
-          restore-keys: ctest-cache-${{ steps.cmake_version.outputs.version }}-${{ runner.name }}-${{ matrix.config }}
+          key: ctest-cache-${{ runner.name }}-${{ matrix.config }}-llvm-${{ matrix.llvm }}
 
       - name: Run Tests
         id: ctest
@@ -107,10 +101,18 @@ jobs:
             echo "Unknown configuration" && exit 1
           fi
 
+      - name: Save cached CTest timings
+        id: save_ctest_cache
+        if: always() && steps.restore_ctest_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ github.workspace }}/build/Testing/Temporary/CTestCostData.txt
+          key: ctest-cache-${{ runner.name }}-${{ matrix.config }}-llvm-${{ matrix.llvm }}-${{ github.run_id }}
+
   level_zero_cts:
     name: LLVM ${{ matrix.llvm }} - LevelZero ${{ matrix.config }}
     runs-on: [self-hosted, linux, x64, "${{ matrix.config }}"]
-    timeout-minutes: 1600
+    timeout-minutes: 2880
     env:
       CCACHE_BASEDIR: "${{ github.workspace }}"
       CCACHE_DIR: "${{ github.workspace }}/../../../../ccache_storage"
@@ -120,12 +122,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        llvm: [21]
+        llvm: [23]
         config: [full_cts_lz, full_cts_lz_spirv]
 
     steps:
       - name: Checkout
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Load Env vars
         id: load-env
@@ -162,7 +164,7 @@ jobs:
 
       - name: Cache CTest timings
         id: cache_ctest
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ${{ github.workspace }}/build/Testing/Temporary/CTestCostData.txt
           key: ctest-cache-${{ steps.cmake_version.outputs.version }}-${{ runner.name }}-${{ matrix.config }}-${{ github.run_id }}

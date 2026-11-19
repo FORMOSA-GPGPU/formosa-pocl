@@ -96,21 +96,23 @@ typedef unsigned reserve_id_t;
 
 #define size_t csize_t
 #define uintptr_t cuintptr_t
+#define intptr_t cintptr_t
 
 #include <stdint.h>
 
 #undef size_t
 #undef uintptr_t
+#undef intptr_t
 
 typedef uint8_t uchar;
 typedef uint16_t ushort;
 typedef uint32_t uint;
 
-#ifdef cl_khr_int64
+#if defined(cl_khr_int64) && defined(__UINT64_TYPE__)
 #if __APPLE__
 typedef unsigned long ulong;
 #else
-typedef uint64_t ulong;
+typedef __UINT64_TYPE__ ulong;
 #endif
 #else
 typedef uint32_t ulong;
@@ -164,7 +166,12 @@ typedef unsigned char uchar;
 #if !(defined(_SYS_TYPES_H) && defined(__USE_MISC))
 /* glibc, when including sys/types.h, typedefs these. */
 
+#ifdef _WIN64
+/* LLP64: "long" is 32b on Windows, but ulong must be 64b. */
+typedef unsigned long long int ulong;
+#else
 typedef unsigned long int ulong;
+#endif
 typedef unsigned short int ushort;
 typedef unsigned int uint;
 

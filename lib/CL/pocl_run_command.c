@@ -67,7 +67,7 @@ static char *
 build_cmd_from_arglist (const char **args)
 {
   /* Calculate required buffer size for all arguments. */
-  size_t total_len = 0;
+  size_t total_len = 1;
   for (const char **arg = args; *arg != NULL; arg++)
     {
       /* Account for spaces, quotes, and worst-case escaping. */
@@ -189,8 +189,14 @@ pocl_run_command_capture_output (char *capture_string,
 
   int in[2];
   int out[2];
-  pipe (in);
-  pipe (out);
+  if (pipe (in) == -1)
+    return EXIT_FAILURE;
+  if (pipe (out) == -1)
+    {
+      close (in[0]);
+      close (in[1]);
+      return EXIT_FAILURE;
+    }
 
   pid_t p = fork ();
   if (p == 0)

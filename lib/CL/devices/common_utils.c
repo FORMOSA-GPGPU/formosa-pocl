@@ -36,9 +36,13 @@
 #ifdef ENABLE_LLVM
 #include "pocl_llvm.h"
 #endif
+#ifdef HOST_CPU_ENABLE_JIT
+#include "pocl_llvm_orc.h"
+#endif
 #include "pocl_mem_management.h"
 #include "pocl_runtime_config.h"
 #include "pocl_tensor_util.h"
+#include "pocl_version.h"
 #include "spirv_queries.h"
 #include "topology/pocl_topology.h"
 #include "utlist.h"
@@ -264,7 +268,7 @@ static const char *final_ld_flags[] = { HOST_LD_FLAGS_ARRAY, NULL };
  * for non-CPU (host) devices.
  */
 cl_int
-pocl_cpu_init_common (cl_device_id device)
+pocl_cpu_init_common (cl_device_id device, unsigned dev_i)
 {
   int ret = CL_SUCCESS;
 
@@ -281,7 +285,11 @@ pocl_cpu_init_common (cl_device_id device)
 #endif
 
   char kernellib[POCL_MAX_PATHNAME_LENGTH] = "kernel-";
-  char kernellib_fallback[POCL_MAX_PATHNAME_LENGTH];
+  /* Not every branch below sets a fallback: a forced-CPU build has exactly
+     one kernel library and so has no fallback at all. Start empty and let
+     the strdup below decide, rather than duplicating whatever happened to
+     be on the stack. */
+  char kernellib_fallback[POCL_MAX_PATHNAME_LENGTH] = "";
   strcat(kernellib, device->llvm_target_triplet);
   strcat(kernellib, "-");
 
@@ -299,44 +307,38 @@ pocl_cpu_init_common (cl_device_id device)
            POCL_MAX_PATHNAME_LENGTH - strlen (kernellib)
              - strlen (OCL_KERNEL_TARGET_CPU));
 #endif
-  device->kernellib_fallback_name = strdup(kernellib_fallback);
+  device->kernellib_fallback_name
+    = kernellib_fallback[0] ? strdup (kernellib_fallback) : NULL;
   device->kernellib_name = strdup(kernellib);
   if (device->kernellib_subdir == NULL)
     device->kernellib_subdir = "host";
   device->llvm_abi = pocl_get_llvm_cpu_abi ();
 
-#ifndef ENABLE_SIGFPE_HANDLER
+  /* x86 traps on integer division by zero and INT_MIN / -1, which must not
+     happen in OpenCL: sanitize the operands so the division can't trap. */
   if (strstr (OCL_KERNEL_TARGET, "x86") != NULL)
     device->run_sanitize_divrem_pass = CL_TRUE;
-#endif
 
 #endif
 
   pocl_init_default_device_infos (device, HOST_DEVICE_EXTENSIONS);
 
-#ifdef HOST_CPU_ENABLE_SPIRV
-  device->supported_spirv_extensions = "+SPV_KHR_no_integer_wrap_decoration"
-                                       ",+SPV_KHR_expect_assume"
-                                       ",+SPV_INTEL_fp_fast_math_mode"
-                                       ",+SPV_EXT_shader_atomic_float_add"
-                                       ",+SPV_EXT_shader_atomic_float_min_max"
-                                       ",+SPV_INTEL_unstructured_loop_controls"
-                                       ",+SPV_INTEL_arbitrary_precision_integers"
-                                       ",+SPV_INTEL_memory_access_aliasing"
-#ifndef ENABLE_CONFORMANCE
-                                       ",+SPV_INTEL_subgroups"
+#ifdef HOST_CPU_ENABLE_JIT
+  /* Bring up the process-global JIT and latch the device's load mode for its
+     lifetime (see pocl_cpu_device_uses_jit()). A bring-up failure
+     (unsupported triple, executor setup) is not transient, so the device
+     permanently keeps the linker path. */
+  if (device->ops->finalize_binary == NULL
+      && pocl_get_bool_option ("POCL_CPU_JIT", 1)
+      && pocl_jit_initialize (device->llvm_target_triplet, device->llvm_cpu)
+           == 0)
+    device->uses_cpu_jit = CL_TRUE;
 #endif
-                                       ",+SPV_INTEL_inline_assembly";
 
-#if LLVM_MAJOR >= 20
-  device->supported_spir_v_versions
-    = "SPIR-V_1.5 SPIR-V_1.4 SPIR-V_1.3 SPIR-V_1.2 SPIR-V_1.1 SPIR-V_1.0";
-#elif LLVM_MAJOR >= 18
-  device->supported_spir_v_versions
-    = "SPIR-V_1.4 SPIR-V_1.3 SPIR-V_1.2 SPIR-V_1.1 SPIR-V_1.0";
-#else
-  device->supported_spir_v_versions = "SPIR-V_1.2 SPIR-V_1.1 SPIR-V_1.0";
-#endif
+#ifdef HOST_CPU_ENABLE_SPIRV
+  device->supported_spirv_extensions = HOST_DEVICE_SPV_EXTENSIONS;
+
+  device->supported_spir_v_versions = HOST_DEVICE_SPV_VERSIONS;
 #endif
 
   if (strstr (HOST_DEVICE_EXTENSIONS, "cl_khr_subgroup") != NULL)
@@ -396,24 +398,87 @@ pocl_cpu_init_common (cl_device_id device)
   /* 0 is the host memory shared with all drivers that use it */
   device->global_mem_id = 0;
 
-#ifndef HOST_CPU_ENABLE_DENORMS
-  if (device->single_fp_config)
-    device->single_fp_config = device->single_fp_config & (~CL_FP_DENORM);
-  if (device->half_fp_config)
-    device->half_fp_config = device->half_fp_config & (~CL_FP_DENORM);
-#ifndef ENABLE_CONFORMANCE
-  /* denorm is mandatory for FP64, but when conformance=OFF
-   * we can disable it also for FP64 */
-  if (device->double_fp_config)
-    device->double_fp_config = device->double_fp_config & (~CL_FP_DENORM);
+  device->dot_product_caps
+    = CL_DEVICE_INTEGER_DOT_PRODUCT_INPUT_4x8BIT_KHR
+      | CL_DEVICE_INTEGER_DOT_PRODUCT_INPUT_4x8BIT_PACKED_KHR;
+  memset (&device->dot_product_accel_props_8bit, 0,
+          sizeof (cl_device_integer_dot_product_acceleration_properties_khr));
+  memset (&device->dot_product_accel_props_4x8bit, 0,
+          sizeof (cl_device_integer_dot_product_acceleration_properties_khr));
+
+#ifdef __riscv
+#ifdef __riscv_f
+  device->single_fp_config = CL_FP_ROUND_TO_NEAREST | CL_FP_INF_NAN
+                             | CL_FP_ROUND_TO_INF | CL_FP_ROUND_TO_ZERO
+                             | CL_FP_FMA | CL_FP_DENORM
+                             | CL_FP_CORRECTLY_ROUNDED_DIVIDE_SQRT;
+#else
+  // minimum + SOFT_FLOAT
+  device->single_fp_config
+    = CL_FP_ROUND_TO_NEAREST | CL_FP_INF_NAN | CL_FP_SOFT_FLOAT;
+#endif
+#ifdef __riscv_d
+  device->double_fp_config = CL_FP_ROUND_TO_NEAREST | CL_FP_INF_NAN
+                             | CL_FP_ROUND_TO_INF | CL_FP_ROUND_TO_ZERO
+                             | CL_FP_FMA | CL_FP_DENORM;
+  /* this is a workaround for issue 28 in https://github.com/Oblomov/clinfo
+   * https://github.com/Oblomov/clinfo/issues/28 */
+  device->double_fp_config |= CL_FP_CORRECTLY_ROUNDED_DIVIDE_SQRT;
+#else
+  device->double_fp_config = 0;
 #endif
 #endif
 
-  device->version_of_latest_passed_cts = "v2024-08-08-00";
+#if defined(__x86_64__) || defined(_M_X64)
+  device->single_fp_config = CL_FP_ROUND_TO_NEAREST | CL_FP_INF_NAN
+                             | CL_FP_ROUND_TO_INF | CL_FP_ROUND_TO_ZERO
+                             | CL_FP_CORRECTLY_ROUNDED_DIVIDE_SQRT;
+  device->double_fp_config = CL_FP_ROUND_TO_NEAREST | CL_FP_INF_NAN
+                             | CL_FP_ROUND_TO_INF | CL_FP_ROUND_TO_ZERO;
+
+#ifdef ENABLE_LLVM
+  if (cpu_has_fma ())
+    {
+      device->single_fp_config |= CL_FP_FMA;
+      device->double_fp_config |= CL_FP_FMA;
+    }
+#endif
+#if defined(ENABLE_CONFORMANCE) || defined(HOST_CPU_ENABLE_DENORMS)
+  /* denorm is mandatory for FP64 when conformance=ON */
+  device->single_fp_config |= CL_FP_DENORM;
+  device->double_fp_config |= CL_FP_DENORM;
+#endif
+
+#endif
+
+#if defined(__aarch64__) || defined(_M_ARM64)
+#if defined(ENABLE_CONFORMANCE) || defined(HOST_CPU_ENABLE_DENORMS)
+  /* AArch64 keeps float denormals in scalar and Advanced SIMD code alike, and
+   * pocl_set_ftz () does not flush them here, so kernels produce them. Without
+   * this the CTS assumes flush-to-zero and contractions fails. */
+  device->single_fp_config |= CL_FP_DENORM;
+#endif
+  /* FDIV and FSQRT are correctly rounded, scalar and Advanced SIMD alike, and
+   * float division and the kernel library's sqrt compile to them. Measured on
+   * a Neoverse N1 with LLVM 19, conformance and default builds: fp32 x/y on
+   * 16.8M pairs and 1/x and sqrt on all 2^32 inputs, all correctly rounded,
+   * subnormals included. */
+  device->single_fp_config |= CL_FP_CORRECTLY_ROUNDED_DIVIDE_SQRT;
+#endif
+
+  if (strstr (HOST_DEVICE_EXTENSIONS, "cl_khr_fp64") == NULL)
+    device->double_fp_config = 0;
+
+  if (strstr (HOST_DEVICE_EXTENSIONS, "cl_khr_fp16") == NULL)
+    device->half_fp_config = 0;
+
+  device->version_of_latest_passed_cts = "v2026-03-25-00";
   device->extensions = HOST_DEVICE_EXTENSIONS;
 
-  device->features = HOST_DEVICE_FEATURES_30;
-  if (strstr (HOST_DEVICE_FEATURES_30, "__opencl_c_program_scope_global_variables") != NULL)
+  device->features = HOST_DEVICE_FEATURES;
+  if (strstr (HOST_DEVICE_FEATURES,
+              "__opencl_c_program_scope_global_variables")
+      != NULL)
     device->run_program_scope_variables_pass = CL_TRUE;
   device->generic_as_support = CL_TRUE;
   device->wg_collective_func_support = CL_TRUE;
@@ -426,18 +491,9 @@ pocl_cpu_init_common (cl_device_id device)
           | CL_DEVICE_GLOBAL_FP_ATOMIC_MIN_MAX_EXT
           | CL_DEVICE_LOCAL_FP_ATOMIC_ADD_EXT
           | CL_DEVICE_LOCAL_FP_ATOMIC_MIN_MAX_EXT;
-      device->features
-        = HOST_DEVICE_FEATURES_30 " __opencl_c_ext_fp32_global_atomic_add"
-                                  " __opencl_c_ext_fp64_global_atomic_add"
-                                  " __opencl_c_ext_fp32_local_atomic_add"
-                                  " __opencl_c_ext_fp64_local_atomic_add"
-                                  " __opencl_c_ext_fp32_global_atomic_min_max"
-                                  " __opencl_c_ext_fp64_global_atomic_min_max"
-                                  " __opencl_c_ext_fp32_local_atomic_min_max"
-                                  " __opencl_c_ext_fp64_local_atomic_min_max";
     }
 
-  pocl_setup_opencl_c_with_version (device, CL_TRUE);
+  pocl_setup_opencl_c_with_version (device);
   pocl_setup_features_with_version (device);
 
   pocl_setup_extensions_with_version (device);
@@ -462,6 +518,17 @@ pocl_cpu_init_common (cl_device_id device)
     = CL_DEVICE_ATOMIC_ORDER_RELAXED | CL_DEVICE_ATOMIC_ORDER_ACQ_REL
       | CL_DEVICE_ATOMIC_ORDER_SEQ_CST | CL_DEVICE_ATOMIC_SCOPE_WORK_ITEM
       | CL_DEVICE_ATOMIC_SCOPE_WORK_GROUP | CL_DEVICE_ATOMIC_SCOPE_DEVICE;
+
+#ifdef __riscv
+#ifndef __riscv_a
+  /* minimum mandated */
+  device->atomic_memory_capabilities
+    = CL_DEVICE_ATOMIC_ORDER_RELAXED | CL_DEVICE_ATOMIC_SCOPE_WORK_GROUP;
+  device->atomic_fence_capabilities = CL_DEVICE_ATOMIC_ORDER_RELAXED
+                                      | CL_DEVICE_ATOMIC_ORDER_ACQ_REL
+                                      | CL_DEVICE_ATOMIC_SCOPE_WORK_GROUP;
+#endif
+#endif
 
   device->svm_allocation_priority = 1;
 
@@ -539,6 +606,12 @@ pocl_cpu_init_common (cl_device_id device)
                                 | CL_DEVICE_KERNEL_CLOCK_SCOPE_SUB_GROUP_KHR;
 
 #endif
+
+  pocl_set_device_uuid (device->device_uuid, dev_i, device->ops->device_name);
+  pocl_set_driver_uuid (device->driver_uuid, POCL_VERSION_FULL);
+  device->luid_is_valid = 0;
+  memset (device->device_luid, 0, CL_LUID_SIZE_KHR);
+  device->device_node_mask = 1;
 
   return ret;
 }
@@ -637,25 +710,29 @@ pocl_setup_kernel_arg_array_with_locals (void **arguments,
 
   for (i = 0; i < meta->num_args; ++i)
     {
-      if (ARG_IS_LOCAL (meta->arg_info[i]))
+      if (!ARG_IS_LOCAL (meta->arg_info[i]))
+        continue;
+      size_t size = k->kernel_args[i].size;
+      if (size == 0) {
+          arguments[i] = &arguments2[i];
+          arguments2[i] = NULL;
+          continue;
+      }
+      if (!k->device->device_alloca_locals)
         {
-          size_t size = k->kernel_args[i].size;
-          if (!k->device->device_alloca_locals)
-            {
-              arguments[i] = &arguments2[i];
-              arguments2[i] = start;
-              start += size;
-              start = align_ptr (start);
-              assert ((size_t) (start - local_mem) <= local_mem_size);
-            }
-          else
-            {
-              /* Local buffers are allocated in the device side work-group
-                 launcher. Let's pass only the sizes of the local args in
-                 the arg buffer. */
-              assert (sizeof (size_t) == sizeof (void *));
-              arguments[i] = (void *)size;
-            }
+          arguments[i] = &arguments2[i];
+          arguments2[i] = start;
+          start += size;
+          start = align_ptr (start);
+          assert ((size_t) (start - local_mem) <= local_mem_size);
+        }
+      else
+        {
+          /* Local buffers are allocated in the device side work-group
+             launcher. Let's pass only the sizes of the local args in
+             the arg buffer. */
+          assert (sizeof (size_t) == sizeof (void *));
+          arguments[i] = (void *)size;
         }
     }
   if (k->device->device_alloca_locals)
@@ -1281,14 +1358,3 @@ pocl_cpu_execute_dbk (cl_program program,
       }
     }
 }
-
-#ifdef CPU_USE_LLD_LINK_WIN32
-int
-pocl_cpu_finalize_binary (cl_device_id dev,
-                          const char *output_binary,
-                          const char *input_binary)
-{
-  POCL_MSG_PRINT_LLVM ("Invoking lld-link through library API\n");
-  return pocl_invoke_lld_link_win32 (dev, input_binary, output_binary);
-}
-#endif

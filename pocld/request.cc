@@ -96,6 +96,8 @@ const char *request_to_str(RequestMessageType type) {
 
   case MessageType_MigrateD2D:
     return "MigrateD2D";
+  case MessageType_Marker:
+    return "Marker";
   case MessageType_Barrier:
     return "Barrier";
 
@@ -197,10 +199,10 @@ template <class T> bool RequestReadImpl(Request *Req, T *Source) {
   RequestMsg_t *Body = &Req->Body;
 
   if (!Req->ReadStartTimestampNS) {
-    auto now1 = std::chrono::system_clock::now();
+    auto Now = std::chrono::steady_clock::now();
     Req->ReadStartTimestampNS =
         std::chrono::duration_cast<std::chrono::nanoseconds>(
-            now1.time_since_epoch())
+            Now.time_since_epoch())
             .count();
   }
 
@@ -280,13 +282,13 @@ template <class T> bool RequestReadImpl(Request *Req, T *Source) {
 
   /*****************************/
   if (Body->waitlist_size > 0) {
-    Req->Waitlist.resize(Body->waitlist_size);
+    Req->ClientWaitlist.resize(Body->waitlist_size);
     POCL_MSG_PRINT_GENERAL("READING WAIT LIST FOR ID: %" PRIu64 " = %" PRIuS
                            "/%" PRIu32 "\n",
                            uint64_t(Body->msg_id), Req->WaitlistBytesRead,
                            Req->Body.waitlist_size);
     RETURN_UNLESS_DONE(Source->readReentrant(
-        Req->Waitlist.data(), Req->Body.waitlist_size * sizeof(uint64_t),
+        Req->ClientWaitlist.data(), Req->Body.waitlist_size * sizeof(uint64_t),
         &Req->WaitlistBytesRead));
   }
   /*****************************/
@@ -320,10 +322,10 @@ template <class T> bool RequestReadImpl(Request *Req, T *Source) {
   /*****************************/
 
   if (!Req->ReadEndTimestampNS) {
-    auto now2 = std::chrono::system_clock::now();
+    auto Now = std::chrono::steady_clock::now();
     Req->ReadEndTimestampNS =
         std::chrono::duration_cast<std::chrono::nanoseconds>(
-            now2.time_since_epoch())
+            Now.time_since_epoch())
             .count();
   }
 

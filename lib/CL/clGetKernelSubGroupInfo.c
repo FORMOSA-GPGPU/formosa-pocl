@@ -70,7 +70,8 @@ CL_API_ENTRY cl_int CL_API_ENTRY POname (clGetKernelSubGroupInfo) (
   POCL_RETURN_ERROR_ON ((dev_i == CL_UINT_MAX), CL_INVALID_KERNEL,
                         "the kernel was not built for this device\n");
 
-  if (param_name == CL_KERNEL_MAX_SUB_GROUP_SIZE_FOR_NDRANGE)
+  if (param_name == CL_KERNEL_MAX_SUB_GROUP_SIZE_FOR_NDRANGE
+      || param_name == CL_KERNEL_SUB_GROUP_COUNT_FOR_NDRANGE)
     {
       POCL_RETURN_ERROR_ON ((input_value == NULL
                              || input_value_size < sizeof (size_t)
@@ -80,20 +81,22 @@ CL_API_ENTRY cl_int CL_API_ENTRY POname (clGetKernelSubGroupInfo) (
 
   /************************************************************************/
 
+  pocl_kernel_device_metadata_t *device_meta = &kernel->meta->devices[dev_i];
   switch (param_name)
     {
     /************ these are NOT dependent on NDRANGE ***********************/
     case CL_KERNEL_MAX_NUM_SUB_GROUPS:
-      if (kernel->meta->max_subgroups)
-        POCL_RETURN_GETINFO (size_t, kernel->meta->max_subgroups[dev_i]);
+      if (device_meta->max_subgroups > 0)
+        POCL_RETURN_GETINFO (size_t, device_meta->max_subgroups);
       else
         POCL_RETURN_GETINFO (size_t, realdev->max_num_sub_groups);
 
     case CL_KERNEL_COMPILE_NUM_SUB_GROUPS:
-      if (kernel->meta->compile_subgroups)
-        POCL_RETURN_GETINFO (size_t, kernel->meta->compile_subgroups[dev_i]);
-      else
-        POCL_RETURN_GETINFO (size_t, 0);
+      POCL_RETURN_GETINFO (size_t, device_meta->compile_subgroups);
+
+    case CL_KERNEL_COMPILE_SUB_GROUP_SIZE_INTEL:
+      /* Returns 0 if the intel_reqd_sub_group_size attribute is not set. */
+      POCL_RETURN_GETINFO (size_t, kernel->meta->reqd_sub_group_size);
 
     default:
       POCL_RETURN_ERROR_ON ((realdev->ops->get_subgroup_info_ext == NULL),

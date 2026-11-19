@@ -32,6 +32,8 @@ POP_COMPILER_DIAGS
 IGNORE_COMPILER_WARNING("-Wunused-parameter")
 
 #include <llvm/Support/TargetSelect.h>
+#include <llvm/Support/Error.h>
+#include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/Signals.h>
 #include <llvm/IR/Constants.h>
@@ -61,6 +63,18 @@ IGNORE_COMPILER_WARNING("-Wunused-parameter")
 #include "pocl_llvm_api.h"
 #include "pocl_runtime_config.h"
 
+#if LLVM_MAJOR < 22
+using LLVMOptionMap = llvm::StringMap<llvm::cl::Option *>;
+#elif defined(ENABLE_MLIR)
+using LLVMOptionMap = llvm::StringMap<llvm::cl::Option *>;
+#else
+using LLVMOptionMap = llvm::DenseMap<llvm::StringRef, llvm::cl::Option *>;
+#endif
+
+#ifdef ENABLE_MLIR
+#include "pocl_mlir.h"
+#endif
+
 using namespace llvm;
 
 #include <string>
@@ -68,11 +82,46 @@ using namespace llvm;
 
 llvm::Module *parseModuleIR(const char *path, llvm::LLVMContext *c) {
   SMDiagnostic Err;
-  return parseIRFile(path, Err, *c).release();
+  llvm::Module *M = parseIRFile(path, Err, *c).release();
+  if (M == nullptr) {
+    std::string Msg;
+    raw_string_ostream OS(Msg);
+    Err.print("pocl", OS);
+    POCL_MSG_ERR("parseModuleIR('%s') failed:\n%s\n", path, OS.str().c_str());
+  }
+  return M;
+}
+
+/* Like parseModuleIR, but defers deserialization of function bodies
+ * (LLVM lazy bitcode loading). Only usable for .bc files; falls back
+ * to an eager parse otherwise. Callers must materialize() a function
+ * before inspecting or cloning its body. */
+llvm::Module *parseModuleIRLazy(const char *path, llvm::LLVMContext *c) {
+  auto BufOrErr = MemoryBuffer::getFile(path, /*IsText=*/false,
+                                        /*RequiresNullTerminator=*/false);
+  if (std::error_code EC = BufOrErr.getError()) {
+    POCL_MSG_ERR("parseModuleIRLazy('%s'): cannot read file: %s\n", path,
+                 EC.message().c_str());
+    return nullptr;
+  }
+
+  Expected<std::unique_ptr<llvm::Module>> ModOrErr =
+      getOwningLazyBitcodeModule(std::move(*BufOrErr), *c,
+                                 /*ShouldLazyLoadMetadata=*/false);
+  if (!ModOrErr) {
+    POCL_MSG_WARN("parseModuleIRLazy('%s'): lazy bitcode load failed (%s); "
+                  "falling back to an eager parse\n",
+                  path, toString(ModOrErr.takeError()).c_str());
+    return parseModuleIR(path, c);
+  }
+
+  return ModOrErr->release();
 }
 
 void parseModuleGVarSize(cl_program program, unsigned device_i,
                          llvm::Module *ProgramBC) {
+  if (ProgramBC == nullptr)
+    return;
 
   unsigned long TotalGVarBytes = 0;
   if (!getModuleIntMetadata(*ProgramBC, PoclGVarMDName, TotalGVarBytes))
@@ -418,16 +467,6 @@ void cpu_setup_vector_widths(cl_device_id dev) {
   }
 }
 
-int pocl_llvm_remove_file_on_signal_create(const char *file) {
-  return llvm::sys::RemoveFileOnSignal(
-            StringRef(file)) ? 0 : -1;
-}
-
-int pocl_llvm_remove_file_on_signal_destroy(const char *file) {
-  llvm::sys::RunInterruptHandlers();
-  return 0;
-}
-
 /*
  * Use one global LLVMContext across all LLVM bitcodes. This is because
  * we want to cache the bitcode IR libraries and reuse them when linking
@@ -470,6 +509,42 @@ PoclCompilerMutexGuard::~PoclCompilerMutexGuard() { POCL_UNLOCK(*lock); }
 
 std::string CurrentWgMethod;
 
+/// Parses LLVM options from a string.
+///
+/// This method parses cl::opt defined options with optional value in following
+/// format:
+///
+///   option1,option2=foo,option3=bar
+
+static void
+parseOptionsFromCSVString(LLVMOptionMap &RegisteredOptions,
+                          StringRef OptionsString) {
+  SmallVector<StringRef> SeparatedOptionStrings;
+  OptionsString.split(SeparatedOptionStrings, ',');
+
+  for (auto OptionString : SeparatedOptionStrings) {
+    StringRef OptionStr, ValueStr;
+    std::tie(OptionStr, ValueStr) = OptionString.split('=');
+
+    // Support option names as printed in LLVM tools' help text. LLVM's option
+    // definitions don't have leading dashes on their name.
+    while (OptionStr.consume_front("-")) {
+    }
+
+    auto *Opt = RegisteredOptions[OptionStr];
+    if (!Opt) {
+      POCL_MSG_WARN("Ignoring unknown LLVM option '%s'\n",
+                    OptionStr.str().c_str());
+      continue;
+    }
+    if (Opt->addOccurrence(/*bogus position*/ 1, OptionStr, ValueStr)) {
+      POCL_MSG_WARN("Ignoring LLVM option '%s' with an invalid value: '%s'\n",
+                    OptionStr.str().c_str(), ValueStr.str().c_str());
+      continue;
+    }
+  }
+}
+
 static bool LLVMInitialized = false;
 static bool LLVMOptionsInitialized = false;
 static bool LLVMUseGlobalContext = true;
@@ -481,10 +556,65 @@ void InitializeLLVM() {
     LLVMInitialized = true;
     // We have not initialized any pass managers for any device yet.
     // Run the global LLVM pass initialization functions.
-    InitializeAllTargets();
-    InitializeAllTargetMCs();
-    InitializeAllAsmPrinters();
-    InitializeAllAsmParsers();
+#ifdef ENABLE_HOST_CPU_DEVICES
+
+#if defined(__i386__) || defined(_M_IX86) || \
+        defined(__x86_64__) || defined(_M_X64)
+    LLVMInitializeX86TargetInfo();
+    LLVMInitializeX86Target();
+    LLVMInitializeX86TargetMC();
+    LLVMInitializeX86AsmPrinter();
+    LLVMInitializeX86AsmParser();
+#endif
+
+#ifdef __aarch64__
+    LLVMInitializeAArch64TargetInfo();
+    LLVMInitializeAArch64Target();
+    LLVMInitializeAArch64TargetMC();
+    LLVMInitializeAArch64AsmPrinter();
+    LLVMInitializeAArch64AsmParser();
+#endif
+
+#ifdef __arm__
+    LLVMInitializeARMTargetInfo();
+    LLVMInitializeARMTarget();
+    LLVMInitializeARMTargetMC();
+    LLVMInitializeARMAsmPrinter();
+    LLVMInitializeARMAsmParser();
+#endif
+
+
+#ifdef __riscv
+    LLVMInitializeRISCVTargetInfo();
+    LLVMInitializeRISCVTarget();
+    LLVMInitializeRISCVTargetMC();
+    LLVMInitializeRISCVAsmPrinter();
+    LLVMInitializeRISCVAsmParser();
+#endif
+
+#ifdef __loongarch__
+    LLVMInitializeLoongArchTargetInfo();
+    LLVMInitializeLoongArchTarget();
+    LLVMInitializeLoongArchTargetMC();
+    LLVMInitializeLoongArchAsmPrinter();
+    LLVMInitializeLoongArchAsmParser();
+#endif
+
+#endif // ENABLE_HOST_CPU_DEVICES
+
+#ifdef BUILD_CUDA
+    LLVMInitializeNVPTXTargetInfo();
+    LLVMInitializeNVPTXTarget();
+    LLVMInitializeNVPTXTargetMC();
+    LLVMInitializeNVPTXAsmPrinter();
+#endif
+
+#ifdef USE_LLVM_SPIRV_TARGET
+    LLVMInitializeSPIRVTargetInfo();
+    LLVMInitializeSPIRVTarget();
+    LLVMInitializeSPIRVTargetMC();
+    LLVMInitializeSPIRVAsmPrinter();
+#endif
 
     PassRegistry &Registry = *PassRegistry::getPassRegistry();
 
@@ -495,9 +625,6 @@ void InitializeLLVM() {
     initializeAnalysis(Registry);
     initializeTransformUtils(Registry);
     initializeInstCombine(Registry);
-#if LLVM_MAJOR < 16
-    initializeInstrumentation(Registry);
-#endif
     initializeTarget(Registry);
   }
 
@@ -514,7 +641,7 @@ void InitializeLLVM() {
 
     LLVMOptionsInitialized = true;
 
-    StringMap<llvm::cl::Option *> &opts = llvm::cl::getRegisteredOptions();
+    LLVMOptionMap &opts = llvm::cl::getRegisteredOptions();
 
     llvm::cl::Option *O = nullptr;
 
@@ -531,17 +658,17 @@ void InitializeLLVM() {
         O = opts["pass-remarks-missed"];
         assert(O && "could not find LLVM option 'pass-remarks-missed'");
         O->addOccurrence(1, StringRef("pass-remarks-missed"),
-                         StringRef("loop-vectorize"), false);
+                         StringRef("loop-vectorize"));
 
         O = opts["pass-remarks-analysis"];
         assert(O && "could not find LLVM option 'pass-remarks-analysis'");
         O->addOccurrence(1, StringRef("pass-remarks-analysis"),
-                         StringRef("loop-vectorize"), false);
+                         StringRef("loop-vectorize"));
 
         O = opts["pass-remarks"];
         assert(O && "could not find LLVM option 'pass-remarks'");
         O->addOccurrence(1, StringRef("pass-remarks"),
-                         StringRef("loop-vectorize"), false);
+                         StringRef("loop-vectorize"));
       }
 
       // Force the loop vectorizer to use the same width for all loops.
@@ -550,18 +677,22 @@ void InitializeLLVM() {
         O = opts["force-vector-width"];
         assert(O && "could not find LLVM option 'force-vector-width'");
         O->addOccurrence(1, StringRef("force-vector-width"),
-                         StringRef(std::to_string(VecWidth)), false);
+                         StringRef(std::to_string(VecWidth)));
       }
     }
     if (pocl_get_bool_option("POCL_DEBUG_LLVM_PASSES", 0) == 1) {
       O = opts["debug"];
       assert(O && "could not find LLVM option 'debug'");
-      O->addOccurrence(1, StringRef("debug"), StringRef("true"), false);
+      O->addOccurrence(1, StringRef("debug"), StringRef("true"));
 #if 0
       O = opts["debug-only"];
       assert(O && "could not find LLVM option 'debug'");
       O->addOccurrence(1, StringRef("debug-only"), StringRef("inline"), false);
 #endif
+    }
+    if (auto *LLVMOptsString =
+            pocl_get_string_option("POCL_DEBUG_LLVM_OPTS", nullptr)) {
+      parseOptionsFromCSVString(opts, LLVMOptsString);
     }
     O = opts["inline-threshold"];
     assert(O && "inline-threshold not found");
@@ -620,6 +751,9 @@ void pocl_llvm_create_context(cl_context ctx) {
     GlobalLLVMContext = data;
     ++GlobalLLVMContextRefcount;
   }
+#ifdef ENABLE_MLIR
+  poclMlirRegisterDialects(data);
+#endif
 
   POCL_MSG_PRINT_LLVM("Created context %" PRId64 " (%p)\n", ctx->id, ctx);
 }
@@ -660,6 +794,10 @@ void pocl_llvm_release_context(cl_context ctx) {
     data->kernelLibraryMap->clear();
     delete data->kernelLibraryMap;
   }
+
+#ifdef ENABLE_MLIR
+  delete data->MLIRContext;
+#endif
 
   POCL_DESTROY_LOCK(data->Lock);
   delete data->Context;

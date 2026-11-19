@@ -285,8 +285,6 @@ struct PeerConnection {
 };
 
 struct ClientConnections_t {
-  std::shared_ptr<Connection> low_latency;
-  std::shared_ptr<Connection> bulk_throughput;
   std::mutex *incoming_peer_mutex;
   std::pair<std::condition_variable, std::vector<PeerConnection>>
       *incoming_peer_queue;
@@ -332,7 +330,7 @@ public:
   /** Explicitly delete default constructor since there is no need for it and
    * actually using it is likely to lead to accessing uninitialized fields. */
   Reply() = delete;
-  Reply(Request *r)
+  Reply(Request *r, uint64_t ProcessingStart)
       : rep(), req(r), extra_size(0), event(nullptr) {
     assert(req.get());
     rep.client_did = req->Body.client_did;
@@ -341,6 +339,7 @@ public:
     rep.msg_id = req->Body.msg_id;
     rep.server_read_start_timestamp_ns = req->ReadStartTimestampNS;
     rep.server_read_end_timestamp_ns = req->ReadEndTimestampNS;
+    rep.server_cmd_start_timestamp_ns = ProcessingStart;
   }
 };
 
@@ -405,11 +404,6 @@ public:
     std::unique_lock<std::mutex> lock(exit_mutex);
     return exit_status;
   }
-};
-
-struct EventPair {
-  cl::Event native;
-  cl::UserEvent user;
 };
 
 std::string hexdigits(std::string, uint8_t);

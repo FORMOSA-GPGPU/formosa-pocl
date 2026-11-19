@@ -57,10 +57,11 @@ int
 main (int argc, char **argv)
 {
 
-  if (argc > 1 && !(argv[1][0] == 'v' || argv[1][0] == 'b'))
+  if (argc > 1
+      && !(argv[1][0] == 'v' || argv[1][0] == 'b' || argv[1][0] == 'o'))
     {
       printf ("unknown argument '%c', options are 'v' for spir-v or 'b' for "
-              "pocl binaries.\n",
+              "pocl binaries or 'o' for generating golden output file.\n",
               argv[1][0]);
       return -1;
     }
@@ -89,6 +90,7 @@ main (int argc, char **argv)
                            info_buf, NULL);
   CHECK_OPENCL_ERROR_IN ("clGetPlatformInfo");
   printf ("Platform version: %s\n", info_buf);
+  free (info_buf);
 
   spirv = (argc > 1 && argv[1][0] == 'v');
   poclbin = (argc > 1 && argv[1][0] == 'b');

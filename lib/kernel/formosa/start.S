@@ -14,6 +14,11 @@
 #define WG_INFO_OFFSET_PRINTF_BUFFER_POSITION 0x70
 #define WG_INFO_OFFSET_PRINTF_BUFFER_CAPACITY 0x78
 
+/* The startup stores run even when the kernel has no LLVM printf users. */
+.comm _printf_buffer, 8, 8
+.comm _printf_buffer_position, 8, 8
+.comm _printf_buffer_capacity, 4, 4
+
 .section .text
 
 .org 0x0

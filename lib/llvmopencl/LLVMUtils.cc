@@ -33,6 +33,10 @@ IGNORE_COMPILER_WARNING("-Wunused-parameter")
 #include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
 #include <llvm/ADT/SmallSet.h>
+#include <llvm/ADT/SmallVector.h>
+#include <llvm/ADT/STLExtras.h>
+#include <llvm/ADT/StringRef.h>
+#include <llvm/TargetParser/Triple.h>
 
 // include all passes & analysis
 #include "AllocasToEntry.h"
@@ -157,31 +161,39 @@ regenerate_kernel_metadata(llvm::Module &M, FunctionMapping &kernels)
   NamedMDNode *WGSizes = M.getNamedMetadata("opencl.kernel_wg_size_info");
   if (WGSizes != NULL && WGSizes->getNumOperands() > 0)
     {
-      for (std::size_t mni = 0; mni < WGSizes->getNumOperands(); ++mni)
-        {
-          MDNode *wgsizeMD = dyn_cast<MDNode>(WGSizes->getOperand(mni));
-          for (FunctionMapping::const_iterator i = kernels.begin(),
-                 e = kernels.end(); i != e; ++i)
-            {
-              Function *OldKernel = (*i).first;
-              Function *NewKernel = (*i).second;
-              Function *FuncFromMD;
-              FuncFromMD = dyn_cast<Function>(
-                dyn_cast<ValueAsMetadata>(wgsizeMD->getOperand(0))->getValue());
-              if (OldKernel == NewKernel || wgsizeMD->getNumOperands() == 0 ||
-                  FuncFromMD != OldKernel)
-                continue;
-              // found a wg size metadata that points to the old kernel, copy its
-              // operands except the first one to a new MDNode
-              SmallVector<Metadata*, 8> operands;
-              operands.push_back(llvm::ValueAsMetadata::get(NewKernel));
-              for (unsigned opr = 1; opr < wgsizeMD->getNumOperands(); ++opr) {
-                  operands.push_back(wgsizeMD->getOperand(opr));
-              }
-              MDNode *new_wg_md = MDNode::get(M.getContext(), operands);
-              WGSizes->addOperand(new_wg_md);
-            }
+    // metadata might contain references to deleted functions,
+    // which will be cleared as well
+    SmallVector<MDNode *, 8> ValidNodes;
+    for (std::size_t mni = 0; mni < WGSizes->getNumOperands(); ++mni) {
+      MDNode *wgsizeMD = dyn_cast<MDNode>(WGSizes->getOperand(mni));
+      for (FunctionMapping::const_iterator i = kernels.begin(),
+                                           e = kernels.end();
+           i != e; ++i) {
+        Function *OldKernel = (*i).first;
+        Function *NewKernel = (*i).second;
+        Function *FuncFromMD = nullptr;
+        if (wgsizeMD->getNumOperands() > 0) {
+          if (auto *VAM = dyn_cast_or_null<ValueAsMetadata>(
+                  wgsizeMD->getOperand(0).get()))
+            FuncFromMD = dyn_cast<Function>(VAM->getValue());
         }
+        if (OldKernel == NewKernel || wgsizeMD->getNumOperands() == 0 ||
+            FuncFromMD != OldKernel)
+          continue;
+        // found a wg size metadata that points to the old kernel, copy its
+        // operands except the first one to a new MDNode
+        SmallVector<Metadata *, 8> operands;
+        operands.push_back(llvm::ValueAsMetadata::get(NewKernel));
+        for (unsigned opr = 1; opr < wgsizeMD->getNumOperands(); ++opr) {
+          operands.push_back(wgsizeMD->getOperand(opr));
+        }
+        MDNode *new_wg_md = MDNode::get(M.getContext(), operands);
+        ValidNodes.push_back(new_wg_md);
+      }
+    }
+    WGSizes->clearOperands();
+    for (auto *N : ValidNodes)
+      WGSizes->addOperand(N);
     }
 
   // reproduce the opencl.kernels metadata, if it exists
@@ -270,6 +282,23 @@ bool isGVarUsedByFunction(llvm::GlobalVariable *GVar, llvm::Function *F) {
   return false;
 }
 
+// Erase lifetime.start markers which reference invalid values
+// Only valid values are Poison & Alloca
+void eraseInvalidLifetimeMarkers(llvm::Function *F) {
+    for (BasicBlock &BB : *F) {
+        for (Instruction &I : llvm::make_early_inc_range(BB)) {
+            auto *II = dyn_cast<LifetimeIntrinsic>(&I);
+            if (!II)
+                continue;
+
+            Value *Mem = II->getOperand(0);
+            if (isa<PoisonValue>(Mem) || isa<AllocaInst>(Mem))
+                continue;
+
+            II->eraseFromParent();
+        }
+    }
+}
 
 bool
 isAutomaticLocal(llvm::Function *F, llvm::GlobalVariable &Var) {
@@ -826,6 +855,127 @@ bool removeMetadataFromClangStubs(llvm::Module *Program) {
 #endif
 #endif
   return true;
+}
+
+/* Whole-token membership in an LLVM "target-features" string.
+
+   The attribute is a comma-separated list, e.g.
+   "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87". A substring search would find
+   "+fma" inside "+fma4", or inside any later feature named the same way. */
+static bool hasTargetFeature(llvm::StringRef Features, llvm::StringRef Feat) {
+  llvm::SmallVector<llvm::StringRef, 64> Tokens;
+  Features.split(Tokens, ',', /* MaxSplit */ -1, /* KeepEmpty */ false);
+  return llvm::is_contained(Tokens, Feat);
+}
+
+void unifyLLVMFunctionAttributes(llvm::Module &M, bool TouchAlwaysInline) {
+  // Unify some attributes among all functions; this is necessary because
+  // -O0 compiled builtin library has many attributes setup differently than
+  // -O2 compiled user code, and the inliner will check&refuse to inline.
+  // See hasCompatibleFnAttrs in llvm/include/llvm/IR/Attributes.inc
+  // and getAttributeBasedInliningDecision in llvm/lib/Analysis/InlineCost.cpp
+  std::string TargetCPU;
+  std::string TargetFeatures;
+  for (Function &F : M) {
+    if (TargetCPU.empty() && F.hasFnAttribute("target-cpu")) {
+      TargetCPU = F.getFnAttribute("target-cpu").getValueAsString().str();
+    }
+    if (TargetFeatures.empty() && F.hasFnAttribute("target-features")) {
+      TargetFeatures =
+          F.getFnAttribute("target-features").getValueAsString().str();
+    }
+  }
+
+  /* The reciprocal-estimate override below is about the x86 backend's
+     rcpps lowering and about an x86 feature name, so it must not be
+     applied anywhere else. */
+#if LLVM_MAJOR < 21
+  const llvm::Triple TT(M.getTargetTriple());
+#else
+  const llvm::Triple &TT = M.getTargetTriple();
+#endif
+  const bool IsX86 =
+      TT.getArch() == llvm::Triple::x86 || TT.getArch() == llvm::Triple::x86_64;
+
+  for (Function &F : M.functions()) {
+    if (F.isDeclaration())
+      continue;
+
+    if (TouchAlwaysInline) {
+      // removes optnone/noinline/alwaysinline from F & its callsites
+      markFunctionAlwaysInline(&F);
+      F.removeFnAttr(Attribute::AlwaysInline);
+    }
+
+    // these are checked in LLVM's areInlineCompatible -> hasCompatibleFnArgs
+    F.removeFnAttr(Attribute::SafeStack);
+    F.removeFnAttr(Attribute::ShadowCallStack);
+    F.removeFnAttr(Attribute::NoProfile);
+    F.removeFnAttr(Attribute::StackProtect);
+    F.removeFnAttr(Attribute::StackProtectReq);
+    F.removeFnAttr(Attribute::StackProtectStrong);
+    // denorm & strictFP must be compatible
+    // TODO strictfp should depend on program's build opts
+    // denormals are handled by the driver / execution environment
+    F.removeFnAttr(Attribute::StrictFP);
+    F.removeFnAttr("denormal-fp-math");
+    F.removeFnAttr("denormal-fp-math-f32");
+    // prevents vectorizing/inlining of functions with builtins (llvm.sin.f32 etc)
+    F.removeFnAttr("no-builtins");
+    F.addFnAttr("no-trapping-math", "true");
+    // required because the InlineCost -> areInlineCompatible also calls
+    // TTI->areInlineCompatible; X86TTIImpl::areInlineCompatible checks CPU
+    // features; this might require even more attrs (target-abi?) for RISC-V
+    if (!TargetCPU.empty())
+      F.addFnAttr("target-cpu", TargetCPU);
+    if (!TargetFeatures.empty())
+      F.addFnAttr("target-features", TargetFeatures);
+    // Under -cl-fast-relaxed-math the x86 backend lowers vector float
+    // division to rcpps plus one Newton-Raphson step. With FMA the result
+    // is within 1 ulp; without it (the x86-64 baseline, and every distro
+    // kernel-library variant below avx2) the refinement rounds twice and the
+    // CTS measures 3 ulp against the 2.5 ulp relaxed bound (math_brute_force
+    // divide and reciprocal, fp32 rlx).
+    // C fast-math promises nothing there; OpenCL relaxed math does. Keep
+    // the estimates only where they meet the bound.
+    //
+    // FMA3 or FMA4: the backend fuses the refinement with either
+    // (vfnmadd213ps, or vfnmaddps on FMA4-only bdver1).
+    //
+    // x86 only, and by whole token. "fma" is an x86 feature name: RISC-V
+    // carries FMA in the F and D extensions and AArch64 in fp-armv8, so
+    // neither spells it "fma" and testing the feature string on those
+    // targets would disable reciprocal estimates on all of them.
+    if (IsX86 && !hasTargetFeature(TargetFeatures, "+fma") &&
+        !hasTargetFeature(TargetFeatures, "+fma4"))
+      F.addFnAttr("reciprocal-estimates", "none");
+
+    // the following settings are not necessary for inlining,
+    // but should improve optimization
+    F.removeFnAttr("use-sample-profile");
+    F.removeFnAttr("stack-protector-buffer-size");
+    F.removeFnAttr("frame-pointer");
+
+    // these should be safe to enable
+    F.addFnAttr(Attribute::NoFree);
+    // recursion forbidden by OpenCL
+    F.addFnAttr(Attribute::NoRecurse);
+    // no exceptions or return by callback
+    F.addFnAttr(Attribute::NoCallback);
+    F.addFnAttr(Attribute::NoUnwind);
+#if 0
+    // It appears OpenCL follows C99 in which they are NOT UB.
+    // This breaks infinite for loops when enabled.
+    F.addFnAttr(Attribute::WillReturn);
+#endif
+
+    // Override the preferred vector width on x86 targets.
+    // By default, clang uses 256-bit even if a processor supports 512-bit SIMD.
+    if (int VecWidth =
+            pocl_get_int_option("POCL_VECTORIZER_PREFER_VECTOR_WIDTH", 0)) {
+      F.addFnAttr("prefer-vector-width", std::to_string(VecWidth));
+    }
+  }
 }
 
 } // namespace pocl
