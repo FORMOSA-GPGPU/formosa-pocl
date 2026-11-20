@@ -2000,6 +2000,8 @@ struct _cl_program {
   char *source;
   /* The options in the last clBuildProgram call for this Program. */
   char *compiler_options;
+  /* Offset of the version digits in the last -cl-std option, or 0 if absent. */
+  size_t cl_std_version_offset;
 
   /* per-device binaries, in device-specific format */
   size_t *binary_sizes;

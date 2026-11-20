@@ -292,6 +292,8 @@ process_options (const char *options, char *modded_options, char *link_options,
                 unsigned major = token[10] - '0';
                 unsigned minor = token[12] - '0';
                 *cl_c_version = CL_MAKE_VERSION (major, minor, 0);
+                program->cl_std_version_offset
+                    = strlen (modded_options) + strlen ("-cl-std=CL");
             }
             }
           else if (pocl_option_listed (cl_parameters_not_yet_supported_by_clang, token))
@@ -764,6 +766,7 @@ compile_and_link_program(int compile_program,
 
   /* TODO this should be somehow utilized at linking */
   POCL_MEM_FREE (program->compiler_options);
+  program->cl_std_version_offset = 0;
 
   if (extra_build_options)
     {

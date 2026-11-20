@@ -468,9 +468,9 @@ int pocl_llvm_build_program(cl_program program,
   ss << "-D__OPENCL_VERSION__=" << device->version_as_int << " ";
 
   int UserClStd = 0;
-  size_t ClStdPos = user_options.rfind("-cl-std=CL");
+  const size_t ClStdPos = program->cl_std_version_offset;
 
-  if (ClStdPos == std::string::npos) {
+  if (ClStdPos == 0) {
     // use device defaults
 #if LLVM_MAJOR < 23
     // limit -cl-std to CL3.0 when using LLVM < 23
@@ -488,7 +488,6 @@ int pocl_llvm_build_program(cl_program program,
     ss << "-U__OPENCL_C_VERSION__ -D__OPENCL_C_VERSION__=" << device->version_as_int << " ";
   } else {
     // use what the user options requested
-    ClStdPos += 10; // skip until "=CL"
     int ClStdMajor = user_options.c_str()[ClStdPos] - '0';
     int ClStdMinor = user_options.c_str()[ClStdPos+2] - '0';
     UserClStd = ClStdMajor * 100 + ClStdMinor * 10;
