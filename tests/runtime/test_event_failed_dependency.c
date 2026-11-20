@@ -119,22 +119,17 @@ main (void)
   TEST_ASSERT (context);
   TEST_ASSERT (device);
 
-  /* The failed-dependency handling differs between in-order and out-of-order
-     queues: on an out-of-order queue a command whose dependency is already
-     failed at enqueue gets no sync edge and would be left runnable. Use an
-     out-of-order queue here so we exercise that path. The helper's in-order
-     queue is released immediately; we only needed the context/device. */
-  CHECK_CL_ERROR (clReleaseCommandQueue (helper_queue));
+  /* Prefer out-of-order coverage where supported. The same explicit wait
+     list must propagate failures on devices with only in-order queues. */
   queue = clCreateCommandQueue (
       context, device, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, &err);
   if (err == CL_INVALID_QUEUE_PROPERTIES || err == CL_INVALID_VALUE)
+    queue = helper_queue;
+  else
     {
-      printf ("Device does not support out-of-order queues, skipping.\n");
-      printf ("SKIP\n");
-      clReleaseContext (context);
-      return 77;
+      CHECK_OPENCL_ERROR_IN ("clCreateCommandQueue (out-of-order)");
+      CHECK_CL_ERROR (clReleaseCommandQueue (helper_queue));
     }
-  CHECK_OPENCL_ERROR_IN ("clCreateCommandQueue (out-of-order)");
   TEST_ASSERT (queue);
 
   cl_mem buffer

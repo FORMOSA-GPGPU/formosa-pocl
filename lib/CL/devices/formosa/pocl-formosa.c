@@ -1724,6 +1724,14 @@ static void *formosa_copy_completion_thread(void *arg) {
 void pocl_formosa_submit(_cl_command_node *node, cl_command_queue cq) {
   pocl_formosa_data_t *dd = node->device->data;
 
+  cl_event event = node->sync.event.event;
+  if (event->failed_dependency) {
+    node->state = POCL_COMMAND_FAILED;
+    POCL_UNLOCK_OBJ(event);
+    pocl_update_event_failed(CL_FAILED, NULL, 0, event, NULL);
+    return;
+  }
+
   node->state = POCL_COMMAND_READY;
   POCL_LOCK(dd->cq_lock);
   pocl_command_push(node, &dd->ready_list, &dd->command_list);
@@ -1765,11 +1773,17 @@ void pocl_formosa_notify(cl_device_id device, cl_event event,
   if (dd == NULL) return;
 
   _cl_command_node *volatile node = event->command;
-  if (node->state == POCL_COMMAND_FAILED) return;
 
-  if (finished->status < CL_COMPLETE) {
+  if (node->state != POCL_COMMAND_READY) {
+    POCL_MSG_PRINT_EVENTS(
+        "formosa: command related to the notified event %lu not ready\n",
+        event->id);
+    return;
+  }
+
+  if (finished->status < CL_COMPLETE || event->failed_dependency) {
     POCL_LOCK(dd->cq_lock);
-    if (node->state == POCL_COMMAND_READY) CDL_DELETE(dd->command_list, node);
+    CDL_DELETE(dd->command_list, node);
     node->state = POCL_COMMAND_FAILED;
     POCL_UNLOCK(dd->cq_lock);
     /* Unlock the finished event in order to prevent a lock order violation
@@ -1782,13 +1796,6 @@ void pocl_formosa_notify(cl_device_id device, cl_event event,
      * the finished/notifier and event/wait events.
      */
     pocl_lock_events_inorder(finished, event);
-    return;
-  }
-
-  if (node->state != POCL_COMMAND_READY) {
-    POCL_MSG_PRINT_EVENTS(
-        "formosa: command related to the notified event %lu not ready\n",
-        event->id);
     return;
   }
 

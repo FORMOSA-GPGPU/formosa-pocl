@@ -436,6 +436,14 @@ static void simtsim_command_scheduler(pocl_simtsim_data_t *d) {
 void pocl_simtsim_submit(_cl_command_node *node, cl_command_queue cq) {
   pocl_simtsim_data_t *dd = (pocl_simtsim_data_t *)node->device->data;
 
+  cl_event event = node->sync.event.event;
+  if (event->failed_dependency) {
+    node->state = POCL_COMMAND_FAILED;
+    POCL_UNLOCK_OBJ(event);
+    pocl_update_event_failed(CL_FAILED, NULL, 0, event, NULL);
+    return;
+  }
+
   node->state = POCL_COMMAND_READY;
   POCL_LOCK(dd->cq_lock);
   pocl_command_push(node, &dd->ready_list, &dd->command_list);
@@ -473,18 +481,22 @@ void pocl_simtsim_notify(cl_device_id device, cl_event event,
 
   _cl_command_node *volatile node = event->command;
 
-  if (finished->status < CL_COMPLETE) {
-    pocl_unlock_events_inorder(event, finished);
-    pocl_update_event_failed(CL_FAILED, NULL, 0, event, NULL);
-    pocl_lock_events_inorder(finished, event);
-    return;
-  }
-
   if (node->state != POCL_COMMAND_READY) {
     POCL_MSG_PRINT_EVENTS(
         "simtsim: command related to the notified event %" PRIu64
         " not ready\n",
         event->id);
+    return;
+  }
+
+  if (finished->status < CL_COMPLETE || event->failed_dependency) {
+    POCL_LOCK(dd->cq_lock);
+    CDL_DELETE(dd->command_list, node);
+    node->state = POCL_COMMAND_FAILED;
+    POCL_UNLOCK(dd->cq_lock);
+    pocl_unlock_events_inorder(event, finished);
+    pocl_update_event_failed(CL_FAILED, NULL, 0, event, NULL);
+    pocl_lock_events_inorder(finished, event);
     return;
   }
 
