@@ -108,6 +108,21 @@ main(void){
 
       CHECK_CL_ERROR(clReleaseProgram(program));
   }
+  /* Only complete version options select the OpenCL C standard. */
+  {
+    const char *source = "#if __OPENCL_C_VERSION__ != 120\n"
+                         "#error expected the last -cl-std option to win\n"
+                         "#endif\n"
+                         "kernel void check_version(void) {}";
+    program = clCreateProgramWithSource (context, 1, &source, NULL, &err);
+    CHECK_OPENCL_ERROR_IN ("clCreateProgramWithSource");
+    CHECK_CL_ERROR (clBuildProgram (
+        program, num_devices, devices,
+        "-cl-std=CL1.1 -cl-std=CL1.2 -Iinclude-cl-std=CL3.1 "
+        "-D VERSION_TEXT=-cl-std=CL3.1",
+        NULL, NULL));
+    CHECK_CL_ERROR (clReleaseProgram (program));
+  }
   /* TEST 2: invalid kernel */
   {
       size_t kernel_size = strlen(invalid_kernel);

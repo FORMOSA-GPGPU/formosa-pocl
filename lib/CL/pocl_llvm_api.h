@@ -32,6 +32,10 @@
 #include <llvm/Support/raw_os_ostream.h>
 #include <llvm/Target/TargetMachine.h>
 
+#ifdef ENABLE_MLIR
+#include <mlir/IR/MLIRContext.h>
+#endif
+
 #include <map>
 #include <string>
 
@@ -69,14 +73,19 @@ public:
 };
 
 llvm::Module *parseModuleIR (const char *path, llvm::LLVMContext *c);
+llvm::Module *parseModuleIRLazy (const char *path, llvm::LLVMContext *c);
 void parseModuleGVarSize (cl_program program, unsigned device_i,
                           llvm::Module *ProgramBC);
+/* Append s to the device's build log, the one clGetProgramBuildInfo returns
+ * for CL_PROGRAM_BUILD_LOG, and to the build log in the program's cache dir. */
+void appendToProgramBuildLog (cl_program program, unsigned device_i,
+                              std::string &s);
 void writeModuleIRtoString(const llvm::Module *mod, std::string& dest);
 llvm::Module *parseModuleIRMem (const char *input_stream, size_t size,
                                 llvm::LLVMContext *c);
 std::string getDiagString (cl_context ctx);
 std::string getDiagString (void *PoclCtx);
-POCL_EXPORT
+
 void setModuleIntMetadata (llvm::Module *mod, const char *key, unsigned long data);
 void setModuleStringMetadata (llvm::Module *mod, const char *key,
                               const char *data);
@@ -105,7 +114,6 @@ POCL_EXPORT bool getModuleBoolMetadata (const llvm::Module &mod,
 POCL_EXPORT void populateModulePM (void *Passes,
                                    void *Module,
                                    unsigned OptL,
-                                   unsigned SizeL,
                                    bool Vectorize = true,
                                    llvm::TargetMachine *TM = nullptr);
 
@@ -125,7 +133,18 @@ struct PoclLLVMContextData
   llvm::raw_string_ostream *poclDiagStream;
   llvm::DiagnosticPrinterRawOStream *poclDiagPrinter;
   kernelLibraryMapTy *kernelLibraryMap;
+#ifdef ENABLE_MLIR
+  mlir::MLIRContext *MLIRContext;
+#endif
 };
+
+/* Return the device's OpenCL C built-in function library bitcode, parsed into
+ * the context's LLVMContext and cached in its kernelLibraryMap. The returned
+ * module is lazily loaded; materialize functions before inspecting or cloning
+ * their bodies, and only touch the module while holding the context Lock.
+ * Returns NULL if the library cannot be found. */
+llvm::Module *getKernelLibrary(cl_device_id device,
+                               PoclLLVMContextData *llvm_ctx);
 
 #ifdef __GNUC__
 #pragma GCC visibility pop

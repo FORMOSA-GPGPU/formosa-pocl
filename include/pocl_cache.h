@@ -43,6 +43,7 @@
 /* The filename in which the work group (parallelizable) kernel LLVM bc is stored in
    the kernel's temp dir. */
 #define POCL_PARALLEL_BC_FILENAME   "/parallel.bc"
+#define POCL_PARALLEL_MLIR_FILENAME "/parallel.mlir"
 
 #ifdef __cplusplus
 extern "C" {
@@ -143,6 +144,10 @@ void pocl_cache_program_bc_path(char*       program_bc_path,
 POCL_EXPORT
 void pocl_cache_program_spv_path (char *program_bc_path, cl_program program,
                                   unsigned device_i);
+POCL_EXPORT
+void pocl_cache_program_mlir_path (char *program_bc_path,
+                                   cl_program program,
+                                   unsigned device_i);
 
 POCL_EXPORT
 void pocl_cache_work_group_function_path (char *parallel_bc_path,
@@ -154,6 +159,16 @@ void pocl_cache_work_group_function_path (char *parallel_bc_path,
 void pocl_cache_final_binary_path (char *final_binary_path, cl_program program,
                                    unsigned device_i, cl_kernel kernel,
                                    _cl_command_node *command, int specialize);
+
+POCL_EXPORT
+void pocl_cache_final_binary_variant_path (char *final_binary_path,
+                                           cl_program program,
+                                           unsigned device_i, cl_kernel kernel,
+                                           _cl_command_node *command,
+                                           int specialize, int jit_object);
+
+POCL_EXPORT
+int pocl_cache_object_shlib_variant (char *so_path, const char *path);
 
 
 #ifdef __cplusplus

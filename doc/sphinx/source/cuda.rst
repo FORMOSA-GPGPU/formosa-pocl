@@ -62,16 +62,10 @@ Building PoCL with CUDA support
   dump the LLVM IR that is fed into the NVPTX backend for debugging purposes
   (requires ``POCL_DEBUG=1``).
 
-  The ``POCL_CUDA_DISABLE_QUEUE_THREADS`` environment variable indicates usage
-  of background threads for handling command submission. Defaults to ``1``, set to
-  ``0`` to enable background threads.
-  Disabled threads can potentially reduce command launch latency, but can
-  cause problems if using user events or sharing a context with a non-CUDA device.
-
 CUDA backend status
 -------------------
 
-(last updated: 2017-06-02)
+(last updated: 2026-08-25)
 
 The CUDA backend currently passes 73 tests from PoCL's internal testsuite, and
 is capable of running various real OpenCL codes.
@@ -81,6 +75,10 @@ codes using Codeplay's ComputeCpp implementation on NVIDIA GPUs.
 Since it uses CUDA under-the-hood, this backend also works with all of the
 NVIDIA CUDA profiling and debugging tools, many of which don't work with
 NVIDIA's own OpenCL implementation.
+
+When built with the ``ENABLE_CUDA_IMAGES`` option, the CUDA backend exposes
+support for OpenCL images. However this support is currently limited to images
+of type ``IMAGE1D_BUFFER``.
 
 Conformance status
 ~~~~~~~~~~~~~~~~~~
@@ -117,6 +115,10 @@ The following is a non-comprehensive list of known issues in the CUDA backend:
 
 * image types and samplers are unimplemented
 * printf format support is incomplete
+* subgroup reduce is not supported with CUDA versions older than 9.0
+* subgroup ballot is only supported on SM_30 - SM_64 targets with CUDA 9.0+
+* LLVM 21 is not supported due to an upstream bug. Use LLVM 17-20 instead. For
+  details, see https://github.com/llvm/llvm-project/issues/154772
 
 Additionally, there has been little effort to optimize the performance of this
 backend so far - the current effort is on implementing remaining functionality.

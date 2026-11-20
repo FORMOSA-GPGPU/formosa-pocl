@@ -197,15 +197,28 @@ llvm::AllocaInst *getLoopStateAllocaForLoad(llvm::LoadInst &LInst) {
 // bring along the llvm.dbg.value intrinsics when cloning values
 void copyDgbValues(llvm::Value *From, llvm::Value *To,
                    llvm::Instruction *InsertBefore) {
+#if LLVM_MAJOR < 22
   llvm::SmallVector<llvm::DbgValueInst *, 1> DbgValues;
   llvm::findDbgValues(DbgValues, From);
+#else
+  llvm::SmallVector<llvm::DbgVariableRecord *, 1> DbgValues;
+  llvm::findDbgValues(From, DbgValues);
+#endif
   if (!DbgValues.empty()) {
     auto *DbgValue = DbgValues.back();
     llvm::DIBuilder DbgBuilder{
         *InsertBefore->getParent()->getParent()->getParent()};
+#if LLVM_MAJOR < 24
     DbgBuilder.insertDbgValueIntrinsic(To, DbgValue->getVariable(),
                                        DbgValue->getExpression(),
-                                       DbgValue->getDebugLoc(), InsertBefore);
+                                       DbgValue->getDebugLoc(),
+                                       Inst2InsertPt(InsertBefore));
+#else
+    DbgBuilder.insertDbgValue(To, DbgValue->getVariable(),
+                              DbgValue->getExpression(),
+                              DbgValue->getDebugLoc(),
+                              Inst2InsertPt(InsertBefore));
+#endif
   }
 }
 
@@ -269,17 +282,19 @@ getLocalSizeValues(llvm::Function &F, llvm::ArrayRef<unsigned long> LocalSizes,
 
       if (I->getParent() != &F.getEntryBlock()) {
         // must be in entry block. move.
-// TODO for some reason, moveAfter(InsertionPoint) exists in the header, but
-// linking fails with undefined symbol
-//#if LLVM_MAJOR < 20
-          auto InsPt = F.getEntryBlock().getFirstNonPHI();
-//#else
-//          BasicBlock::iterator InsPt = F.getEntryBlock().getFirstInsertionPt();
-//#endif
+#if LLVM_MAJOR < 20
+        auto InsPt = F.getEntryBlock().getFirstNonPHI();
         if (F.getEntryBlock().size() == 1)
           I->moveBefore(InsPt);
         else
           I->moveAfter(InsPt);
+#else
+        auto InsPt = F.getEntryBlock().getFirstNonPHIIt();
+        if (F.getEntryBlock().size() == 1)
+          I->moveBefore(InsPt);
+        else
+          I->moveBefore(std::next(InsPt));
+#endif
       }
     } else
       LocalSize[D] = llvm::ConstantInt::get(
@@ -1127,16 +1142,6 @@ void fillUserHull(llvm::AllocaInst *Alloca,
   }
 }
 
-template <class PtrSet> struct PtrSetWrapper {
-  explicit PtrSetWrapper(PtrSet &PtrSetArg) : Set(PtrSetArg) {}
-  PtrSet &Set;
-  using iterator = typename PtrSet::iterator;
-  using value_type = typename PtrSet::value_type;
-  template <class IT, class ValueT> IT insert(IT, const ValueT &Value) {
-    return Set.insert(Value).first;
-  }
-};
-
 // checks if all uses of an alloca are in just a single subcfg (doesn't have to
 // be arrayified!).
 // TO CLEAN: merge with WorkitemLoopsImpl::shouldNotBeContextSaved().
@@ -1147,10 +1152,9 @@ bool isAllocaSubCfgInternal(llvm::AllocaInst *Alloca,
   {
     llvm::SmallVector<llvm::Instruction *, 32> Users;
     fillUserHull(Alloca, Users);
-    PtrSetWrapper<decltype(UserBlocks)> Wrapper{UserBlocks};
-    std::transform(Users.begin(), Users.end(),
-                   std::inserter(Wrapper, UserBlocks.end()),
-                   [](auto *I) { return I->getParent(); });
+    for (auto *I : Users) {
+      UserBlocks.insert(I->getParent());
+    }
   }
 
   for (auto &SubCfg : SubCfgs) {
@@ -1222,7 +1226,11 @@ void SubCFGFormation::arrayifyAllocas(
 
     for (auto &SubCfg : SubCfgs) {
 
+#if LLVM_MAJOR >= 24
+      auto Before = SubCfg.getLoadBB()->getFirstNonPHIOrLifetime();
+#else
       auto Before = SubCfg.getLoadBB()->getFirstNonPHIOrDbgOrLifetime();
+#endif
 #if LLVM_MAJOR < 20
       auto GEP = createContextArrayGEP(Alloca, Before, PaddingAdded);
 #else
@@ -1274,7 +1282,19 @@ llvm::Instruction *SubCFGFormation::getLocalIdInRegion(llvm::Instruction *Instr,
 /// CBS does not handle kernels without barriers.
 bool SubCFGFormation::canHandleKernel(llvm::Function &K,
                                       llvm::FunctionAnalysisManager &AM) {
-  return hasWorkgroupBarriers(K);
+  if (!hasWorkgroupBarriers(K))
+    return false;
+
+  // formSubCfgs() builds sub-CFGs between the entry barrier and the kernel's
+  // exit (0-successor) blocks. A kernel with no exit block, such as one with an
+  // infinite loop, gives it nothing to work with and trips the "No kernel
+  // exits!" abort. The work-item loops handler compiles these kernels (see
+  // regression/infinite_loop), so decline here and let the chooser fall back to
+  // it, as it already does for kernels without barriers.
+  for (llvm::BasicBlock &BB : K)
+    if (BB.getTerminator()->getNumSuccessors() == 0)
+      return true;
+  return false;
 }
 
 void moveAllocasToEntry(llvm::Function &F,
@@ -1389,7 +1409,8 @@ void SubCFGFormation::formSubCfgs(llvm::Function &F, llvm::LoopInfo &LI,
   auto *IndVarT =
       getLoadForGlobalVariable(F, LocalIdGlobalNames[Dim - 1])->getType();
   llvm::Instruction *IndVar = Builder.CreateLoad(
-      IndVarT, llvm::UndefValue::get(llvm::PointerType::get(IndVarT, 0)));
+      IndVarT,
+      llvm::UndefValue::get(llvm::PointerType::get(F.getContext(), 0)));
   // kept for simple reenabling of more advanced uniformity analysis
 #if 0
   VecInfo.setPinnedShape(*IndVar, pocl::VectorShape::cont());
@@ -1563,6 +1584,8 @@ SubCFGFormation::run(llvm::Function &F, llvm::FunctionAnalysisManager &AM) {
 
   handleWorkitemFunctions();
   GenerateGlobalIdComputation();
+
+  eraseInvalidLifetimeMarkers(&F);
 
   PreservedAnalyses PAChanged = PreservedAnalyses::none();
   PAChanged.preserve<WorkitemHandlerChooser>();

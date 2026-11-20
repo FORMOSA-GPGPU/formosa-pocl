@@ -40,11 +40,14 @@ IGNORE_COMPILER_WARNING("-Wstrict-aliasing")
 #include <clang/Frontend/FrontendActions.h>
 #include <clang/Frontend/TextDiagnosticBuffer.h>
 #include <clang/Frontend/TextDiagnosticPrinter.h>
+#include <clang/Frontend/Utils.h>
 
-#ifdef CPU_USE_LLD_LINK_WIN32
+#ifdef CPU_USE_LLD_LINK
 #include <lld/Common/Driver.h>
+#include <mutex>
 #endif
 
+IGNORE_COMPILER_WARNING("-Wcomment")
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
@@ -54,6 +57,7 @@ IGNORE_COMPILER_WARNING("-Wstrict-aliasing")
 #include <llvm/Support/VirtualFileSystem.h>
 #include <llvm/TargetParser/Host.h>
 #include <llvm/Transforms/Utils/Cloning.h>
+POP_COMPILER_DIAGS
 
 #include <iostream>
 #include <map>
@@ -69,6 +73,9 @@ IGNORE_COMPILER_WARNING("-Wstrict-aliasing")
 #include "pocl_runtime_config.h"
 #include "pocl_file_util.h"
 #include "pocl_cache.h"
+#ifdef HAVE_DLFCN_H
+#include "pocl_dynlib.h"
+#endif
 #include "LLVMUtils.h"
 #include "pocl_util.h"
 
@@ -98,6 +105,26 @@ POP_COMPILER_DIAGS
 #endif
 
 
+// Like clang::PrintPreprocessedAction, but printing into a string instead of
+// an output file. Clang's output files are removed on signal, which makes LLVM
+// install process-wide handlers for SIGSEGV etc., replacing the host's.
+class PrintPreprocessedToStringAction : public clang::PreprocessorFrontendAction {
+  std::string &Output;
+
+public:
+  PrintPreprocessedToStringAction(std::string &Output) : Output(Output) {}
+
+protected:
+  void ExecuteAction() override {
+    clang::CompilerInstance &CI = getCompilerInstance();
+    llvm::raw_string_ostream OS(Output);
+    clang::DoPrintPreprocessedInput(CI.getPreprocessor(), &OS,
+                                    CI.getPreprocessorOutputOpts());
+  }
+
+  bool hasPCHSupport() const override { return true; }
+};
+
 // Unlink input sources
 static inline int
 unlink_source(FrontendOptions &fe)
@@ -114,8 +141,8 @@ unlink_source(FrontendOptions &fe)
 
 }
 
-static void appendToProgramBuildLog(cl_program program, unsigned device_i,
-                                    std::string &s) {
+void appendToProgramBuildLog(cl_program program, unsigned device_i,
+                             std::string &s) {
   if (!s.empty()) {
     POCL_MSG_ERR("%s", s.c_str());
     /* this may not actually write anything if the buildhash is invalid,
@@ -160,9 +187,6 @@ static void get_build_log(cl_program program,
   appendToProgramBuildLog(program, device_i, log);
 }
 
-static llvm::Module *getKernelLibrary(cl_device_id device,
-                                      PoclLLVMContextData *llvm_ctx);
-
 /**
  * Runs various LLVM "passes" on the program.bc LLVM module;
  * the passes are not real LLVM passes, but perhaps it will make sense
@@ -198,7 +222,8 @@ static bool generateProgramBC(PoclLLVMContextData *Context, llvm::Module *Mod,
   if (Program->compiler_options)
     Opts.assign(Program->compiler_options);
   bool DebugRequested = (Opts.find("-g") != std::string::npos);
-  if (link(Mod, BuiltinLib, Log, Device, !DebugRequested))
+  if (link(Mod, BuiltinLib, Log, Device, !DebugRequested,
+           /*ErrorOnUnresolved=*/true))
     return true;
 
   raw_string_ostream OS(Log);
@@ -293,9 +318,7 @@ int pocl_llvm_build_program(cl_program program,
                             const char **header_include_names,
                             int linking_program)
 {
-  char tempfile[POCL_MAX_PATHNAME_LENGTH];
   char program_bc_path[POCL_MAX_PATHNAME_LENGTH];
-  tempfile[0] = 0;
   llvm::Module *mod = nullptr;
   char temp_include_dir[POCL_MAX_PATHNAME_LENGTH];
   std::string user_options(program->compiler_options ? program->compiler_options
@@ -344,10 +367,10 @@ int pocl_llvm_build_program(cl_program program,
 #if LLVM_MAJOR < 21
   llvm::IntrusiveRefCntPtr<clang::DiagnosticOptions> diagOpts =
       new clang::DiagnosticOptions();
-  clang::DiagnosticsEngine diags(diagID, &*diagOpts, diagsBuffer);
+  llvm::IntrusiveRefCntPtr<clang::DiagnosticsEngine> diags(new clang::DiagnosticsEngine(diagID, &*diagOpts, diagsBuffer));
 #else
   clang::DiagnosticOptions diagOpts{};
-  clang::DiagnosticsEngine diags(diagID, diagOpts, diagsBuffer);
+  llvm::IntrusiveRefCntPtr<clang::DiagnosticsEngine> diags(new clang::DiagnosticsEngine(diagID, diagOpts, diagsBuffer));
 #endif
 
   CompilerInstance CI;
@@ -409,10 +432,6 @@ int pocl_llvm_build_program(cl_program program,
   size_t fastmath_flag = user_options.find("-cl-fast-relaxed-math");
 
   if (fastmath_flag != std::string::npos) {
-#if defined(ENABLE_CONFORMANCE) && LLVM_MAJOR < 18
-    user_options.replace(fastmath_flag, 21,
-                         "-cl-finite-math-only -cl-unsafe-math-optimizations");
-#endif
     ss << "-D__FAST_RELAXED_MATH__=1 ";
     fp_contract = "fast";
   }
@@ -420,17 +439,8 @@ int pocl_llvm_build_program(cl_program program,
   size_t unsafemath_flag = user_options.find("-cl-unsafe-math-optimizations");
 
   if (unsafemath_flag != std::string::npos) {
-#if defined(ENABLE_CONFORMANCE) && LLVM_MAJOR < 18
-    // This should be almost the same but disables -freciprocal-math, that
-    // was not accurate enough in before LLVM v18. Disabling it is
-    // required for conformance_math_divide test to pass with OpenCL 3.0
-    user_options.replace(unsafemath_flag, 29,
-                         "-cl-no-signed-zeros -cl-mad-enable -ffp-contract=fast");
-#endif
     fp_contract = "fast";
   }
-
-  ss << user_options << " ";
 
   if (device->endian_little)
     ss << "-D__ENDIAN_LITTLE__=1 ";
@@ -457,19 +467,44 @@ int pocl_llvm_build_program(cl_program program,
 
   ss << "-D__OPENCL_VERSION__=" << device->version_as_int << " ";
 
-  if (user_options.find("-cl-std=") == std::string::npos)
-    ss << "-cl-std=" << device->opencl_c_version_as_opt << " ";
+  int UserClStd = 0;
+  const size_t ClStdPos = program->cl_std_version_offset;
 
-  std::string temp(ss.str());
-  size_t pos = temp.rfind("-cl-std=CL");
-  pos += 10;
-  int cl_std_major = temp.c_str()[pos] - '0';
-  int cl_std_minor = temp.c_str()[pos+2] - '0';
-  int cl_std_i = cl_std_major * 100 + cl_std_minor * 10;
-  ss << "-D__OPENCL_C_VERSION__=" << cl_std_i << " ";
+  if (ClStdPos == 0) {
+    // use device defaults
+#if LLVM_MAJOR < 23
+    // limit -cl-std to CL3.0 when using LLVM < 23
+    if (device->version_as_int > 300) {
+      ss << "-cl-std=CL3.0 ";
+      UserClStd = 300;
+    } else
+#endif
+    {
+      ss << "-cl-std=" << device->opencl_c_version_as_opt << " ";
+      UserClStd = device->version_as_int;
+    }
+    // doesn't use UserClStd here; we're passing 310 here even if -cl-std=CL3.0,
+    // because some of the 3.1 features in include/CL headers are behind this macro
+    ss << "-U__OPENCL_C_VERSION__ -D__OPENCL_C_VERSION__=" << device->version_as_int << " ";
+  } else {
+    // use what the user options requested
+    int ClStdMajor = user_options.c_str()[ClStdPos] - '0';
+    int ClStdMinor = user_options.c_str()[ClStdPos+2] - '0';
+    UserClStd = ClStdMajor * 100 + ClStdMinor * 10;
+    ss << "-U__OPENCL_C_VERSION__ -D__OPENCL_C_VERSION__=" << UserClStd << " ";
+#if LLVM_MAJOR < 23
+    // limit -cl-std to CL3.0 when using LLVM < 23
+    if (UserClStd > 300) {
+        user_options[ClStdPos+2] = '0';
+        UserClStd = 300;
+    }
+#endif
+  }
+
+  ss << user_options << " ";
 
   std::string exts = device->extensions;
-  if (cl_std_major >= 3 && device->features != nullptr) {
+  if (UserClStd >= 300 && device->features != nullptr) {
     exts += ' ';
     exts += device->features;
   }
@@ -596,7 +631,7 @@ int pocl_llvm_build_program(cl_program program,
           pocl_build,
           ArrayRef<const char *>(itemcstrs.data(),
                                  itemcstrs.data() + itemcstrs.size()),
-          diags)) {
+          *diags)) {
     pocl_cache_create_program_cachedir(program, device_i, program->source,
                                        strlen(program->source),
                                        program_bc_path);
@@ -605,12 +640,8 @@ int pocl_llvm_build_program(cl_program program,
     return CL_INVALID_BUILD_OPTIONS;
   }
 
-#if LLVM_MAJOR < 18
-  LangOptions *la = pocl_build.getLangOpts();
-#else
   LangOptions L = pocl_build.getLangOpts();
   LangOptions *la = &L;
-#endif
   PreprocessorOptions &po = pocl_build.getPreprocessorOpts();
   llvm::Triple triple (device->llvm_target_triplet);
 
@@ -622,7 +653,7 @@ int pocl_llvm_build_program(cl_program program,
   la->CharIsSigned = true;
 
   // the per-file types don't seem to override this
-  la->OpenCLVersion = cl_std_i;
+  la->OpenCLVersion = UserClStd;
   la->FakeAddressSpaceMap = false;
   la->Blocks = true; //-fblocks
   la->MathErrno = false; // -fno-math-errno
@@ -680,10 +711,10 @@ int pocl_llvm_build_program(cl_program program,
 #ifdef DEBUG_POCL_LLVM_API
   std::cout << "### Triple: " << ta.Triple.c_str() <<  ", CPU: " << ta.CPU.c_str();
 #endif
-#if LLVM_MAJOR < 20
-  CI.createDiagnostics(diagsBuffer, false);
+#if LLVM_MAJOR < 22
+  CI.setDiagnostics(&*diags);
 #else
-  CI.createDiagnostics(*llvm::vfs::getRealFileSystem(), diagsBuffer, false);
+  CI.setDiagnostics(diags);
 #endif
 
   // Read input source to clang::FrontendOptions.
@@ -720,28 +751,16 @@ int pocl_llvm_build_program(cl_program program,
   poo.ShowMacros = 1;
   poo.RewriteIncludes = 0;
 
-  error = pocl_cache_tempname(tempfile, ".preproc.cl", NULL);
-  assert(error == 0);
-  fe.OutputFile.assign((const char *)tempfile);
-
-  bool success = true;
-  clang::PrintPreprocessedAction Preprocess;
-  success = CI.ExecuteAction(Preprocess);
-  char *PreprocessedOut = nullptr;
-  uint64_t PreprocessedSize = 0;
-
-  if (success) {
-    pocl_read_file(tempfile, &PreprocessedOut, &PreprocessedSize);
-  }
-  /* always remove preprocessed output - the sources are in different files */
-  pocl_remove(tempfile);
+  std::string PreprocessedOut;
+  PrintPreprocessedToStringAction Preprocess(PreprocessedOut);
+  bool Success = CI.ExecuteAction(Preprocess);
 
   if (pocl_get_bool_option("POCL_LEAVE_KERNEL_COMPILER_TEMP_FILES", 0) == 0) {
     if (num_input_headers > 0)
       pocl_rm_rf(temp_include_dir);
   }
 
-  if (PreprocessedOut == nullptr) {
+  if (!Success) {
     pocl_cache_create_program_cachedir(program, device_i, program->source,
                                        strlen(program->source),
                                        program_bc_path);
@@ -750,10 +769,8 @@ int pocl_llvm_build_program(cl_program program,
     return CL_BUILD_PROGRAM_FAILURE;
   }
 
-  pocl_cache_create_program_cachedir(program, device_i, PreprocessedOut,
-                                     static_cast<size_t>(PreprocessedSize), program_bc_path);
-
-  POCL_MEM_FREE(PreprocessedOut);
+  pocl_cache_create_program_cachedir(program, device_i, PreprocessedOut.data(),
+                                     PreprocessedOut.size(), program_bc_path);
 
   unlink_source(fe);
 
@@ -783,7 +800,11 @@ int pocl_llvm_build_program(cl_program program,
 
     program->llvm_irs[device_i] = mod =
         parseModuleIR(program_bc_path, llvm_ctx->Context);
-    assert(mod);
+    if (mod == nullptr) {
+      POCL_MSG_ERR("pocl: failed to parse program.bc '%s' (corrupt or stale "
+                   "kernel-cache entry)\n", program_bc_path);
+      return CL_BUILD_ERROR;
+    }
     ++llvm_ctx->number_of_IRs;
 
     parseModuleGVarSize(program, device_i, mod);
@@ -795,11 +816,11 @@ int pocl_llvm_build_program(cl_program program,
   // the compilation flags used to compile it and the current translation
   // unit via the preprocessor options directly.
   clang::EmitLLVMOnlyAction EmitLLVM(llvm_ctx->Context);
-  success = CI.ExecuteAction(EmitLLVM);
+  Success = CI.ExecuteAction(EmitLLVM);
 
   get_build_log(program, device_i, ss_build_log, diagsBuffer, &CI.getSourceManager());
 
-  if (!success)
+  if (!Success)
     return CL_BUILD_PROGRAM_FAILURE;
 
   mod = (llvm::Module *)program->llvm_irs[device_i];
@@ -884,7 +905,6 @@ static int pocl_convert_spir_bitcode_to_target(llvm::Module *p,
                          "SPIR is only supported on little-endian devices\n");
 
     if (device->address_bits != SpirAddrBits) {
-      delete p;
       POCL_RETURN_ERROR_ON(1, CL_LINK_PROGRAM_FAILURE,
                            "Device address bits != SPIR binary triple address "
                            "bits, device: %s / module: %s\n",
@@ -900,8 +920,9 @@ static int pocl_convert_spir_bitcode_to_target(llvm::Module *p,
 
     if (p->getModuleFlag("PIC Level") == nullptr)
       p->setPICLevel(PICLevel::BigPIC);
-    return CL_SUCCESS;
+
   }
+
   return CL_SUCCESS;
 }
 
@@ -952,6 +973,16 @@ int pocl_llvm_link_program(cl_program program, unsigned device_i,
       POCL_RETURN_ERROR_ON((Ptr == nullptr), CL_LINK_PROGRAM_FAILURE,
                            "could not parse module\n");
       TempModule.reset(Ptr);
+    }
+
+    /* this is necessary, because LinkOnceODRLinkage functions can be removed
+     * if the Linker determines they're unnecessary, and since there is no Linker API
+     * to link >2 modules at once, the Linker could remove LinkOnceODR before it is used.
+     * WeakODR is the same as LinkOnceODR except Linker is not allowed to remove it. */
+    for (Function &F : TempModule->functions()) {
+      if (F.getLinkage() == llvm::GlobalValue::LinkOnceODRLinkage) {
+        F.setLinkage(llvm::GlobalValue::WeakODRLinkage);
+      }
     }
 
     error = pocl_convert_spir_bitcode_to_target(TempModule.get(), LibraryModule,
@@ -1038,11 +1069,13 @@ int pocl_llvm_link_program(cl_program program, unsigned device_i,
 }
 
 /**
- * Return the OpenCL C built-in function library bitcode
- * for the given device.
+ * Return the OpenCL C built-in function library bitcode for the given device.
+ * The returned module is lazily loaded; callers must materialize functions
+ * before inspecting or cloning their bodies. Only access the module while
+ * holding the context Lock because materialization mutates it.
  */
-static llvm::Module *getKernelLibrary(cl_device_id device,
-                                      PoclLLVMContextData *llvm_ctx) {
+llvm::Module *getKernelLibrary(cl_device_id device,
+                               PoclLLVMContextData *llvm_ctx) {
   Triple triple(device->llvm_target_triplet);
   llvm::LLVMContext *llvmContext = llvm_ctx->Context;
   kernelLibraryMapTy *kernelLibraryMap = llvm_ctx->kernelLibraryMap;
@@ -1081,14 +1114,14 @@ static llvm::Module *getKernelLibrary(cl_device_id device,
   if (pocl_exists(BuiltinLibrary.c_str())) {
     POCL_MSG_PRINT_LLVM("Using %s as the built-in lib.\n",
                         BuiltinLibrary.c_str());
-    BuiltinLibModule = parseModuleIR(BuiltinLibrary.c_str(), llvmContext);
+    BuiltinLibModule = parseModuleIRLazy(BuiltinLibrary.c_str(), llvmContext);
   } else {
     if (device->kernellib_fallback_name &&
         pocl_exists(BuiltinLibraryFallback.c_str())) {
       POCL_MSG_WARN("Using fallback %s as the built-in lib.\n",
                     BuiltinLibraryFallback.c_str());
       BuiltinLibModule =
-          parseModuleIR(BuiltinLibraryFallback.c_str(), llvmContext);
+          parseModuleIRLazy(BuiltinLibraryFallback.c_str(), llvmContext);
     } else
       POCL_MSG_ERR("Can't find either kernel library file %s or fallback %s.\n",
                    BuiltinLibrary.c_str(), BuiltinLibraryFallback.c_str());
@@ -1159,12 +1192,26 @@ int pocl_invoke_clang(const char* TTriple, const char** Args) {
 
 }
 
-#ifdef CPU_USE_LLD_LINK_WIN32
+#ifdef CPU_USE_LLD_LINK
 
+#if defined(_WIN32)
+LLD_HAS_DRIVER(mingw)
 LLD_HAS_DRIVER(coff)
+#elif defined(__APPLE__)
+LLD_HAS_DRIVER(macho)
+#else
+LLD_HAS_DRIVER(elf)
+#endif
 
-int pocl_invoke_lld_link_win32(cl_device_id Device, const char *InFile,
-                               const char *OutFile) {
+int pocl_invoke_lld_link(cl_device_id Device, const char *InFile,
+                         const char *OutFile) {
+  POCL_MSG_PRINT_LLVM("Invoking lld through library API\n");
+
+  std::vector<const char *> LinkerArgs;
+  std::vector<lld::DriverDef> Drivers;
+  std::vector<std::string> ArgStorage;
+
+#if defined(_WIN32)
   std::string OutArg{"/out:"};
   OutArg.append(OutFile);
 
@@ -1182,10 +1229,11 @@ int pocl_invoke_lld_link_win32(cl_device_id Device, const char *InFile,
     LibraryRootDir = Temp;
   }
 
-  std::string ChkstkLibrary = LibraryRootDir + "/libchkstk.obj";
-  std::string StringLibrary = LibraryRootDir + "/libmemory.obj";
+  ArgStorage.push_back(OutArg);
+  ArgStorage.push_back(LibraryRootDir + "/libchkstk.obj");
+  ArgStorage.push_back(LibraryRootDir + "/libmemory.obj");
 
-  std::vector<const char *> LinkerArgs{
+  LinkerArgs = {
       "lld-link", "/dll", "/nologo",
 #if HOST_DEVICE_ADDRESS_BITS == 64
       "/machine:x64",
@@ -1201,10 +1249,52 @@ int pocl_invoke_lld_link_win32(cl_device_id Device, const char *InFile,
       //
       // instead, we avoid linking against C runtime lib completely.
       // this way we get standalone libpocl
-      "/nodefaultlib", "/noentry", "/noimplib", OutArg.c_str(), InFile,
-      ChkstkLibrary.c_str(), StringLibrary.c_str() };
+      "/nodefaultlib", "/noentry", "/noimplib", ArgStorage[0].c_str(), InFile,
+      ArgStorage[1].c_str(), ArgStorage[2].c_str()};
 
-  std::vector<lld::DriverDef> Drivers = {{lld::WinLink, &lld::coff::link}};
+  Drivers = {{lld::MinGW, &lld::mingw::link}, {lld::WinLink, &lld::coff::link}};
+#else
+  // The flags the Clang driver would pass to the linker are HOST_LD_FLAGS
+  // (-shared -nostartfiles and friends), expressed here in ld terms.
+  // Symbols the kernel binary leaves undefined resolve when it is
+  // dlopen()ed, the same way the JIT resolves them, so no C runtime or
+  // startup files are needed at link time.
+#ifdef __APPLE__
+  ArgStorage.push_back(
+      llvm::Triple(Device->llvm_target_triplet).getArchName().str());
+  LinkerArgs = {"ld64.lld", "-dylib", "-undefined", "dynamic_lookup",
+                "-arch",    ArgStorage[0].c_str(), "-o", OutFile,
+                InFile};
+  Drivers = {{lld::Darwin, &lld::macho::link}};
+#else
+  LinkerArgs = {"ld.lld", "--shared", "-o", OutFile, InFile};
+  Drivers = {{lld::Gnu, &lld::elf::link}};
+#endif
+
+  // Carry over the extra link inputs HOST_LD_FLAGS passes by absolute path
+  // (the vector-math libraries: libmvec, SLEEF, SVML and its helpers; see the
+  // DEFAULT_HOST_LD_FLAGS setup in CMakeLists.txt). Driver flags and bare -l
+  // libraries are dropped -- there are no library search paths here -- so those
+  // libraries must be referenced by absolute path to survive, or their symbols
+  // would be left unresolved (a bare -l library has nothing to resolve against).
+  for (const char **Flag = Device->final_linkage_flags; Flag && *Flag; ++Flag)
+    if ((*Flag)[0] == '/')
+      LinkerArgs.push_back(*Flag);
+
+#if defined(ENABLE_PRINTF_IMMEDIATE_FLUSH) && defined(HAVE_DLFCN_H)
+  // The kernel references pocl_flush_printf_buffer, which only libpocl
+  // provides; record the dependency like the Clang-driver link does.
+  const char *PoclLib = pocl_dynlib_pathname((void *)&pocl_invoke_clang);
+  if (PoclLib != nullptr)
+    LinkerArgs.push_back(PoclLib);
+#endif
+#endif
+
+  // lld is not re-entrant; the codegen lock does not cover all callers
+  // (poclbinary export links outside of it), so serialize here.
+  static std::mutex LLDMutex;
+  std::lock_guard<std::mutex> Guard(LLDMutex);
+
   lld::Result Res =
       lld::lldMain(LinkerArgs, llvm::outs(), llvm::errs(), Drivers);
   return (!Res.retCode && Res.canRunAgain) ? 0 : 1;

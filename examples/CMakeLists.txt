@@ -67,6 +67,25 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.18)
   list(APPEND GIT_OPTIONS GIT_REMOTE_UPDATE_STRATEGY CHECKOUT)
 endif()
 
+# set up arguments that we want to pass to ExternalProject_add's CMake call
+get_property(is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+set(UPSTREAM_CMAKE_ARGS "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}" "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}")
+if(NOT is_multi_config AND CMAKE_BUILD_TYPE)
+  list(APPEND UPSTREAM_CMAKE_ARGS "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}")
+endif()
+if(CMAKE_C_COMPILER_LAUNCHER)
+  list(APPEND UPSTREAM_CMAKE_ARGS "-DCMAKE_C_COMPILER_LAUNCHER=${CMAKE_C_COMPILER_LAUNCHER}")
+endif()
+if(CMAKE_CXX_COMPILER_LAUNCHER)
+  list(APPEND UPSTREAM_CMAKE_ARGS "-DCMAKE_CXX_COMPILER_LAUNCHER=${CMAKE_CXX_COMPILER_LAUNCHER}")
+endif()
+if(CMAKE_CROSSCOMPILING)
+  list(APPEND UPSTREAM_CMAKE_ARGS "-DCMAKE_CROSSCOMPILING=1")
+  if(CMAKE_TOOLCHAIN_FILE)
+    list(APPEND UPSTREAM_CMAKE_ARGS "-DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}")
+  endif()
+endif()
+
 # TODO:   opencl-book-samples
 set(ALL_TESTSUITES
     AMDSDK3.0
@@ -75,9 +94,9 @@ set(ALL_TESTSUITES
     intel-compute-samples oneapi-samples
     simple-sycl-samples dpcpp-book-samples
     opencl-book-samples OpenCV OpenVX_CTS
-    Parboil piglit PyOpenCL SYCL_CTS
-    Rodinia shoc sycl-bench VexCL ViennaCL
-    UnitCL)
+    Parboil piglit polybenchGPU PyOpenCL
+    Rodinia shoc sycl-bench SYCL_CTS
+    VexCL ViennaCL UnitCL)
 
 if("${ENABLE_TESTSUITES}" STREQUAL "all")
   set(ENABLE_TESTSUITES ${ALL_TESTSUITES})

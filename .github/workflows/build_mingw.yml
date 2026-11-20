@@ -26,110 +26,72 @@ concurrency:
 
 jobs:
   mingw_test_matrix:
-    name: LLVM ${{ matrix.llvm_version }} - ${{ matrix.config }} - shared libs:${{ matrix.shared_libs }}
-    runs-on: windows-latest
+    name: ${{ matrix.msystem }} - CPU - shared libs:${{ matrix.shared_libs }}
+    runs-on: ${{ matrix.msystem == 'CLANGARM64' && 'windows-11-arm' || 'windows-latest' }}
     defaults:
       run:
         shell: msys2 {0}
     strategy:
       fail-fast: false
       matrix:
-        llvm_version: [19]
-        shared_libs: [ON, OFF]
-        config: [cpu]
+        shared_libs: ['ON', 'OFF']
+        msystem: [MINGW64, UCRT64, CLANG64, CLANGARM64]
 
     steps:
-      - name: Setup MSYS2
-        uses: msys2/setup-msys2@fb197b72ce45fb24f17bf3f807a388985654d1f2 # v2.29.0
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-hwloc
-            mingw-w64-x86_64-pkg-config
-
       - name: Checkout PoCL
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - name: Setup Build Environment
-        run: |
-          # Convert the Windows workspace path to an MSYS2 compatible one
-          WORKSPACE=$(cygpath -u "${{ github.workspace }}")
-          echo "WORKSPACE=${WORKSPACE}" >> $GITHUB_ENV
-
-      - name: Checkout LLVM
-        id: checkout-llvm
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
         with:
-          repository: llvm/llvm-project
-          ref: release/${{ matrix.llvm_version }}.x
-          path: llvm-project
-
-      - name: Restore Cached LLVM
-        id: cache-llvm
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
-        with:
-          path: install-llvm
-          key: llvm-mingw-${{ matrix.llvm_version }}-${{ runner.os }}
-
-      - if: ${{ steps.cache-llvm.outputs.cache-hit != 'true' }}
-        name: Configure LLVM
-        run: |
-          cmake -S llvm-project/llvm -B build-llvm \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DLLVM_ENABLE_PROJECTS=clang \
-            -DLLVM_TARGETS_TO_BUILD=host \
-            -DCMAKE_INSTALL_PREFIX=${{ env.WORKSPACE }}/install-llvm \
-            -DLLVM_BUILD_LLVM_DYLIB=ON \
-            -DLLVM_LINK_LLVM_DYLIB=ON \
-            -G "Ninja"
-        # XXX: DYLIBs are necessary to work around export ordinal overflows
-
-      - if: ${{ steps.cache-llvm.outputs.cache-hit != 'true' }}
-        name: Build LLVM
-        run: |
-          cmake --build build-llvm
-          cmake --install build-llvm
-
-      - if: ${{ steps.cache-llvm.outputs.cache-hit != 'true' }}
-        name: Save LLVM
-        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
-        with:
-          path: install-llvm
-          key: llvm-mingw-${{ matrix.llvm_version }}-${{ runner.os }}
+          msystem: ${{ matrix.msystem }}
+          update: true
+          pacboy: >-
+            cc:p
+            cmake:p
+            hwloc:p
+            libjpeg-turbo:p
+            clang:p
+            clang-tools-extra:p
+            llvm:p
+            spirv-llvm-translator:p
+            python:p
 
       - name: Load Env vars
-        id: load-env
-        run: |
-          cat ${{ env.WORKSPACE }}/.github/variables.txt >> $GITHUB_ENV
+        run: cat .github/variables.txt >> "$GITHUB_ENV"
 
       - name: Configure PoCL
         run: |
-          cmake -S ${{ env.WORKSPACE }} -B ${{ env.WORKSPACE }}/build-pocl \
+          BUILD_FLAGS="-O2 -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
+          cmake -S . -B build-pocl \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=${{ env.WORKSPACE }}/install-pocl \
-            -DWITH_LLVM_CONFIG=${{ env.WORKSPACE }}/install-llvm/bin/llvm-config.exe \
+            "-DCMAKE_C_FLAGS_RELEASE=${BUILD_FLAGS}"  "-DCMAKE_CXX_FLAGS_RELEASE=${BUILD_FLAGS}" \
+            -DCMAKE_INSTALL_PREFIX="$PWD/install-pocl" \
             -DBUILD_SHARED_LIBS=${{ matrix.shared_libs }} \
             -DENABLE_ICD=OFF \
+            -DENABLE_SPIRV=ON \
+            -DKERNELLIB_HOST_CPU_VARIANTS=distro \
+            -DENABLE_LLVM_FILECHECKS=0 \
             -DENABLE_LOADABLE_DRIVERS=${{ matrix.shared_libs }} \
             -G "Ninja"
         # XXX: ENABLE_ICD=OFF because ocl-icd doesn't support Windows,
         #      and PoCL's tests do not support Khronos' ICD loader
 
       - name: Build PoCL
-        run: |
-          cmake --build ${{ env.WORKSPACE }}/build-pocl
+        run: cmake --build build-pocl --target install
 
       - name: Run Tests
         env:
           POCL_CACHE_DIR: "${{ runner.temp }}/GH_POCL_CACHE"
         timeout-minutes: 120
-        run: |
-          rm -rf ${{ env.POCL_CACHE_DIR }}
-          mkdir -p ${{ env.POCL_CACHE_DIR }}
-          cd ${{ env.WORKSPACE }}/build-pocl
-          export PATH=${{ env.WORKSPACE }}/install-llvm/bin:$PATH
-          ${{ env.WORKSPACE }}/tools/scripts/run_cpu_tests mingw $CTEST_FLAGS -j$(nproc)
+        working-directory: build-pocl
+        run: ../tools/scripts/run_cpu_tests $CTEST_FLAGS -j$(nproc)
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: 'PoCL-${{ matrix.msystem }}-LLVM_MSYS2-shared_${{ matrix.shared_libs }}-${{ github.sha }}'
+          path: '${{ github.workspace }}/install-pocl'
+          if-no-files-found: error
+          compression-level: 4
+          archive: true

@@ -128,14 +128,16 @@ TARGET=none
 DEV_VER=100
 DEV_C_VER=100
 CL_EXT_DEFS="-D__ENDIAN_LITTLE__=1"
-# TODO there is not enough information to figure out the feature macros
+# TODO there is not enough information to figure out the feature macros (and SPV extensions)
 # that might be supported by the device, because --cl-device-info FILE does
 # not contain the list of the feature macros.
 # However, at least __opencl_c_generic_address_space is required by the
 # C11 atomic tests in SPIR-V mode. This is therefore a hack, but should
 # be fine because PoCL's Level0 and CPU drivers support gen. AS; atomic_order
 # features are optional, but again they are supported by both CPU and L0
-CL_EXTS="-Xclang -cl-ext=-all,+__opencl_c_generic_address_space,+__opencl_c_atomic_order_acq_rel,+__opencl_c_atomic_order_seq_cst,+__opencl_c_atomic_scope_device"
+CL_EXTS="-Xclang -cl-ext=-all,+__opencl_c_generic_address_space,+__opencl_c_atomic_order_acq_rel,+__opencl_c_atomic_order_seq_cst,+__opencl_c_atomic_scope_device,+__opencl_c_work_group_collective_functions"
+SPV_EXTS="+SPV_KHR_no_integer_wrap_decoration,+SPV_KHR_expect_assume,+SPV_INTEL_fp_fast_math_mode,+SPV_INTEL_unstructured_loop_controls,+SPV_INTEL_arbitrary_precision_integers,+SPV_INTEL_memory_access_aliasing,+SPV_INTEL_inline_assembly"
+MAX_SPV_VERSION="1.2"
 
 if [ -e "${CL_DEV_INFO}" ]; then
 
@@ -161,13 +163,6 @@ if [ -e "${CL_DEV_INFO}" ]; then
 
   if [ "$CL_UNSAFE_MATH" = "true" ]; then
     CL_EXT_DEFS="${CL_EXT_DEFS} -cl-no-signed-zeros -cl-mad-enable -ffp-contract=fast"
-  fi
-
-  if [[ "$CL_DEVICE_VERSION" =~ "PoCL" ]] && [ "$CL_IS_30" = "true" ]; then
-    if [[ "$CL_DEVICE_VERSION" =~ "basic" ]] || [[ "$CL_DEVICE_VERSION" =~ "pthread" ]] || [[ "$CL_DEVICE_VERSION" =~ "cpu" ]]; then
-      CL_EXT_DEFS="${CL_EXT_DEFS} -D__opencl_c_named_address_space_builtins=1 -D__opencl_c_int64=1 -D__opencl_c_atomic_order_acq_rel=1 -D__opencl_c_atomic_order_seq_cst=1 -D__opencl_c_atomic_scope_device=1 -D__opencl_c_program_scope_global_variables=1 -D__opencl_c_generic_address_space=1"
-      CL_EXTS="${CL_EXTS},+__opencl_c_named_address_space_builtins,+__opencl_c_int64,+__opencl_c_atomic_order_acq_rel,+__opencl_c_atomic_order_seq_cst,+__opencl_c_atomic_scope_device,+__opencl_c_program_scope_global_variables,+__opencl_c_generic_address_space"
-    fi
   fi
 
   if [[ $CL_DEVICE_ADDRESS_BITS==64 ]]; then
@@ -232,13 +227,39 @@ if [ -e "${CL_DEV_INFO}" ]; then
           CL_EXT_DEFS="${CL_EXT_DEFS} -D__opencl_c_fp64=1"
           CL_EXTS="${CL_EXTS},+__opencl_c_fp64"
           ;;
+        cl_ext_float_atomics)
+          CL_EXT_DEFS="${CL_EXT_DEFS} -D__opencl_c_ext_fp32_global_atomic_add=1 -D__opencl_c_ext_fp32_local_atomic_add=1 -D__opencl_c_ext_fp32_global_atomic_min_max=1 -D__opencl_c_ext_fp32_local_atomic_min_max=1 -D__opencl_c_ext_fp64_global_atomic_add=1 -D__opencl_c_ext_fp64_local_atomic_add=1 -D__opencl_c_ext_fp64_global_atomic_min_max=1 -D__opencl_c_ext_fp64_local_atomic_min_max=1"
+          CL_EXTS="${CL_EXTS},+__opencl_c_ext_fp32_global_atomic_add,+__opencl_c_ext_fp32_local_atomic_add,+__opencl_c_ext_fp32_global_atomic_min_max,+__opencl_c_ext_fp32_local_atomic_min_max,+__opencl_c_ext_fp64_global_atomic_add,+__opencl_c_ext_fp64_local_atomic_add,+__opencl_c_ext_fp64_global_atomic_min_max,+__opencl_c_ext_fp64_local_atomic_min_max"
+          SPV_EXTS="${SPV_EXTS},+SPV_EXT_shader_atomic_float_add,+SPV_EXT_shader_atomic_float_min_max"
+          ;;
+        cl_khr_integer_dot_product)
+          CL_EXT_DEFS="${CL_EXT_DEFS} -D__opencl_c_integer_dot_product_input_4x8bit=1 -D__opencl_c_integer_dot_product_input_4x8bit_packed=1"
+          CL_EXTS="${CL_EXTS},+__opencl_c_integer_dot_product_input_4x8bit,+__opencl_c_integer_dot_product_input_4x8bit_packed"
+          SPV_EXTS="${SPV_EXTS},+SPV_KHR_integer_dot_product"
+          ;;
         cl_khr_fp16)
           CL_EXT_DEFS="${CL_EXT_DEFS} -D__opencl_c_fp16=1"
           CL_EXTS="${CL_EXTS},+__opencl_c_fp16"
           ;;
+        cl_khr_extended_bit_ops)
+          SPV_EXTS="${SPV_EXTS},+SPV_KHR_bit_instructions"
+          ;;
       esac
     fi
   done
+
+  # if we know we're compiling for CPU device, use the extension/feature values from CMake,
+  # since these are the one that will be hardcoded for CPU device. For LevelZero devices
+  # this cannot be done, because some features are detected at runtime from the LZ API
+  if [[ "$CL_DEVICE_VERSION" =~ "PoCL" ]] && [ "$CL_IS_30" = "true" ]; then
+    if [[ "$CL_DEVICE_VERSION" =~ "basic" ]] || [[ "$CL_DEVICE_VERSION" =~ "pthread" ]] || [[ "$CL_DEVICE_VERSION" =~ "cpu" ]]; then
+      CL_EXT_DEFS=""
+      CL_EXTS="@HOST_DEVICE_EXTENSION_DEFINES@"
+      SPV_EXTS="@HOST_DEVICE_SPV_EXTENSIONS@"
+      MAX_SPV_VERSION="@HOST_DEVICE_MAX_SPV_VERSION@"
+    fi
+  fi
+
   BUILD_OPTIONS="${BUILD_OPTIONS} ${CL_EXT_DEFS} ${CL_EXTS}"
 
   # TODO check IL_VER
@@ -264,17 +285,17 @@ fi
 
 CLANG_OPTIONS="--target=${TARGET} -x cl ${CL_STD} ${BUILD_OPTIONS} -o ${TEMP_BC_FILE} -emit-llvm -c ${SOURCE}"
 
-LLVM_SPIRV_OPTIONS="--spirv-gen-kernel-arg-name-md --spirv-max-version=1.2 -o ${TEMP_SPV_ATOM_FILE} ${TEMP_BC_FILE}"
+LLVM_SPIRV_OPTIONS="--spirv-gen-kernel-arg-name-md --spirv-max-version=${MAX_SPV_VERSION} --spirv-ext=${SPV_EXTS} -o ${TEMP_SPV_ATOM_FILE} ${TEMP_BC_FILE}"
 
 if [ "$DEBUG" = "true" ]; then
-  echo "Running @CLANG@ ${CLANG_OPTIONS}"
+  echo "Running @TARGET_CLANG@ ${CLANG_OPTIONS}"
 fi
-@CLANG@ ${CLANG_OPTIONS} || exit 1
+@TARGET_CLANG@ ${CLANG_OPTIONS} || exit 1
 
 if [ "$DEBUG" = "true" ]; then
-  echo "Running @LLVM_SPIRV@ ${LLVM_SPIRV_OPTIONS}"
+  echo "Running @TARGET_LLVM_SPIRV@ ${LLVM_SPIRV_OPTIONS}"
 fi
-@LLVM_SPIRV@ ${LLVM_SPIRV_OPTIONS} || exit 1
+@TARGET_LLVM_SPIRV@ ${LLVM_SPIRV_OPTIONS} || exit 1
 
 if [ "$DEBUG" = "true" ]; then
   echo "Running $<TARGET_FILE:spirv_fix_atomic_compare_exchange> "${TEMP_SPV_ATOM_FILE}" "${TEMP_SPV_FINAL_FILE}""

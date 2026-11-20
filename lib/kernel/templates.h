@@ -1471,37 +1471,45 @@
     typedef SUGTYPE sugtype;                                            \
     return EXPR;                                                        \
   }
-#define DEFINE_EXPR_UG_G(NAME, EXPR)                                    \
+#define DEFINE_EXPR_UG_G_SIGNED(NAME, EXPR)                             \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, char    , char  , uchar   , uchar )   \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, char2   , char  , uchar2  , uchar )   \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, char3   , char  , uchar3  , uchar )   \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, char4   , char  , uchar4  , uchar )   \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, char8   , char  , uchar8  , uchar )   \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, char16  , char  , uchar16 , uchar )   \
-  IMPLEMENT_EXPR_UG_G(NAME, EXPR, uchar   , uchar , uchar   , uchar )   \
-  IMPLEMENT_EXPR_UG_G(NAME, EXPR, uchar2  , uchar , uchar2  , uchar )   \
-  IMPLEMENT_EXPR_UG_G(NAME, EXPR, uchar3  , uchar , uchar3  , uchar )   \
-  IMPLEMENT_EXPR_UG_G(NAME, EXPR, uchar4  , uchar , uchar4  , uchar )   \
-  IMPLEMENT_EXPR_UG_G(NAME, EXPR, uchar8  , uchar , uchar8  , uchar )   \
-  IMPLEMENT_EXPR_UG_G(NAME, EXPR, uchar16 , uchar , uchar16 , uchar )   \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, short   , short , ushort  , ushort)   \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, short2  , short , ushort2 , ushort)   \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, short3  , short , ushort3 , ushort)   \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, short4  , short , ushort4 , ushort)   \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, short8  , short , ushort8 , ushort)   \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, short16 , short , ushort16, ushort)   \
-  IMPLEMENT_EXPR_UG_G(NAME, EXPR, ushort  , ushort, ushort  , ushort)   \
-  IMPLEMENT_EXPR_UG_G(NAME, EXPR, ushort2 , ushort, ushort2 , ushort)   \
-  IMPLEMENT_EXPR_UG_G(NAME, EXPR, ushort3 , ushort, ushort3 , ushort)   \
-  IMPLEMENT_EXPR_UG_G(NAME, EXPR, ushort4 , ushort, ushort4 , ushort)   \
-  IMPLEMENT_EXPR_UG_G(NAME, EXPR, ushort8 , ushort, ushort8 , ushort)   \
-  IMPLEMENT_EXPR_UG_G(NAME, EXPR, ushort16, ushort, ushort16, ushort)   \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, int     , int   , uint    , uint  )   \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, int2    , int   , uint2   , uint  )   \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, int3    , int   , uint3   , uint  )   \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, int4    , int   , uint4   , uint  )   \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, int8    , int   , uint8   , uint  )   \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, int16   , int   , uint16  , uint  )   \
+  __IF_INT64(                                                           \
+  IMPLEMENT_EXPR_UG_G(NAME, EXPR, long    , long  , ulong   , ulong )   \
+  IMPLEMENT_EXPR_UG_G(NAME, EXPR, long2   , long  , ulong2  , ulong )   \
+  IMPLEMENT_EXPR_UG_G(NAME, EXPR, long3   , long  , ulong3  , ulong )   \
+  IMPLEMENT_EXPR_UG_G(NAME, EXPR, long4   , long  , ulong4  , ulong )   \
+  IMPLEMENT_EXPR_UG_G(NAME, EXPR, long8   , long  , ulong8  , ulong )   \
+  IMPLEMENT_EXPR_UG_G(NAME, EXPR, long16  , long  , ulong16 , ulong ))
+#define DEFINE_EXPR_UG_G_UNSIGNED(NAME, EXPR)                           \
+  IMPLEMENT_EXPR_UG_G(NAME, EXPR, uchar   , uchar , uchar   , uchar )   \
+  IMPLEMENT_EXPR_UG_G(NAME, EXPR, uchar2  , uchar , uchar2  , uchar )   \
+  IMPLEMENT_EXPR_UG_G(NAME, EXPR, uchar3  , uchar , uchar3  , uchar )   \
+  IMPLEMENT_EXPR_UG_G(NAME, EXPR, uchar4  , uchar , uchar4  , uchar )   \
+  IMPLEMENT_EXPR_UG_G(NAME, EXPR, uchar8  , uchar , uchar8  , uchar )   \
+  IMPLEMENT_EXPR_UG_G(NAME, EXPR, uchar16 , uchar , uchar16 , uchar )   \
+  IMPLEMENT_EXPR_UG_G(NAME, EXPR, ushort  , ushort, ushort  , ushort)   \
+  IMPLEMENT_EXPR_UG_G(NAME, EXPR, ushort2 , ushort, ushort2 , ushort)   \
+  IMPLEMENT_EXPR_UG_G(NAME, EXPR, ushort3 , ushort, ushort3 , ushort)   \
+  IMPLEMENT_EXPR_UG_G(NAME, EXPR, ushort4 , ushort, ushort4 , ushort)   \
+  IMPLEMENT_EXPR_UG_G(NAME, EXPR, ushort8 , ushort, ushort8 , ushort)   \
+  IMPLEMENT_EXPR_UG_G(NAME, EXPR, ushort16, ushort, ushort16, ushort)   \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, uint    , uint  , uint    , uint  )   \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, uint2   , uint  , uint2   , uint  )   \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, uint3   , uint  , uint3   , uint  )   \
@@ -1509,12 +1517,6 @@
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, uint8   , uint  , uint8   , uint  )   \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, uint16  , uint  , uint16  , uint  )   \
   __IF_INT64(                                                           \
-  IMPLEMENT_EXPR_UG_G(NAME, EXPR, long    , long  , ulong   , ulong )   \
-  IMPLEMENT_EXPR_UG_G(NAME, EXPR, long2   , long  , ulong2  , ulong )   \
-  IMPLEMENT_EXPR_UG_G(NAME, EXPR, long3   , long  , ulong3  , ulong )   \
-  IMPLEMENT_EXPR_UG_G(NAME, EXPR, long4   , long  , ulong4  , ulong )   \
-  IMPLEMENT_EXPR_UG_G(NAME, EXPR, long8   , long  , ulong8  , ulong )   \
-  IMPLEMENT_EXPR_UG_G(NAME, EXPR, long16  , long  , ulong16 , ulong )   \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, ulong   , ulong , ulong   , ulong )   \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, ulong2  , ulong , ulong2  , ulong )   \
   IMPLEMENT_EXPR_UG_G(NAME, EXPR, ulong3  , ulong , ulong3  , ulong )   \
@@ -2149,3 +2151,97 @@
   long8  _CL_OVERLOADABLE NAME(double8 );       \
   long16 _CL_OVERLOADABLE NAME(double16);)
 #endif
+
+/* these are used by CORE-math routines to define
+   FP16-only vector variants of functions */
+
+#define IMPLEMENT_FP16_EXPR_V_VVV(NAME, RETTYPE, EXPR)                        \
+  RETTYPE __attribute__ ((overloadable)) NAME (RETTYPE a, RETTYPE b,          \
+                                               RETTYPE c)                     \
+  {                                                                           \
+    return (RETTYPE)EXPR;                                                     \
+  }
+
+#define DEFINE_FP16_EXPR_V_VVV(NAME)                                          \
+  IMPLEMENT_FP16_EXPR_V_VVV (NAME, half2, NAME3_2 (NAME))                     \
+  IMPLEMENT_FP16_EXPR_V_VVV (NAME, half3, NAME3_3 (NAME))                     \
+  IMPLEMENT_FP16_EXPR_V_VVV (NAME, half4, NAME3_4 (NAME))                     \
+  IMPLEMENT_FP16_EXPR_V_VVV (NAME, half8, NAME3_8 (NAME))                     \
+  IMPLEMENT_FP16_EXPR_V_VVV (NAME, half16, NAME3_16 (NAME))
+
+#define IMPLEMENT_FP16_EXPR_V_VV(NAME, RETTYPE, EXPR)                         \
+  RETTYPE __attribute__ ((overloadable)) NAME (RETTYPE a, RETTYPE b)          \
+  {                                                                           \
+    return (RETTYPE)EXPR;                                                     \
+  }
+
+#define DEFINE_FP16_EXPR_V_VV(NAME)                                           \
+  IMPLEMENT_FP16_EXPR_V_VV (NAME, half2, NAME2_2 (NAME))                      \
+  IMPLEMENT_FP16_EXPR_V_VV (NAME, half3, NAME2_3 (NAME))                      \
+  IMPLEMENT_FP16_EXPR_V_VV (NAME, half4, NAME2_4 (NAME))                      \
+  IMPLEMENT_FP16_EXPR_V_VV (NAME, half8, NAME2_8 (NAME))                      \
+  IMPLEMENT_FP16_EXPR_V_VV (NAME, half16, NAME2_16 (NAME))
+
+#define IMPLEMENT_FP16_EXPR_V_V(NAME, RETTYPE, EXPR)                          \
+  RETTYPE __attribute__ ((overloadable)) NAME (RETTYPE a)                     \
+  {                                                                           \
+    return (RETTYPE)EXPR;                                                     \
+  }
+
+#define DEFINE_FP16_EXPR_V_V(NAME)                                            \
+  IMPLEMENT_FP16_EXPR_V_V (NAME, half2, NAME1_2 (NAME))                       \
+  IMPLEMENT_FP16_EXPR_V_V (NAME, half3, NAME1_3 (NAME))                       \
+  IMPLEMENT_FP16_EXPR_V_V (NAME, half4, NAME1_4 (NAME))                       \
+  IMPLEMENT_FP16_EXPR_V_V (NAME, half8, NAME1_8 (NAME))                       \
+  IMPLEMENT_FP16_EXPR_V_V (NAME, half16, NAME1_16 (NAME))
+
+#define IMPLEMENT_FP16_EXPR_V_VI(NAME, RETTYPE, INTTYPE, EXPR)                \
+  RETTYPE _CL_OVERLOADABLE NAME (RETTYPE a, INTTYPE b)                        \
+  {                                                                           \
+    return (RETTYPE)EXPR;                                                     \
+  }
+#define DEFINE_FP16_EXPR_V_VI(NAME)                                           \
+  IMPLEMENT_FP16_EXPR_V_VI (NAME, half2, int2, NAME2_2 (NAME))                \
+  IMPLEMENT_FP16_EXPR_V_VI (NAME, half3, int3, NAME2_3 (NAME))                \
+  IMPLEMENT_FP16_EXPR_V_VI (NAME, half4, int4, NAME2_4 (NAME))                \
+  IMPLEMENT_FP16_EXPR_V_VI (NAME, half8, int8, NAME2_8 (NAME))                \
+  IMPLEMENT_FP16_EXPR_V_VI (NAME, half16, int16, NAME2_16 (NAME))
+
+/* __builtin_isfpclass() returns 1 / 0, not -1 that we need */
+#define IMPLEMENT_FP16_BUILTIN_FPCLASS(NAME, CLASSNUM, FLTTYPE, INTTYPE, RETVAL)  \
+  INTTYPE _CL_OVERLOADABLE _CL_READNONE _cl_##NAME (FLTTYPE a)                \
+  {                                                                           \
+    return (__builtin_isfpclass (a, CLASSNUM) > (INTTYPE)0) ? (INTTYPE)(RETVAL)   \
+                                                            : (INTTYPE)(0);     }
+
+#define DEFINE_FP16_BUILTIN_FPCLASS(NAME, CLASSNUM)                               \
+  IMPLEMENT_FP16_BUILTIN_FPCLASS (NAME, CLASSNUM, half, int, 1)                   \
+  IMPLEMENT_FP16_BUILTIN_FPCLASS (NAME, CLASSNUM, half2, short2, -1)              \
+  IMPLEMENT_FP16_BUILTIN_FPCLASS (NAME, CLASSNUM, half3, short3, -1)              \
+  IMPLEMENT_FP16_BUILTIN_FPCLASS (NAME, CLASSNUM, half4, short4, -1)              \
+  IMPLEMENT_FP16_BUILTIN_FPCLASS (NAME, CLASSNUM, half8, short8, -1)              \
+  IMPLEMENT_FP16_BUILTIN_FPCLASS (NAME, CLASSNUM, half16, short16, -1)
+
+#define DEFINE_FP16_BUILTIN_V_V(NAME, BUILTIN)                                \
+  IMPLEMENT_FP16_EXPR_V_V (NAME, half, BUILTIN (a))                           \
+  IMPLEMENT_FP16_EXPR_V_V (NAME, half2, BUILTIN (a))                          \
+  IMPLEMENT_FP16_EXPR_V_V (NAME, half3, BUILTIN (a))                          \
+  IMPLEMENT_FP16_EXPR_V_V (NAME, half4, BUILTIN (a))                          \
+  IMPLEMENT_FP16_EXPR_V_V (NAME, half8, BUILTIN (a))                          \
+  IMPLEMENT_FP16_EXPR_V_V (NAME, half16, BUILTIN (a))
+
+#define DEFINE_FP16_BUILTIN_V_VV(NAME, BUILTIN)                               \
+  IMPLEMENT_FP16_EXPR_V_VV (NAME, half, BUILTIN (a, b))                       \
+  IMPLEMENT_FP16_EXPR_V_VV (NAME, half2, BUILTIN (a, b))                      \
+  IMPLEMENT_FP16_EXPR_V_VV (NAME, half3, BUILTIN (a, b))                      \
+  IMPLEMENT_FP16_EXPR_V_VV (NAME, half4, BUILTIN (a, b))                      \
+  IMPLEMENT_FP16_EXPR_V_VV (NAME, half8, BUILTIN (a, b))                      \
+  IMPLEMENT_FP16_EXPR_V_VV (NAME, half16, BUILTIN (a, b))
+
+#define DEFINE_FP16_BUILTIN_V_VVV(NAME, BUILTIN)                              \
+  IMPLEMENT_FP16_EXPR_V_VVV (NAME, half, BUILTIN (a, b, c))                   \
+  IMPLEMENT_FP16_EXPR_V_VVV (NAME, half2, BUILTIN (a, b, c))                  \
+  IMPLEMENT_FP16_EXPR_V_VVV (NAME, half3, BUILTIN (a, b, c))                  \
+  IMPLEMENT_FP16_EXPR_V_VVV (NAME, half4, BUILTIN (a, b, c))                  \
+  IMPLEMENT_FP16_EXPR_V_VVV (NAME, half8, BUILTIN (a, b, c))                  \
+  IMPLEMENT_FP16_EXPR_V_VVV (NAME, half16, BUILTIN (a, b, c))

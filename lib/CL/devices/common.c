@@ -51,6 +51,9 @@
 #include "pocl_cache.h"
 #include "pocl_debug.h"
 #include "pocl_dynlib.h"
+#ifdef HOST_CPU_ENABLE_JIT
+#include "pocl_llvm_orc.h"
+#endif
 #include "pocl_file_util.h"
 #include "pocl_image_util.h"
 #include "pocl_mem_management.h"
@@ -66,6 +69,9 @@
 
 #ifdef ENABLE_LLVM
 #include "pocl_llvm.h"
+#ifdef ENABLE_MLIR
+#include "pocl_mlir.h"
+#endif
 #endif
 
 #include "_kernel_constants.h"
@@ -94,6 +100,118 @@ size_t event_c;
  */
 
 #ifdef ENABLE_LLVM
+/* Links a kernel object into a shared library through the Clang driver
+   interface, which knows the correct toolchains for all of its targets. */
+static int
+link_with_clang_driver (cl_device_id device, const char *objfile,
+                        const char *out_module)
+{
+  const char *cmd_line[64]
+    = { pocl_get_path ("CLANG", CLANGCC), "-o", out_module, objfile };
+  unsigned last_arg_idx = 4;
+
+#ifdef _MSC_VER
+  /* NOTE: This intended for targets having 'msvc' triple component.
+   * These options, passed to MSVC's linker:
+   * - prevent *.exp and *.lib files to be generated and wasting disk
+   *   space.
+   * - suppress "Creating library *.lib and object *.exp" to be written
+   *   stdout which messes up regex checking on some internal tests.  */
+  cmd_line[last_arg_idx++] = "-Xlinker";
+  cmd_line[last_arg_idx++] = "-noexp";
+  cmd_line[last_arg_idx++] = "-Xlinker";
+  cmd_line[last_arg_idx++] = "-noimplib";
+#endif
+
+  /* ENABLE_PRINTF_IMMEDIATE_FLUSH references the host-side
+   * "pocl_flush_printf_buffer" symbol from the kernel shared library, so link
+   * to libpocl.so which provides it. */
+#ifdef ENABLE_PRINTF_IMMEDIATE_FLUSH
+#ifdef HAVE_DLFCN_H
+  const char *fname = pocl_dynlib_pathname ((void *)pocl_cache_tempname);
+  assert (fname != NULL);
+  cmd_line[last_arg_idx++] = fname;
+#else
+#error ENABLE_PRINTF_IMMEDIATE_FLUSH requires HAVE_DLFCN_H
+#endif
+#endif
+  const char **last_arg = &cmd_line[last_arg_idx];
+  const char **device_ld_arg = device->final_linkage_flags;
+  while ((*last_arg++ = *device_ld_arg++))
+    {
+    }
+
+  return pocl_invoke_clang (device->llvm_target_triplet, cmd_line);
+}
+
+/* Links a kernel object into the shared library used by the dynamic loader.
+   ORC/JITLink is the separate object-loader path; lld and Clang are final
+   linkers for the shared-library path. The object file is left in place. */
+int
+pocl_link_final_binary (cl_device_id device, const char *objfile,
+                        const char *final_binary_path)
+{
+  int error;
+
+  /* Create the temporary shared library next to the final binary
+     to enable a potential customized finalization step to create multiple
+     files next to it. */
+  char tmp_module[POCL_MAX_PATHNAME_LENGTH];
+  if (pocl_mk_tempname (tmp_module, final_binary_path, SHARED_LIB_EXT, NULL))
+    {
+      POCL_MSG_PRINT_LLVM ("Creating temporary shared-library file"
+                           " for %s FAILED\n",
+                           final_binary_path);
+      return -1;
+    }
+  else
+    POCL_MSG_PRINT_LLVM ("Temporary shared-lib file"
+                         " for %s is: %s\n",
+                         final_binary_path, tmp_module);
+
+  POCL_MSG_PRINT_LLVM ("Linking final module\n");
+
+  /* If the device has a custom linkage/binary generation step, call it
+     instead of the default Clang-driven linkage step. It's likely a
+     non-host target in that case. */
+  if (device->ops->finalize_binary != NULL)
+    {
+      error = device->ops->finalize_binary (device, tmp_module, objfile);
+    }
+  else
+    {
+      error = -1;
+#ifdef CPU_USE_LLD_LINK
+      /* Prefer linking in-process through lld: nothing is exec'd and no
+         startup files are involved, so kernel linking (and with it
+         poclbinary export) works in deployments without a host
+         toolchain. */
+      error = pocl_invoke_lld_link (device, objfile, tmp_module);
+      if (error)
+        POCL_MSG_WARN ("In-process lld link of %s failed;"
+                       " retrying with the Clang driver.\n",
+                       objfile);
+#endif
+      if (error)
+        error = link_with_clang_driver (device, objfile, tmp_module);
+    }
+  if (error)
+    {
+      POCL_MSG_PRINT_LLVM ("Linking kernel object to shared library failed\n");
+      return error;
+    }
+
+  /* rename temporary shared library */
+  error = pocl_rename (tmp_module, final_binary_path);
+
+  if (error)
+    POCL_MSG_PRINT_LLVM (
+        "Renaming temporary shared library to final ('%s') failed.\n",
+        final_binary_path);
+
+  return error;
+}
+
 static int
 llvm_codegen (char *output, unsigned device_i, cl_kernel kernel,
               cl_device_id device, _cl_command_node *command, int specialize)
@@ -102,7 +220,6 @@ llvm_codegen (char *output, unsigned device_i, cl_kernel kernel,
   int error = 0;
   void *llvm_module = NULL;
 
-  char tmp_module[POCL_MAX_PATHNAME_LENGTH];
   char tmp_objfile[POCL_MAX_PATHNAME_LENGTH];
 
   char *objfile = NULL;
@@ -117,7 +234,7 @@ llvm_codegen (char *output, unsigned device_i, cl_kernel kernel,
   pocl_cache_work_group_function_path (parallel_bc_path, program, device_i,
                                        kernel, command, specialize);
 
-  /* $/kernel.so */
+  /* Cached final artifact: OBJ_EXT under JIT, SHARED_LIB_EXT otherwise. */
   char final_binary_path[POCL_MAX_PATHNAME_LENGTH];
   pocl_cache_final_binary_path (final_binary_path, program, device_i, kernel,
                                 command, specialize);
@@ -140,6 +257,17 @@ llvm_codegen (char *output, unsigned device_i, cl_kernel kernel,
 
   assert (strlen (final_binary_path) < (POCL_MAX_PATHNAME_LENGTH - 3));
 
+#ifdef ENABLE_MLIR
+  error = poclMlirGenerateWorkgroupFunctionNowrite (
+    device_i, device, kernel, command, &llvm_module, specialize, program);
+  if (error)
+    {
+      POCL_MSG_PRINT_LLVM ("poclMlirGenerateWorkgroupFunction() failed"
+                           " for kernel %s\n",
+                           kernel_name);
+      goto FINISH;
+    }
+#else
   error = pocl_llvm_generate_workgroup_function_nowrite (
       device_i, device, kernel, command, &llvm_module, specialize);
   if (error)
@@ -171,6 +299,7 @@ llvm_codegen (char *output, unsigned device_i, cl_kernel kernel,
                            kernel->name);
       goto FINISH;
     }
+#endif
 
   /* May happen if another thread is building the same program & wins the llvm
      lock. */
@@ -189,7 +318,7 @@ llvm_codegen (char *output, unsigned device_i, cl_kernel kernel,
   if (pocl_exists (final_binary_path))
     goto FINISH;
 
-  /* Write temporary kernel.so.o, required for the final linking step */
+  /* Write temporary kernel object, required for the final linking step. */
   error = pocl_cache_write_kernel_objfile (tmp_objfile, objfile, objfile_size);
   if (error)
     {
@@ -203,98 +332,24 @@ llvm_codegen (char *output, unsigned device_i, cl_kernel kernel,
                           tmp_objfile, (size_t)objfile_size);
     }
 
-  /* Temporary filename for kernel.so. Create it in the parallel.bc's
-     directory to enable a potential customized finalization step to
-     create multiple files next to it. */
-  char parallel_bc_dir[POCL_MAX_PATHNAME_LENGTH + 2];
-
-  pocl_cache_kernel_cachedir_path (parallel_bc_dir, program, device_i, kernel,
-                                   "", command, specialize);
-  strncat (parallel_bc_dir, "/parallel", POCL_MAX_PATHNAME_LENGTH);
-  parallel_bc_dir[POCL_MAX_PATHNAME_LENGTH - 1] = 0;
-
-  if (pocl_mk_tempname (tmp_module, parallel_bc_dir, SHARED_LIB_EXT, NULL))
+  /* JIT devices load the kernel object in-process, so it is itself the final
+     artifact: no shared library, no external linker. Publish it under its
+     cached name and return. */
+  if (pocl_cpu_device_uses_jit (device))
     {
-      POCL_MSG_PRINT_LLVM ("Creating temporary kernel.so file"
-                           " for kernel %s FAILED\n",
-                           kernel_name);
-      goto FINISH;
-    }
-  else
-    POCL_MSG_PRINT_LLVM ("Temporary shared-lib file"
-                         " for kernel %s is: %s\n",
-                         kernel_name, tmp_module);
-
-  POCL_MSG_PRINT_LLVM ("Linking final module\n");
-
-  /* If the device has a custom linkage/binary generation step, call it
-     instead of the default Clang-driven linkage step. It's likely a
-     non-host target in that case. */
-  if (device->ops->finalize_binary != NULL)
-    {
-      error = device->ops->finalize_binary (program->devices[device_i],
-                                            tmp_module, tmp_objfile);
-    }
-  else
-    {
-      /* Link through Clang driver interface which knows the correct toolchains
-         for all of its targets.  */
-      const char *cmd_line[64]
-        = { pocl_get_path ("CLANG", CLANGCC), "-o", tmp_module, tmp_objfile };
-      unsigned last_arg_idx = 4;
-
-#ifdef _MSC_VER
-      /* NOTE: This intended for targets having 'msvc' triple component.
-       * These options, passed to MSVC's linker:
-       * - prevent *.exp and *.lib files to be generated and wasting disk
-       *   space.
-       * - suppress "Creating library *.lib and object *.exp" to be written
-       *   stdout which messes up regex checking on some internal tests.  */
-      cmd_line[last_arg_idx++] = "-Xlinker";
-      cmd_line[last_arg_idx++] = "-noexp";
-      cmd_line[last_arg_idx++] = "-Xlinker";
-      cmd_line[last_arg_idx++] = "-noimplib";
-#endif
-
-      /* ENABLE_PRINTF_IMMEDIATE_FLUSH results in "pocl_flush_printf_buffer"
-       * symbol referenced in the built kernel.so; however that function exists
-       * only on the host side, therefore link to libpocl.so which provides it
-       */
-#ifdef ENABLE_PRINTF_IMMEDIATE_FLUSH
-#ifdef HAVE_DLFCN_H
-      const char *fname = pocl_dynlib_pathname ((void *)pocl_cache_tempname);
-      assert (fname != NULL);
-      cmd_line[last_arg_idx++] = fname;
-#else
-#error ENABLE_PRINTF_IMMEDIATE_FLUSH requires HAVE_DLFCN_H
-#endif
-#endif
-      const char **last_arg = &cmd_line[last_arg_idx];
-      const char **device_ld_arg = device->final_linkage_flags;
-      while ((*last_arg++ = *device_ld_arg++))
-        {
-        }
-
-      error = pocl_invoke_clang (device->llvm_target_triplet, cmd_line);
-    }
-  if (error)
-    {
-      POCL_MSG_PRINT_LLVM ("Linking kernel.so.o -> kernel.so has failed\n");
-      goto FINISH;
-    }
-
-  /* rename temporary kernel.so */
-  error = pocl_rename (tmp_module, final_binary_path);
-
-  if (error)
-    {
-      POCL_MSG_PRINT_LLVM (
-          "Renaming temporary kernel.so to final ('%s') has failed.\n",
+      error = pocl_rename (tmp_objfile, final_binary_path);
+      if (error)
+        POCL_MSG_PRINT_LLVM (
+          "Renaming temporary kernel object to final ('%s') failed.\n",
           final_binary_path);
       goto FINISH;
     }
 
-  /* if LEAVE_COMPILER_FILES, rename temporary kernel.so.o, else delete it */
+  error = pocl_link_final_binary (device, tmp_objfile, final_binary_path);
+  if (error)
+    goto FINISH;
+
+  /* If requested, keep the temporary kernel object next to the shared library. */
   if (pocl_get_bool_option ("POCL_LEAVE_KERNEL_COMPILER_TEMP_FILES", 0))
     {
       char objfile_path[POCL_MAX_PATHNAME_LENGTH];
@@ -303,14 +358,14 @@ llvm_codegen (char *output, unsigned device_i, cl_kernel kernel,
       error = pocl_rename (tmp_objfile, objfile_path);
       if (error)
         POCL_MSG_PRINT_LLVM (
-            "Renaming temporary kernel.so.o to final %s has failed.\n",
+            "Renaming temporary kernel object to final %s failed.\n",
             objfile_path);
     }
   else
     {
       error = pocl_remove (tmp_objfile);
       if (error)
-        POCL_MSG_PRINT_LLVM ("Removing temporary kernel.so.o has failed.\n");
+        POCL_MSG_PRINT_LLVM ("Removing temporary kernel object failed.\n");
     }
 
 FINISH:
@@ -318,7 +373,11 @@ FINISH:
   if (have_locked_mutex)
     pocl_ipc_mutex_unlock_and_release (&ipc_mtx);
 #endif
+#ifdef ENABLE_MLIR
+  poclDestroyMlirModule (llvm_module);
+#else
   pocl_destroy_llvm_module (llvm_module, kernel->context);
+#endif
   POCL_MEM_FREE (objfile);
   POCL_MEASURE_FINISH (llvm_codegen);
 
@@ -696,20 +755,7 @@ pocl_exec_command (_cl_command_node *node)
            cmd->svm_free.data);
       else
         for (i = 0; i < cmd->svm_free.num_svm_pointers; i++)
-          {
-            void *ptr = cmd->svm_free.svm_pointers[i];
-            POCL_LOCK_OBJ (event->context);
-            pocl_raw_ptr *item = pocl_raw_ptr_set_lookup_with_vm_ptr (
-              event->context->raw_ptrs, ptr);
-            cl_mem shadow_mem = item->shadow_cl_mem;
-            assert (item);
-            pocl_raw_ptr_set_erase (event->context->raw_ptrs, item);
-            POCL_UNLOCK_OBJ (event->context);
-            POname (clReleaseContext) (event->context);
-            if (shadow_mem)
-              POname (clReleaseMemObject) (shadow_mem);
-            dev->ops->svm_free (dev, ptr);
-          }
+          POname (clSVMFree) (event->context, cmd->svm_free.svm_pointers[i]);
       POCL_UPDATE_EVENT_COMPLETE_MSG (event, "Event SVM Free              ");
       break;
 
@@ -836,7 +882,9 @@ char *
 pocl_cpu_build_hash (cl_device_id device)
 {
   char *res = calloc(1000, sizeof(char));
-  snprintf (res, 1000, "cpu-%s-%s", HOST_DEVICE_BUILD_HASH,
+  /* "divrem": kernels no longer rely on a SIGFPE handler to survive integer
+     division by zero, so reject binaries built when they did. */
+  snprintf (res, 1000, "cpu-%s-%s-divrem", HOST_DEVICE_BUILD_HASH,
             device->llvm_cpu);
   return res;
 }
@@ -863,6 +911,20 @@ pocl_broadcast (cl_event brc_event)
               break;
             }
         }
+
+      /* If the notifier finished in a failed (negative) status, the target
+       * command must NOT run: per the OpenCL spec a command whose wait-list
+       * event has a negative status must be terminated with the error cascade.
+       * The device notify call below fails the target directly when it is in a
+       * failable state. But the target may transiently be in another state
+       * (e.g. a concurrent broadcast for a *different*, completed dependency is
+       * mid-flight and about to submit/push it), so also record the failed
+       * dependency on the target; the device submit/notify paths check the flag
+       * and fail the command rather than execute it on freed/aborted memory.
+       * We hold the target's event lock here, so this is safe against those
+       * readers. */
+      if (brc_event->status < 0)
+        target->event->failed_dependency = 1;
 
       if ((target->event->status == CL_SUBMITTED)
           || (target->event->status == CL_QUEUED))
@@ -933,20 +995,23 @@ pocl_fill_dev_sampler_t (dev_sampler_t *ds, struct pocl_argument *parg)
 }
 
 /* Returns the width of the widest dimension in the grid of the given
-   run command. */
+   run command, counted from the origin: the small-grid work-group functions
+   assume that both the group counts and the global offsets are bounded. */
 size_t
 pocl_cmd_max_grid_dim_width (_cl_command_run *cmd)
 {
-  return max (max (cmd->pc.local_size[0] * cmd->pc.num_groups[0],
-                   cmd->pc.local_size[1] * cmd->pc.num_groups[1]),
-              cmd->pc.local_size[2] * cmd->pc.local_size[2]);
+  size_t width = 0;
+  for (unsigned d = 0; d < 3; ++d)
+    width = max (width, cmd->pc.global_offset[d]
+                          + cmd->pc.local_size[d] * cmd->pc.num_groups[d]);
+  return width;
 }
 
 
 /* CPU driver stuff */
 
-typedef struct pocl_dlhandle_cache_item pocl_dlhandle_cache_item;
-struct pocl_dlhandle_cache_item
+typedef struct pocl_module_cache_item pocl_module_cache_item;
+struct pocl_module_cache_item
 {
   pocl_kernel_hash_t hash;
 
@@ -960,70 +1025,86 @@ struct pocl_dlhandle_cache_item
   size_t max_grid_dim_width;
 
   void *wg;
-  void *dlhandle;
-  pocl_dlhandle_cache_item *next;
-  pocl_dlhandle_cache_item *prev;
+  void *module_handle;
+  /* If nonzero, module_handle is an ORC/JITLink handle. Otherwise it is a
+     native shared-library handle. */
+  int is_jit;
+  pocl_module_cache_item *next;
+  pocl_module_cache_item *prev;
   unsigned ref_count;
 };
 
-static pocl_dlhandle_cache_item *pocl_dlhandle_cache;
+static pocl_module_cache_item *pocl_module_cache;
 static pocl_lock_t pocl_llvm_codegen_lock;
-static pocl_lock_t pocl_dlhandle_lock;
-static int pocl_dlhandle_cache_initialized;
+static pocl_lock_t pocl_module_cache_lock;
+static int pocl_module_cache_initialized;
 
 /* only to be called in basic/pthread/<other cpu driver> init */
 void
 pocl_init_dlhandle_cache ()
 {
-  if (!pocl_dlhandle_cache_initialized)
+  if (!pocl_module_cache_initialized)
     {
       POCL_INIT_LOCK (pocl_llvm_codegen_lock);
-      POCL_INIT_LOCK (pocl_dlhandle_lock);
-      pocl_dlhandle_cache_initialized = 1;
-   }
+      POCL_INIT_LOCK (pocl_module_cache_lock);
+      pocl_module_cache_initialized = 1;
+    }
 }
 
 static unsigned handle_count = 0;
 #define MAX_CACHE_ITEMS 128
 
-/* must be called with pocl_dlhandle_lock LOCKED */
-static pocl_dlhandle_cache_item *
-get_new_dlhandle_cache_item ()
+/* Unloads a cache item's kernel module with the loader that loaded it. */
+static void
+release_module_handle (pocl_module_cache_item *ci)
 {
-  pocl_dlhandle_cache_item *ci = NULL;
-  const char *dl_error = NULL;
-
-  if (pocl_dlhandle_cache)
+#ifdef HOST_CPU_ENABLE_JIT
+  if (ci->is_jit)
     {
-      ci = pocl_dlhandle_cache->prev;
-      while (ci->ref_count > 0 && ci != pocl_dlhandle_cache)
+      pocl_jit_unload (ci->module_handle);
+      return;
+    }
+#endif
+  pocl_dynlib_close (ci->module_handle);
+}
+
+/* must be called with pocl_module_cache_lock LOCKED */
+static pocl_module_cache_item *
+get_new_module_cache_item ()
+{
+  pocl_module_cache_item *ci = NULL;
+
+  if (pocl_module_cache)
+    {
+      ci = pocl_module_cache->prev;
+      while (ci->ref_count > 0 && ci != pocl_module_cache)
         ci = ci->prev;
     }
 
-  if ((handle_count >= MAX_CACHE_ITEMS) && ci && (ci != pocl_dlhandle_cache))
+  if ((handle_count >= MAX_CACHE_ITEMS) && ci && (ci != pocl_module_cache))
     {
-      DL_DELETE (pocl_dlhandle_cache, ci);
-      pocl_dynlib_close (ci->dlhandle);
-      memset (ci, 0, sizeof (pocl_dlhandle_cache_item));
+      DL_DELETE (pocl_module_cache, ci);
+      release_module_handle (ci);
+      memset (ci, 0, sizeof (pocl_module_cache_item));
     }
   else
     {
       ++handle_count;
-      ci = (pocl_dlhandle_cache_item *)calloc (
-          1, sizeof (pocl_dlhandle_cache_item));
+      ci = (pocl_module_cache_item *)calloc (
+          1, sizeof (pocl_module_cache_item));
     }
 
   return ci;
 }
 
 void
-pocl_release_dlhandle_cache (void *dlhandle_cache_item)
+pocl_release_dlhandle_cache (void *module_cache_item)
 {
-  pocl_dlhandle_cache_item *tmp = NULL, *ci = dlhandle_cache_item;
+  pocl_module_cache_item *tmp = NULL, *ci = module_cache_item;
 
-  POCL_LOCK (pocl_dlhandle_lock);
+  POCL_LOCK (pocl_module_cache_lock);
   int found = CL_FALSE;
-  DL_FOREACH (pocl_dlhandle_cache, tmp)
+  DL_FOREACH (pocl_module_cache, tmp)
   {
     if (tmp == ci)
       {
@@ -1035,19 +1116,130 @@ pocl_release_dlhandle_cache (void *dlhandle_cache_item)
   assert (found == CL_TRUE);
   assert (ci->ref_count > 0);
   --ci->ref_count;
-  POCL_UNLOCK (pocl_dlhandle_lock);
+  POCL_UNLOCK (pocl_module_cache_lock);
 }
+
+/**
+ * Whether a final-binary path names a JIT-loadable kernel object rather than
+ * a shared library, going by the distinct artifact-variant extensions (see
+ * pocl_cache_final_binary_variant_path()).
+ */
+static int
+final_binary_is_jit_object (const char *path)
+{
+  size_t len = strlen (path);
+  size_t ext_len = strlen (OBJ_EXT);
+  return len > ext_len && strcmp (path + len - ext_len, OBJ_EXT) == 0;
+}
+
+static int
+probe_jit_object (char *module_fn, _cl_command_node *command, int specialized)
+{
+  cl_kernel k = command->command.run.kernel;
+  cl_program p = k->program;
+  unsigned dev_i = command->program_device_i;
+  pocl_cache_final_binary_variant_path (module_fn, p, dev_i, k, command,
+                                        specialized, 1);
+  return pocl_exists (module_fn);
+}
+
+static int
+probe_shared_library (char *module_fn, _cl_command_node *command,
+                      int specialized)
+{
+  cl_kernel k = command->command.run.kernel;
+  cl_program p = k->program;
+  unsigned dev_i = command->program_device_i;
+  pocl_cache_final_binary_variant_path (module_fn, p, dev_i, k, command,
+                                        specialized, 0);
+  if (pocl_exists (module_fn))
+    return 1;
+
+#ifdef ENABLE_LLVM
+  char obj_path[POCL_MAX_PATHNAME_LENGTH];
+  pocl_cache_final_binary_variant_path (obj_path, p, dev_i, k, command,
+                                        specialized, 1);
+  if (!pocl_exists (obj_path))
+    return 0;
+
+  POCL_LOCK (pocl_llvm_codegen_lock);
+  int error = pocl_link_final_binary (command->device, obj_path, module_fn);
+  POCL_UNLOCK (pocl_llvm_codegen_lock);
+  if (error == 0)
+    return 1;
+  POCL_MSG_WARN ("Linking the cached kernel object %s failed.\n", obj_path);
+#endif
+  return 0;
+}
+
+/* JIT mode only consumes OBJ_EXT. Shared-library mode consumes SHARED_LIB_EXT,
+   or links an OBJ_EXT fallback into SHARED_LIB_EXT when LLVM is available. */
+static int
+probe_final_binary (char *module_fn, _cl_command_node *command,
+                    int specialized)
+{
+  if (pocl_cpu_device_uses_jit (command->device))
+    return probe_jit_object (module_fn, command, specialized);
+  return probe_shared_library (module_fn, command, specialized);
+}
+
+#ifdef HOST_CPU_ENABLE_JIT
+/* A JIT cache hit is only a fast path. If loading or linking the object fails,
+   remove that object, regenerate it from IR, and retry the JIT load once. */
+static int
+regenerate_cached_jit_object (pocl_module_cache_item *ci, char *module_fn,
+                              _cl_command_node *command, int specialize)
+{
+#ifdef ENABLE_LLVM
+  _cl_command_run *run_cmd = &command->command.run;
+
+#ifndef ENABLE_MLIR
+  if (run_cmd->kernel->program->binaries[command->program_device_i] == NULL)
+    return -1;
+#endif
+
+  if (ci->module_handle != NULL)
+    {
+      release_module_handle (ci);
+      ci->module_handle = NULL;
+      ci->wg = NULL;
+    }
+
+  if (pocl_exists (module_fn) && pocl_remove (module_fn))
+    {
+      POCL_MSG_WARN ("Removing stale JIT kernel object \"%s\" failed.\n",
+                     module_fn);
+      return -1;
+    }
+
+  POCL_LOCK (pocl_llvm_codegen_lock);
+  int err = llvm_codegen (module_fn, command->program_device_i,
+                          run_cmd->kernel, command->device, command,
+                          specialize);
+  POCL_UNLOCK (pocl_llvm_codegen_lock);
+  if (err)
+    return err;
+
+  ci->is_jit = 1;
+  ci->module_handle = pocl_jit_load_object (module_fn, run_cmd->kernel->name);
+  return ci->module_handle == NULL ? -1 : 0;
+#else
+  return -1;
+#endif
+}
+#endif
 
 /**
  * Checks if a built binary is found in the disk for the given kernel command,
  * if not, builds the kernel, caches it, and returns the file name of the
  * end result.
  *
- * \param module_fn [out] The file name of the final binary.
+ * \param module_fn [out] The file name of the final binary; its extension
+ * tells the load method (see final_binary_is_jit_object()).
  * \param command The kernel run command.
  * \param specialized 1 if should check the per-command specialized one instead
  * of the generic one.
- * \returns The filename of the built binary in the disk.
+ * \returns CL_SUCCESS if module_fn names a loadable binary.
  */
 int
 pocl_check_kernel_disk_cache (char *module_fn,
@@ -1062,9 +1254,7 @@ pocl_check_kernel_disk_cache (char *module_fn,
   /* First try to find a static WG binary for the local size as they
      are always more efficient than the dynamic ones.  Also, in case
      of reqd_wg_size, there might not be a dynamic sized one at all.  */
-  pocl_cache_final_binary_path (module_fn, p, dev_i, k, command, specialized);
-
-  if (pocl_exists (module_fn))
+  if (probe_final_binary (module_fn, command, specialized))
     {
       POCL_MSG_PRINT_INFO ("Using a cached WG function: %s\n", module_fn);
       return CL_SUCCESS;
@@ -1072,7 +1262,11 @@ pocl_check_kernel_disk_cache (char *module_fn,
 
   /* static WG binary for the local size does not exist. If we have the LLVM IR
    * (program.bc), try to compile a new parallel.bc and static binary */
+#ifdef ENABLE_MLIR
+  if (1)
+#else
   if (p->binaries[dev_i])
+#endif
     {
 #ifdef ENABLE_LLVM
       POCL_LOCK (pocl_llvm_codegen_lock);
@@ -1102,14 +1296,11 @@ pocl_check_kernel_disk_cache (char *module_fn,
     {
       /* First try to find a specialized WG binary, if allowed by the
          command. */
-      if (!run_cmd->force_generic_wg_func)
-        pocl_cache_final_binary_path (module_fn, p, dev_i, k, command, 1);
-
-      if (run_cmd->force_generic_wg_func || !pocl_exists (module_fn))
+      if (run_cmd->force_generic_wg_func
+          || !probe_final_binary (module_fn, command, 1))
         {
           /* Then check for a dynamic (non-specialized) kernel. */
-          pocl_cache_final_binary_path (module_fn, p, dev_i, k, command, 0);
-          if (!pocl_exists (module_fn))
+          if (!probe_final_binary (module_fn, command, 0))
             {
               POCL_MSG_ERR ("Generic WG function binary does not exist.\n");
               return -1;
@@ -1125,16 +1316,13 @@ pocl_check_kernel_disk_cache (char *module_fn,
 }
 
 
-/* Look for a dlhandle in the dlhandle cache for the given kernel command.
-   If found, push the handle up in the cache to improve cache hit speed,
-   and return it. Otherwise return NULL. The caller should hold
-   pocl_dlhandle_lock. */
-static pocl_dlhandle_cache_item *
-fetch_dlhandle_cache_item (_cl_command_run *run_cmd, int specialize)
+/* Look for a loaded kernel module for the given kernel command. */
+static pocl_module_cache_item *
+fetch_module_cache_item (_cl_command_run *run_cmd, int specialize)
 {
-  pocl_dlhandle_cache_item *ci = NULL, *tmp = NULL;
+  pocl_module_cache_item *ci = NULL, *tmp = NULL;
   size_t max_grid_width = pocl_cmd_max_grid_dim_width (run_cmd);
-  DL_FOREACH_SAFE (pocl_dlhandle_cache, ci, tmp)
+  DL_FOREACH_SAFE (pocl_module_cache, ci, tmp)
   {
     if ((memcmp (ci->hash, run_cmd->hash, sizeof (pocl_kernel_hash_t)) == 0)
         && (ci->local_wgs[0] == run_cmd->pc.local_size[0])
@@ -1147,8 +1335,8 @@ fetch_dlhandle_cache_item (_cl_command_run *run_cmd, int specialize)
                 && run_cmd->pc.global_offset[2] == 0)))
       {
         /* move to the front of the line */
-        DL_DELETE (pocl_dlhandle_cache, ci);
-        DL_PREPEND (pocl_dlhandle_cache, ci);
+        DL_DELETE (pocl_module_cache, ci);
+        DL_PREPEND (pocl_module_cache, ci);
         run_cmd->wg = ci->wg;
         return ci;
       }
@@ -1169,7 +1357,7 @@ fetch_dlhandle_cache_item (_cl_command_run *run_cmd, int specialize)
  * This can be useful in case we're just pre-compiling kernels
  * (or compiling them for binaries), and not actually need them immediately.
  *
- * Returns: a dynlib handle cache item as void*; this needs to be given
+ * Returns: a module cache item as void*; this needs to be given
  * to pocl_release_dlhandle_cache(), if it was retained */
 void *
 pocl_check_kernel_dlhandle_cache (_cl_command_node *command,
@@ -1177,7 +1365,7 @@ pocl_check_kernel_dlhandle_cache (_cl_command_node *command,
                                   int specialize)
 {
   char *workgroup_string = NULL;
-  pocl_dlhandle_cache_item *ci = NULL;
+  pocl_module_cache_item *ci = NULL;
   _cl_command_run *run_cmd = &command->command.run;
 
   /* Brute force mechanism to test relying on generic work-group functions
@@ -1185,17 +1373,17 @@ pocl_check_kernel_dlhandle_cache (_cl_command_node *command,
   if (!pocl_get_bool_option("POCL_WORK_GROUP_SPECIALIZATION", 1))
     specialize = 0;
 
-  POCL_LOCK (pocl_dlhandle_lock);
-  ci = fetch_dlhandle_cache_item (run_cmd, specialize);
+  POCL_LOCK (pocl_module_cache_lock);
+  ci = fetch_module_cache_item (run_cmd, specialize);
   if (ci != NULL)
     {
       if (retain) ++ci->ref_count;
-      POCL_UNLOCK (pocl_dlhandle_lock);
+      POCL_UNLOCK (pocl_module_cache_lock);
       return ci;
     }
 
-  /* Not found, build a new kernel and cache its dlhandle. */
-  ci = get_new_dlhandle_cache_item ();
+  /* Not found, build and cache a new kernel module. */
+  ci = get_new_module_cache_item ();
   memcpy (ci->hash, run_cmd->hash, sizeof (pocl_kernel_hash_t));
   ci->local_wgs[0] = run_cmd->pc.local_size[0];
   ci->local_wgs[1] = run_cmd->pc.local_size[1];
@@ -1210,47 +1398,124 @@ pocl_check_kernel_dlhandle_cache (_cl_command_node *command,
   ci->max_grid_dim_width = max_grid_width;
 
   char module_fn[POCL_MAX_PATHNAME_LENGTH];
+
   int err = pocl_check_kernel_disk_cache (module_fn, command, specialize);
   if (err)
     {
       free (ci);
-      POCL_UNLOCK (pocl_dlhandle_lock);
+      POCL_UNLOCK (pocl_module_cache_lock);
       return NULL;
     }
 
-  ci->dlhandle = pocl_dynlib_open (module_fn, 0, 1);
+  /* The load method follows the found artifact: a JIT kernel object is loaded
+     in-process via ORC/JITLink, a shared library is dlopen()ed (see
+     probe_final_binary()). */
+  ci->is_jit = final_binary_is_jit_object (module_fn);
+#ifdef HOST_CPU_ENABLE_JIT
+  /* A JIT object is only produced or accepted when the device's JIT came up
+     at init (see pocl_cpu_device_uses_jit()). */
+  if (ci->is_jit)
+    ci->module_handle = pocl_jit_load_object (module_fn, run_cmd->kernel->name);
+  else
+#endif
+    ci->module_handle = pocl_dynlib_open (module_fn, 0, 1);
+
+#ifdef HOST_CPU_ENABLE_JIT
+  if (ci->module_handle == NULL && ci->is_jit)
+    {
+      POCL_MSG_WARN ("loading cached JIT kernel object \"%s\" failed;"
+                     " regenerating it\n",
+                     module_fn);
+      regenerate_cached_jit_object (ci, module_fn, command, specialize);
+    }
+#endif
+
+  if (ci->module_handle == NULL)
+    {
+      POCL_MSG_ERR ("loading kernel binary \"%s\" failed.%s\n",
+                    module_fn,
+                    ci->is_jit
+                        ? ""
+                        : "\nnote: this may be caused by missing symbols"
+                          " in the kernel binary.");
+      POCL_UNLOCK (pocl_module_cache_lock);
+      free (ci);
+      return NULL;
+    }
 
   size_t workgroup_len = strlen (run_cmd->kernel->name) + 30;
   workgroup_string = (char *)malloc (workgroup_len);
   snprintf (workgroup_string, workgroup_len, "_pocl_kernel_%s_workgroup",
             run_cmd->kernel->name);
 
-  ci->wg = pocl_dynlib_symbol_address (ci->dlhandle, workgroup_string);
-
-  if (ci->wg == NULL)
+#ifdef HOST_CPU_ENABLE_JIT
+  /* ORC mangles the unmangled name for the target (e.g. adds the leading
+     underscore on Mach-O), so the JIT path needs no separate fallback. */
+  if (ci->is_jit)
+    ci->wg = pocl_jit_lookup (ci->module_handle, workgroup_string);
+  else
+#endif
     {
-      // Older OSX dyld APIs need the name without the underscore.
-      snprintf (workgroup_string, workgroup_len, "pocl_kernel_%s_workgroup",
-                run_cmd->kernel->name);
-      ci->wg = pocl_dynlib_symbol_address (ci->dlhandle, workgroup_string);
-
+      ci->wg = pocl_dynlib_symbol_address (ci->module_handle, workgroup_string);
       if (ci->wg == NULL)
         {
-          POCL_MSG_ERR ("pocl_dynlib_symbol_address(\"%s\", \"%s\") failed.\n"
-                        "note: missing symbols in the kernel binary might be"
-                        " reported as 'file not found' errors.\n",
-                        module_fn, workgroup_string);
-          POCL_UNLOCK (pocl_dlhandle_lock);
-          free (ci);
-          free (workgroup_string);
-          return NULL;
+          // Older OSX dyld APIs need the name without the underscore.
+          snprintf (workgroup_string, workgroup_len,
+                    "pocl_kernel_%s_workgroup", run_cmd->kernel->name);
+          ci->wg
+            = pocl_dynlib_symbol_address (ci->module_handle, workgroup_string);
         }
     }
 
-  run_cmd->wg = ci->wg;
-  DL_PREPEND (pocl_dlhandle_cache, ci);
+  if (ci->wg == NULL)
+    {
+      int recovered = 0;
+#ifdef HOST_CPU_ENABLE_JIT
+      if (ci->is_jit)
+        {
+          /* The JIT links the object on first lookup, so its lookup error
+             carries the real diagnostic (unresolved symbols, relocation
+             problems). */
+          const char *jit_error = pocl_jit_last_error ();
+          POCL_MSG_WARN ("looking up \"%s\" in cached JIT kernel object"
+                         " \"%s\" failed: %s; regenerating it\n",
+                         workgroup_string, module_fn,
+                         jit_error != NULL ? jit_error : "unknown error");
+          if (regenerate_cached_jit_object (ci, module_fn, command,
+                                            specialize) == 0)
+            ci->wg = pocl_jit_lookup (ci->module_handle, workgroup_string);
+          recovered = ci->wg != NULL;
+          if (!recovered)
+            {
+              jit_error = pocl_jit_last_error ();
+              POCL_MSG_ERR ("regenerated JIT kernel object \"%s\" failed"
+                            " to load or resolve \"%s\": %s\n",
+                            module_fn, workgroup_string,
+                            jit_error != NULL ? jit_error : "unknown error");
+            }
+        }
+      else
+#endif
+        {
+          POCL_MSG_ERR ("looking up \"%s\" in kernel binary \"%s\" failed.\n"
+                        "note: missing symbols in the kernel binary might be"
+                        " reported as 'file not found' errors.\n",
+                        workgroup_string, module_fn);
+        }
+      if (recovered)
+        goto FOUND_WORKGROUP;
+      release_module_handle (ci);
+      POCL_UNLOCK (pocl_module_cache_lock);
+      free (ci);
+      free (workgroup_string);
+      return NULL;
+    }
 
-  POCL_UNLOCK (pocl_dlhandle_lock);
+FOUND_WORKGROUP:
+  run_cmd->wg = ci->wg;
+  DL_PREPEND (pocl_module_cache, ci);
+
+  POCL_UNLOCK (pocl_module_cache_lock);
   free (workgroup_string);
   return ci;
 }
@@ -1436,30 +1701,14 @@ pocl_print_system_memory_stats()
  * this should be reasonable for CPU.
  * setting this to 8192 causes some tests to fail,
  * because of stack overflow. */
+#if defined(__riscv) && defined(ENABLE_CONFORMANCE)
+#define DEFAULT_WG_SIZE 1024
+#else
 #define DEFAULT_WG_SIZE 4096
+#endif
 
 static cl_device_partition_property basic_partition_properties[1] = { 0 };
 
-#ifdef ENABLE_CONFORMANCE
-static const cl_image_format supported_image_formats[] = {
-  { CL_RGBA, CL_SNORM_INT8 },
-  { CL_RGBA, CL_SNORM_INT16 },
-  { CL_RGBA, CL_UNORM_INT8 },
-  { CL_RGBA, CL_UNORM_INT16 },
-  { CL_RGBA, CL_SIGNED_INT8 },
-  { CL_RGBA, CL_SIGNED_INT16 },
-  { CL_RGBA, CL_SIGNED_INT32 },
-  { CL_RGBA, CL_UNSIGNED_INT8 },
-  { CL_RGBA, CL_UNSIGNED_INT16 },
-  { CL_RGBA, CL_UNSIGNED_INT32 },
-  { CL_RGBA, CL_HALF_FLOAT },
-  { CL_RGBA, CL_FLOAT },
-  { CL_BGRA, CL_SNORM_INT8 },
-  { CL_BGRA, CL_UNORM_INT8 },
-  { CL_BGRA, CL_SIGNED_INT8 },
-  { CL_BGRA, CL_UNSIGNED_INT8 }
-};
-#else
 static const cl_image_format supported_image_formats[] = {
   { CL_A, CL_SNORM_INT8 },
   { CL_A, CL_SNORM_INT16 },
@@ -1518,7 +1767,6 @@ static const cl_image_format supported_image_formats[] = {
   { CL_BGRA, CL_SIGNED_INT8 },
   { CL_BGRA, CL_UNSIGNED_INT8 }
 };
-#endif
 
 /** Initializes device info defaults.
  *
@@ -1604,11 +1852,7 @@ pocl_init_default_device_infos (cl_device_id dev,
   /* Use the minimum values until we get a more sensible upper limit from
      somewhere. */
   dev->max_read_image_args = dev->max_write_image_args = 128;
-#ifdef ENABLE_CONFORMANCE
-  dev->max_read_write_image_args = 0;
-#else
   dev->max_read_write_image_args = 128;
-#endif
   dev->image2d_max_width = dev->image2d_max_height = 8192;
   dev->image3d_max_width = dev->image3d_max_height = dev->image3d_max_depth = 2048;
   dev->max_samplers = 16;
@@ -1627,16 +1871,8 @@ pocl_init_default_device_infos (cl_device_id dev,
   dev->max_parameter_size = 1024;
   dev->min_data_type_align_size = MAX_EXTENDED_ALIGNMENT;
   dev->mem_base_addr_align = MAX_EXTENDED_ALIGNMENT;
+  /* minimum mandated */
   dev->single_fp_config = CL_FP_ROUND_TO_NEAREST | CL_FP_INF_NAN;
-#if defined(__x86_64__) || defined(_M_X64)
-  dev->single_fp_config |= (CL_FP_DENORM | CL_FP_ROUND_TO_INF
-                            | CL_FP_ROUND_TO_ZERO
-                            | CL_FP_CORRECTLY_ROUNDED_DIVIDE_SQRT);
-#ifdef ENABLE_LLVM
-  if (cpu_has_fma())
-    dev->single_fp_config |= CL_FP_FMA;
-#endif
-#endif
 
   if (strstr (device_extensions, "cl_khr_fp16") == NULL)
     {
@@ -1763,7 +1999,7 @@ pocl_init_default_device_infos (cl_device_id dev,
   else
     {
       dev->num_builtin_kernels = 0;
-      dev->builtin_kernel_list = "";
+      dev->builtin_kernel_list = strdup ("");
       dev->builtin_kernels_with_version = NULL;
     }
 
@@ -1848,13 +2084,14 @@ static const cl_name_version OPENCL_C_VERSIONS[]
     = { { CL_MAKE_VERSION (1, 0, 0), "OpenCL C" },
         { CL_MAKE_VERSION (1, 1, 0), "OpenCL C" },
         { CL_MAKE_VERSION (1, 2, 0), "OpenCL C" },
-        { CL_MAKE_VERSION (3, 0, 0), "OpenCL C" } };
+        { CL_MAKE_VERSION (3, 0, 0), "OpenCL C" },
+        { CL_MAKE_VERSION (3, 1, 0), "OpenCL C" } };
 
 void
-pocl_setup_opencl_c_with_version (cl_device_id dev, int supports_30)
+pocl_setup_opencl_c_with_version (cl_device_id dev)
 {
   dev->opencl_c_with_version = OPENCL_C_VERSIONS;
-  dev->num_opencl_c_with_version = supports_30 ? 4 : 3;
+  dev->num_opencl_c_with_version = dev->version_as_int >= 300 ? (dev->version_as_int >= 310 ? 5 : 4) : 3;
 }
 
 /* this is a list of recognized extensions, not a list of reported extensions;
@@ -1871,12 +2108,14 @@ static const cl_name_version OPENCL_EXTENSIONS[]
       { CL_MAKE_VERSION (1, 0, 0), "cl_intel_subgroup_local_block_io" },
       { CL_MAKE_VERSION (1, 0, 0), "cl_intel_spirv_subgroups" },
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_spirv_no_integer_wrap_decoration" },
+      { CL_MAKE_VERSION (1, 0, 0), "cl_khr_spirv_linkonce_odr" },
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_spirv_queries" },
 
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_byte_addressable_store" },
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_global_int32_base_atomics" },
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_global_int32_extended_atomics" },
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_local_int32_base_atomics" },
+      { CL_MAKE_VERSION (1, 0, 0), "cl_khr_extended_bit_ops" },
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_local_int32_extended_atomics" },
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_int64_base_atomics" },
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_int64_extended_atomics" },
@@ -1889,6 +2128,7 @@ static const cl_name_version OPENCL_EXTENSIONS[]
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_subgroup_shuffle" },
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_subgroup_shuffle_relative" },
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_subgroup_clustered_reduce" },
+      { CL_MAKE_VERSION (1, 0, 0), "cl_khr_suggested_local_work_size" },
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_3d_image_writes" },
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_fp16" },
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_fp64" },
@@ -1901,9 +2141,9 @@ static const cl_name_version OPENCL_EXTENSIONS[]
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_device_uuid" },
       { CL_MAKE_VERSION (1, 0, 0), "cl_khr_kernel_clock" },
 
-      { CL_MAKE_VERSION (0, 9, 6), "cl_khr_command_buffer" },
-      { CL_MAKE_VERSION (0, 9, 1), "cl_khr_command_buffer_multi_device" },
-      { CL_MAKE_VERSION (0, 9, 3), "cl_khr_command_buffer_mutable_dispatch" },
+      { CL_MAKE_VERSION (1, 0, 0), "cl_khr_command_buffer" },
+      { CL_MAKE_VERSION (0, 9, 2), "cl_khr_command_buffer_multi_device" },
+      { CL_MAKE_VERSION (0, 9, 4), "cl_khr_command_buffer_mutable_dispatch" },
       { CL_MAKE_VERSION (1, 0, 0), "cl_ext_float_atomics" },
       { CL_MAKE_VERSION (1, 0, 2), "cl_ext_buffer_device_address" },
       { CL_MAKE_VERSION (0, 9, 0), "cl_pocl_svm_rect" },
@@ -2050,6 +2290,9 @@ const size_t OPENCL_C_FEATURES_NUM
 void
 pocl_setup_features_with_version (cl_device_id dev)
 {
+  if (dev->version_as_int < 300)
+    return;
+
   cl_name_version *tmp = NULL;
   unsigned ret = pocl_space_delim_string_to_cl_name_version_array (
       &tmp, dev->features, OPENCL_C_FEATURES, OPENCL_C_FEATURES_NUM);
@@ -2106,4 +2349,63 @@ pocl_setup_builtin_kernels_with_version (cl_device_id dev)
                     "There are %u built-in kernels, but only %u were found\n",
                     dev->num_builtin_kernels, i);
     }
+}
+
+/* deviceUUID must be immutable for a given device across instances,
+ * processes, driver APIs, driver versions, and system reboots. It is
+ * intended to identify and correlate devices across API and driver boundaries.
+ * hard-coded deviceUUID values, especially all-0 bits, should never be used.
+ *
+ * A combination of values unique to the vendor, the driver, and the
+ * hardware environment can be used to provide a deviceUUID
+ * which is unique to a high degree of certainty. Some possible
+ * inputs to such a computation are:
+ *   Information reported by vkGetPhysicalDeviceProperties
+ *   PCI device ID (if defined)
+ *   PCI bus ID, or similar system configuration information.
+ *   Driver binary checksums.
+ *
+ * Applications can compare the driverUUID value across instance and process
+ * boundaries, and can make similar queries in external APIs to determine
+ * whether they are capable of sharing memory objects and resources
+ * using them with the device.
+ */
+
+static void
+set_uuid (cl_uchar *uuid,
+          const cl_uchar *UUID_SEED,
+          const char *extra,
+          unsigned i)
+{
+  memcpy (uuid, UUID_SEED, CL_UUID_SIZE_KHR);
+  SHA1_CTX ctx;
+  uint8_t digest[SHA1_DIGEST_SIZE];
+  pocl_SHA1_Init (&ctx);
+  pocl_SHA1_Update (&ctx, UUID_SEED, CL_UUID_SIZE_KHR);
+  pocl_SHA1_Update (&ctx, (const uint8_t *)extra, strlen (extra));
+  pocl_SHA1_Update (&ctx, (const uint8_t *)&i, sizeof (i));
+  pocl_SHA1_Final (&ctx, digest);
+  _Static_assert (CL_UUID_SIZE_KHR <= SHA1_DIGEST_SIZE,
+                  "UUID size must be < SHA1 size");
+  memcpy (uuid, digest, CL_UUID_SIZE_KHR);
+}
+
+void
+pocl_set_device_uuid (cl_uchar *device_uuid,
+                      unsigned int dev_i,
+                      const char *extra)
+{
+  static const uint8_t POCL_DEVICE_UUID[CL_UUID_SIZE_KHR]
+    = { 0x39, 0xa2, 0x78, 0xbf, 0xb6, 0xda, 0x40, 0x2d,
+        0xa2, 0x54, 0x58, 0x8c, 0x10, 0xba, 0x85, 0x1b };
+  set_uuid (device_uuid, POCL_DEVICE_UUID, extra, dev_i);
+}
+
+void
+pocl_set_driver_uuid (cl_uchar *driver_uuid, const char *extra)
+{
+  static const uint8_t POCL_DRIVER_UUID[CL_UUID_SIZE_KHR]
+    = { 0xe0, 0xa6, 0xee, 0xb6, 0x34, 0x6c, 0x43, 0x87,
+        0xb8, 0x2d, 0x40, 0xf0, 0x5b, 0xc5, 0x07, 0xdc };
+  set_uuid (driver_uuid, POCL_DRIVER_UUID, extra, 0);
 }

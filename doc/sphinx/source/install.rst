@@ -125,21 +125,53 @@ For multiple-item options like KERNELLIB_HOST_CPU_VARIANTS,
 use ";" as separator (you'll have to escape it for bash).
 
 - ``-DWITH_LLVM_CONFIG=<path-to-llvm-config>``
-  **IMPORTANT** Path to a llvm-config binary.
-  This determines the LLVM installation used by pocl.
-  If not specified, pocl will try to find and link against
-  llvm-config in PATH env var (usually means your system LLVM).
+  **IMPORTANT** Path to a llvm-config binary. This is one of
+  the ways to tell PoCL which LLVM installation it should use.
+
+- ``-DLLVM_DIR=<path-to-llvm-install-dir>``
+  **IMPORTANT** Path to a LLVM installation directory, which
+  must contain `lib/cmake/llvm` subdirectories. If specified,
+  PoCL will use find_package(LLVM) to find a LLVM installation.
+
+  If neither of LLVM_DIR & WITH_LLVM_CONFIG are specified, PoCL
+  will try to find LLVM via CMake config files, then fallback to 
+  searching for llvm-config executable in PATH env var.
+
+  If both LLVM_DIR & WITH_LLVM_CONFIG are specified, and
+  CMAKE_CROSSCOMPILING is false, PoCL will prefer LLVM_DIR.
+  If CMAKE_CROSSCOMPILING is true, PoCL assumes LLVM_DIR points
+  to the Target LLVM and WITH_LLVM_CONFIG points to Host LLVM.
+
+- ``-DClang_DIR=<path-to-clang-cmake-dir>``
+  Directory containing ``ClangConfig.cmake``. By default PoCL looks for
+  Clang next to the selected LLVM CMake package. Set this when Clang's CMake
+  package is installed separately. Discovery is restricted to this explicit
+  directory (or the default LLVM-relative directory); CMake will not select
+  an unrelated Clang package from its default search paths.
+
+- ``-DPOCL_CLANG_BIN_DIR=<path-to-clang-bin-dir>``
+  Directory containing the native ``clang`` and ``clang++`` tools. By default
+  PoCL searches LLVM's tools directory. Set this when the Clang tools are
+  installed separately from LLVM. This setting applies to native builds;
+  cross-compilation continues to find host tools from ``WITH_LLVM_CONFIG``.
 
 - ``-DSTATIC_LLVM`` pocl uses ``llvm-config --libs`` to get list of LLVM libraries
   it should link to. With this flag enabled, it additionally passes ``--link-static``
   to ``llvm-config``; otherwise it passes ``--link-shared``. Default is OFF (=shared).
+  Note that not all builds of LLVM support both Static & Shared linkage; this
+  will result in CMake error.
 
-- ``-DLLVM_SPIRV`` Path to a llvm-spirv binary of SPIRV-LLVM-Translator. Note that
+- ``-DHOST_LLVM_SPIRV`` Path to a llvm-spirv binary of SPIRV-LLVM-Translator. Note that
   only the builds of open-source Khronos Translator are supported, and the binary
   must be built for the same LLVM version as PoCL is being built against. If not
   given, PoCL will try to autodetect a llvm-spirv binary with suitable version.
   Note that PoCL will also try to detect LLVMSPIRVLib library, and if found, it
   will take precedence over llvm-spirv binary.
+
+- ``-DLLVM_SPIRV_ROOT=<path-to-translator-prefix>``
+  Prefix of a separately installed SPIRV-LLVM-Translator. PoCL searches its
+  ``include`` and ``lib``/``lib64`` directories for the translator headers and
+  library.
 
 - ``-DENABLE_ICD`` By default pocl's buildsystem will try to find an ICD
   and build pocl as a dynamic library named "libpocl". This option is useful
@@ -334,6 +366,15 @@ which cross-compile LLVM for the target machine. You can use the same Toolchain 
 for cross-compiling PoCL for the target machine. The files can be found in
 `tools/docker/LLVM/cross/`, the required preparation is described in each Dockerfile.
 
+For the cross build, PoCL will need separate Host and Target LLVMs (they must
+have matching major version, though not necessarily the exact same configuration).
+Both must support at least the LLVM target you want to use.
+Pass the Host LLVM using -DWITH_LLVM_CONFIG, and Target LLVM using -DLLVM_DIR. The
+former must point to llvm-config binary, the latter must be a LLVM install root
+on the Target (<LLVM_DIR>/lib/cmake/llvm must exist and contain CMake files).
+You will also need the GNU cross compiler to build PoCL, which can be installed
+in Debian based distros via package 'g++-14-riscv64-linux-gnu'.
+
 Building & running in Docker
 -----------------------------
 
@@ -421,13 +462,8 @@ Defining the CMake LLC_HOST_CPU parameter to 'spacemit-x60' should suffice
 for the native build after the basic PoCL build prerequisities have been
 installed.
 
-For the cross build, you can use the LLVM in your development PC as
-long as it supports the RISC-V target. It doesn't have to be the only/default
-target, the same LLVM you use for X86_64 development should work. Just
-make sure you use the same LLVM version as installed in the development board.
-
-You need the GNU cross compiler to build PoCL, which can be installed
-in Debian based distros via package 'g++-14-riscv64-linux-gnu'.
+For the cross build, PoCL will need separate Host and Target LLVMs,
+as well as GNU cross compiler. See the 'Cross-compiling PoCL' section for details.
 
 Then, mount the root of the development board file system to some directory
 in your disk. For example, mounting using sshfs:
@@ -437,8 +473,8 @@ in your disk. For example, mounting using sshfs:
    export BOARD_ROOT=$HOME/rv/root_fs
    sshfs username@bananapie.host.name:/ $BOARD_ROOT
 
-Then configure PoCL for a cross build and build it.
-Provide the paths to the board LLVM and ICD loader so the compiler can link against them.
+Then configure PoCL for a cross build and build it. Provide the paths to
+the board LLVM and ICD loader so the compiler can link against them.
 
 .. code-block:: console
 
@@ -450,16 +486,17 @@ Provide the paths to the board LLVM and ICD loader so the compiler can link agai
    cd pocl_source_dir
    mkdir build && cd build
    cmake .. -DCMAKE_MAKE_PROGRAM=/usr/bin/make           \
-    -DLLVM_CONFIG=$(which llvm-config-20)                \
+    -DCMAKE_BUILD_TYPE=Release                           \
+    -DWITH_LLVM_CONFIG=/usr/bin/llvm-config-20           \
+    -DLLVM_DIR=$LLVM_NATIVE_HOME                         \
     -DHOST_DEVICE_BUILD_HASH=riscv64-unknown-linux-gnu   \
-    -DCMAKE_TOOLCHAIN_FILE=../ToolchainRISCV.cmake       \
+    -DCMAKE_TOOLCHAIN_FILE=Toolchain.cmake               \
     -DLLC_TRIPLE=riscv64-unknown-linux-gnu               \
     -DLLC_HOST_CPU=${RISCV_CPU}                          \
     -DLLVM_HOST_TARGET=riscv64-unknown-linux-gnu         \
     -DCMAKE_PREFIX_PATH=${NATIVE_LIBS}                   \
     -DCMAKE_INSTALL_PREFIX=${BOARD_ROOT}/local/          \
     -DENABLE_ICD=ON                                      \
-    -DENABLE_LOADABLE_DRIVERS=ON                         \
     -DKERNELLIB_HOST_CPU_VARIANTS=${RISCV_CPU}
 
     make -j5

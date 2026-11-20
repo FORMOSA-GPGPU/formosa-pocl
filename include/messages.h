@@ -128,6 +128,7 @@ extern "C"
 
     MessageType_MigrateD2D,
 
+    MessageType_Marker,
     MessageType_Barrier,
 
     MessageType_ReadBuffer,
@@ -192,6 +193,9 @@ extern "C"
 
     MessageType_MigrateD2DReply,
 
+    MessageType_BarrierReply,
+    MessageType_MarkerReply,
+
     MessageType_ReadBufferReply,
     MessageType_WriteBufferReply,
     MessageType_CopyBufferReply,
@@ -233,6 +237,7 @@ extern "C"
     uint16_t peer_port;
     uint8_t use_rdma;
     uint8_t fast_socket;
+    uint8_t reply_socket;
   } CreateOrAttachSessionMsg_t;
 
   typedef struct __attribute__ ((packed))
@@ -254,6 +259,8 @@ extern "C"
     POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint64_t name;
     uint64_t opencl_c_version;
+    uint64_t opencl_c_all_versions;
+    uint64_t opencl_c_features;
     uint64_t device_version;
     uint64_t driver_version;
     uint64_t vendor;
@@ -391,6 +398,7 @@ extern "C"
   {
     POCL_ALIGNAS(8) // Meant for aligning the structure, not the members.
     uint64_t size;
+    uint64_t last_write_id;
     uint32_t source_pid;
     uint32_t source_did;
     uint32_t size_id;
@@ -705,6 +713,9 @@ extern "C"
     uint32_t did;
     uint32_t client_did;
     uint32_t waitlist_size;
+    /* Set to 1 for commands whose completion does not need to be broadcast to
+     * other remotes. */
+    uint32_t skip_peer_notify;
 
     uint32_t message_type;
     uint64_t obj_id;
@@ -842,6 +853,7 @@ extern "C"
     // set by remote server
     uint64_t server_read_start_timestamp_ns;
     uint64_t server_read_end_timestamp_ns;
+    uint64_t server_cmd_start_timestamp_ns;
     uint64_t server_write_start_timestamp_ns;
     union
     {

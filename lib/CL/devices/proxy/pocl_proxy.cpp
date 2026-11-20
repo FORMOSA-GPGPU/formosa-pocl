@@ -152,6 +152,7 @@ pocl_proxy_init_device_ops (struct pocl_device_ops *ops)
   ops->link_program = pocl_proxy_link_program;
   ops->build_binary = pocl_proxy_build_binary;
   ops->free_program = pocl_proxy_free_program;
+  ops->count_kernels = pocl_proxy_count_kernels;
   ops->setup_metadata = pocl_proxy_setup_metadata;
   ops->supports_binary = pocl_proxy_supports_binary;
 
@@ -854,8 +855,6 @@ static int get_kernel_metadata(pocl_kernel_metadata_t *meta,
   size_t size;
 
   // device-specific
-  assert(meta->data == NULL);
-  meta->data = (void **)calloc(num_devices, sizeof(void *));
   meta->has_arg_metadata = (-1);
 
   err = clGetKernelInfo(kernel, CL_KERNEL_FUNCTION_NAME, 0, NULL, &size);
@@ -1509,12 +1508,25 @@ pocl_proxy_free_program (cl_device_id device, cl_program program,
   return err;
 }
 
+int pocl_proxy_count_kernels(cl_device_id device, cl_program program,
+                             unsigned program_device_i, size_t *count) {
+  proxy_device_data_t *d = (proxy_device_data_t *)device->data;
+  cl_program proxy_prog = (cl_program)program->data[program_device_i];
+  cl_uint num_kernels = 0;
+
+  int err = clCreateKernelsInProgram(proxy_prog, 0, NULL, &num_kernels);
+  if (err) {
+    POCL_MSG_ERR("proxy failed to get kernel count: %i", err);
+    return 0;
+  }
+  *count = num_kernels;
+  return 1;
+}
+
 int
 pocl_proxy_setup_metadata (cl_device_id device, cl_program program,
                            unsigned program_device_i)
 {
-  cl_uint num_kernels = 0;
-
   proxy_device_data_t *d = (proxy_device_data_t *)device->data;
   cl_program proxy_prog = (cl_program)program->data[program_device_i];
 
@@ -1523,27 +1535,20 @@ pocl_proxy_setup_metadata (cl_device_id device, cl_program program,
         (d->backend->supports_il && program->program_il_size > 0)))
     return 0;
 
-  assert(program->kernel_meta == NULL);
+  assert(program->kernel_meta && program->kernel_meta->devices);
   POCL_MSG_PRINT_PROXY("Setting up Kernel metadata\n");
 
-  int err = clCreateKernelsInProgram(proxy_prog, 0, NULL, &num_kernels);
-  if (err) {
-    POCL_MSG_ERR("proxy metadata setup error 1: %i", err);
-    return 0;
-  }
-
-  program->num_kernels = num_kernels;
-  if (num_kernels < 1) {
+  if (program->num_kernels < 1) {
     POCL_MSG_WARN("Program has zero kernels.\n");
-    program->kernel_meta = NULL;
     return 0;
   }
 
-  pocl_kernel_metadata_t *p = (pocl_kernel_metadata_t *)calloc(
-      num_kernels, sizeof(pocl_kernel_metadata_t));
-  cl_kernel *kernels = (cl_kernel *)alloca(num_kernels * sizeof(cl_kernel));
+  pocl_kernel_metadata_t *p = program->kernel_meta;
+  cl_kernel *kernels =
+      (cl_kernel *)alloca(program->num_kernels * sizeof(cl_kernel));
   assert(p);
-  err = clCreateKernelsInProgram(proxy_prog, num_kernels, kernels, NULL);
+  int err =
+      clCreateKernelsInProgram(proxy_prog, program->num_kernels, kernels, NULL);
   if (err) {
     POCL_MSG_ERR("proxy metadata setup error 2: %i", err);
     return 0;
@@ -1559,7 +1564,7 @@ pocl_proxy_setup_metadata (cl_device_id device, cl_program program,
       POCL_MSG_WARN("Proxy could not parse SPIR-V metadata.\n");
       return 0;
     }
-    assert(infoMap.size() == num_kernels);
+    assert(infoMap.size() == program->num_kernels);
 
     char string_value[POCL_MAX_PATHNAME_LENGTH];
     int index = 0;
@@ -1590,7 +1595,7 @@ pocl_proxy_setup_metadata (cl_device_id device, cl_program program,
     }
 
   } else if (d->backend->provides_metadata) {
-    for (cl_uint i = 0; i < num_kernels; ++i) {
+    for (cl_uint i = 0; i < program->num_kernels; ++i) {
 
       err = get_kernel_metadata(p + i, program->num_devices, proxy_prog,
                                 d->device_id, kernels[i]);
@@ -1836,6 +1841,18 @@ pocl_proxy_submit (_cl_command_node *node, cl_command_queue cq)
   e->data = (void *)e_d;
 
   node->state = POCL_COMMAND_READY;
+  /* If a wait-list dependency has failed, this command must not run: fail it via
+   * the error cascade. There is no point waiting for it to become otherwise
+   * ready first. The check is done after the event data is allocated above so
+   * the failure cascade (which broadcasts on event_cond) has valid event data.
+   * pocl_update_event_failed takes the cq + event locks itself, so unlock the
+   * event we hold and return without unlocking again. */
+  if (e->failed_dependency)
+    {
+      POCL_UNLOCK_OBJ (e);
+      pocl_update_event_failed (CL_FAILED, NULL, 0, e, NULL);
+      return;
+    }
   if (pocl_command_is_ready (e))
     {
       pocl_update_event_submitted (e);
@@ -1885,7 +1902,10 @@ pocl_proxy_notify (cl_device_id device, cl_event event, cl_event finished)
 {
   _cl_command_node *node = event->command;
 
-  if (finished->status < CL_COMPLETE) {
+  /* Fail the command if the notifier finished failed, or if any wait-list
+   * dependency has already failed (recorded on the event). In either case the
+   * command MUST NOT execute, so there is no point checking readiness first. */
+  if (finished->status < CL_COMPLETE || event->failed_dependency) {
     /* Unlock the finished event in order to prevent a lock order violation
      * with the command queue that will be locked during
      * pocl_update_event_failed.

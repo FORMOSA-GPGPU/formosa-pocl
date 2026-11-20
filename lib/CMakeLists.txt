@@ -49,6 +49,9 @@ set(CPACK_DEBIAN_LIB_PACKAGE_REPLACES "libpocl1-common (<< 0.13-9)")
 if (ENABLE_LLVM)
   add_subdirectory("kernel")
   add_subdirectory("llvmopencl")
+  if (ENABLE_MLIR)
+    add_subdirectory("mliropencl")
+  endif()
 endif()
 
 add_subdirectory("CL")
@@ -84,10 +87,6 @@ else()
 
 endif()
 
-
-if(SANITIZER_OPTIONS)
-  list(INSERT OPENCL_LIBS 0 ${SANITIZER_LIBS})
-endif()
 
 set(OPENCL_CFLAGS "")
 

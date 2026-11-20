@@ -1,8 +1,7 @@
 <%inherit file="basic_page.makt" />
 <%namespace name="comp" file="components.mak"/>
 
-<p>PoCL is a portable MIT-licensed compliant implementation of the
-OpenCL standard. In addition to
+<p>PoCL is a portable MIT-licensed compliant implementation (for <a href="https://www.khronos.org/conformance/adopters/conformant-products/opencl#submission_450">x86-64</a> and <a href="https://www.khronos.org/conformance/adopters/conformant-products/opencl#submission_453">Level Zero</a>) of the OpenCL standard. In addition to
 being an easily portable/layered multi-device
 open-source OpenCL implementation, a major goal of this project is
 improving interoperability of diversity of OpenCL-capable devices by
@@ -12,7 +11,7 @@ of OpenCL programs across device types utilizing runtime and compiler
 techniques.</p>
 
 <p>PoCL currently supports various CPU architectures (x86, ARM, RISC-V),
-NVIDIA GPUs via libCUDA, Intel GPUs via Level Zero and
+Intel GPUs via Level Zero, NVIDIA GPUs via libCUDA and
 <a href="http://openasip.org">OpenASIP</a> cores at different feature coverage
 levels. It also supports <a href="http://portablecl.org/docs/html/remote.html">a
 remote backend</a> for distributed OpenCL execution. PoCL is also known to
@@ -33,6 +32,11 @@ were added. This time they all happen to be related to the remote driver, PoCL-R
 ${comp.load_publications("pocl-publications-2025-09-30-additions.txt")}
 
 </p>
+
+<h2>2025-10-08: <a href="http://portablecl.org/docs/html/notes_7_1.html">Portable Computing Language (PoCL) v7.1 released</a></h2>
+
+<p>PoCL v7.1 has been released. The release notes can be read <a href="http://portablecl.org/docs/html/notes_7_1.html">here</a>
+and a packaged release is available <a href="https://github.com/pocl/pocl/releases/tag/v7.1">here.</a></p>
 
 <h2>2025-05-22: <a href="http://portablecl.org/docs/html/notes_7_0.html">Portable Computing Language (PoCL) v7.0 released</a></h2>
 
@@ -134,17 +138,24 @@ University of Bristol. Read more about it <a href="cuda-backend.html">here</a>.
 
 <h1>Current Status</h1>
 
-<p>Passes most of the tests in the Khronos OpenCL 1.2 conformance suite. Development towards
-3.0 compliance with some 2.x features started.</p>
+<p>PoCL 7.0 passed the official Khronos OpenCL 3.0 conformance tests in
+<a href="https://www.khronos.org/conformance/adopters/conformant-products/opencl#submission_450"> January 2025</a>,
+with CPU and LevelZero device drivers.</p>
 
-<h1>Feature Examples</h1>
+<h1>Features</h1>
 <ul>
   <li>portable kernel compiler with horizontal autovectorization of work-groups</li>
   <li>core runtime APIs implemented in C for improved portability to bare bone machines</li>
   <li>automated kernel compiler cache</li>
   <li>driver framework that allows seamless integration of diversity of device types in
   the same OpenCL context</li>
-  <li>ICD support</li>
+  <li>ICD support (Khronos ICD, OCL-ICD)</li>
+  <li>Mac OS X, Windows+MSVC, Windows+MinGW, Linux supported</li>
+  <li>CPU, CUDA, LevelZero, OpenASIP, Vulkan, Remote drivers available</li>
+  <li>CPU driver supports FP16, FP64 and Atomics on floats</li>
+  <li>Experimental support for Command buffers, Tensor extensions </li>
+  <li>USM, SVM supported</li>
+  <li>SPIR-V supported up to version 1.5</li>
 </ul>
 
 <br />

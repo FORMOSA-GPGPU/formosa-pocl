@@ -30,6 +30,7 @@ IGNORE_COMPILER_WARNING("-Wunused-parameter")
 #include <llvm/ADT/Statistic.h>
 #include <llvm/Analysis/LoopInfo.h>
 #include <llvm/Analysis/PostDominators.h>
+#include <llvm/Analysis/ValueTracking.h>
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/DebugInfoMetadata.h>
 #include <llvm/IR/IRBuilder.h>
@@ -56,9 +57,13 @@ IGNORE_COMPILER_WARNING("-Wunused-parameter")
 
 POP_COMPILER_DIAGS
 
+#include "pocl_llvm_api.h"
+
+#include <algorithm>
 #include <array>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <vector>
 
@@ -133,6 +138,8 @@ private:
   void fixMultiRegionVariables(ParallelRegion *Region);
   void addContextSaveRestore(llvm::Instruction *instruction);
   void releaseParallelRegions();
+  void shareReplicatedLocalMemAllocas(
+      ParallelRegion &Region, llvm::ValueToValueMapTy &ReferenceMap);
 
   // Returns an instruction in the entry block which computes the
   // total size of work-items in the work-group. If it doesn't
@@ -214,6 +221,7 @@ bool WorkitemLoopsImpl::runOnFunction(Function &Func) {
   releaseParallelRegions();
   LLVM_DEBUG(dbgs() << "After WILoops:\n");
   LLVM_DEBUG(Func.dump());
+  eraseInvalidLifetimeMarkers(&Func);
   return Changed;
 }
 
@@ -450,6 +458,29 @@ void WorkitemLoopsImpl::releaseParallelRegions() {
   }
 }
 
+void WorkitemLoopsImpl::shareReplicatedLocalMemAllocas(
+    ParallelRegion &Region, ValueToValueMapTy &ReferenceMap) {
+  for (BasicBlock *BB : Region) {
+    for (Instruction &I : *BB) {
+      auto *Original = dyn_cast<CallInst>(&I);
+      if (Original == nullptr || Original->getCalledFunction() == nullptr ||
+          (Original->getCalledFunction() != LocalMemAllocaFuncDecl &&
+           Original->getCalledFunction() != WorkGroupAllocaFuncDecl))
+        continue;
+
+      auto *Replica = dyn_cast_or_null<CallInst>(ReferenceMap.lookup(Original));
+      if (Replica == nullptr || Replica == Original)
+        continue;
+
+      // Region replicas execute different work-items of the same work group.
+      // They must share local memory originating from the same allocation.
+      Replica->replaceAllUsesWith(Original);
+      ReferenceMap[Original] = Original;
+      Replica->eraseFromParent();
+    }
+  }
+}
+
 bool WorkitemLoopsImpl::processFunction(Function &F) {
 
   releaseParallelRegions();
@@ -516,6 +547,8 @@ bool WorkitemLoopsImpl::processFunction(Function &F) {
 
     llvm::ValueToValueMapTy reference_map;
     ParallelRegion *PRegion = (*PRI);
+    // Owns the peeled or unrolled copies of PRegion.
+    std::vector<std::unique_ptr<ParallelRegion>> Replicas;
 
     LLVM_DEBUG(dbgs() << "Handling region:\n");
     LLVM_DEBUG(PRegion->dumpNames());
@@ -543,7 +576,9 @@ bool WorkitemLoopsImpl::processFunction(Function &F) {
     if (PeelFirst) {
       LLVM_DEBUG(dbgs() << "Conditional region, peeling the first iteration\n");
 
-      ParallelRegion *replica = PRegion->replicate(reference_map, ".peeled_wi");
+      Replicas.emplace_back(PRegion->replicate(reference_map, ".peeled_wi"));
+      ParallelRegion *replica = Replicas.back().get();
+      shareReplicatedLocalMemAllocas(*PRegion, reference_map);
       replica->chainAfter(PRegion);
       replica->purge();
 
@@ -583,8 +618,10 @@ bool WorkitemLoopsImpl::processFunction(Function &F) {
         PRegion->SetExitBB(lastBB);
 
         for (unsigned c = 1; c < UnrollCount; ++c) {
-          ParallelRegion *UnrolledPR =
-              PRegion->replicate(reference_map, ".unrolled_wi");
+          Replicas.emplace_back(
+              PRegion->replicate(reference_map, ".unrolled_wi"));
+          ParallelRegion *UnrolledPR = Replicas.back().get();
+          shareReplicatedLocalMemAllocas(*PRegion, reference_map);
           UnrolledPR->chainAfter(prev);
           prev = UnrolledPR;
           lastBB = UnrolledPR->exitBB();
@@ -672,6 +709,10 @@ bool WorkitemLoopsImpl::processFunction(Function &F) {
     PR->insertPrologue(0, 0, 0);
     builder.SetInsertPoint(&*(PR->entryBB()->getFirstInsertionPt()));
     builder.CreateStore(ConstantInt::get(ST, 1), LocalIdXFirstVar);
+    // insertPrologue() reset the local ids to 0; re-base the global ids too,
+    // else the peeled WI reads a stale (loop-updated) global id.
+    for (int Dim = 0; Dim < 3; ++Dim)
+      builder.CreateStore(getGlobalIdOrigin(Dim), GlobalIdIterators[Dim]);
   }
 
   if (!WGDynamicLocalSize)
@@ -905,6 +946,31 @@ llvm::AllocaInst *WorkitemLoopsImpl::getContextArray(llvm::Instruction *Inst,
              Inst, &*(Entry.getFirstInsertionPt()), CArrayName, PaddingAdded);
 }
 
+static bool isRematerializableLoad(const LoadInst *Load) {
+  if (!Load->isSimple())
+    return false;
+
+  const llvm::Value *Obj = getUnderlyingObject(Load->getPointerOperand());
+
+  // readonly alone does not exclude writes through an alias.
+  if (const auto *Arg = dyn_cast<Argument>(Obj))
+    return Arg->onlyReadsMemory() && Arg->hasNoAliasAttr();
+
+  if (const auto *GV = dyn_cast<GlobalVariable>(Obj)) {
+    if (GV->isConstant())
+      return true;
+    // These are updated by the work-item loops and must be read in the target
+    // region. The program-scope variable buffer is ordinary writable memory.
+    llvm::StringRef Name = GV->getName();
+    return Name != PoclGVarBufferName &&
+           std::find(WorkgroupVariablesVector.begin(),
+                     WorkgroupVariablesVector.end(),
+                     Name.str()) != WorkgroupVariablesVector.end();
+  }
+
+  return false;
+}
+
 /// Tries to rematerialize the given value-defining instruction.
 ///
 /// Rematerialization in this context means recomputing the value produced
@@ -997,6 +1063,14 @@ llvm::Value *WorkitemLoopsImpl::tryToRematerialize(
   // and refer to the original.
   if (Inst->getParent() == &K->getEntryBlock())
     return Inst;
+
+  // A rematerialized load may observe writes between the original definition
+  // and its use in a later parallel region.
+  if (Inst->mayReadFromMemory()) {
+    const auto *Load = dyn_cast<LoadInst>(Inst);
+    if (Load == nullptr || !isRematerializableLoad(Load))
+      UNABLE_TO_REMAT("reads mutable memory");
+  }
 
   llvm::Instruction *Copy = CanDoIt == nullptr ? Inst->clone() : nullptr;
   if (Copy != nullptr) {
@@ -1247,7 +1321,11 @@ void WorkitemLoopsImpl::addContextSaveRestore(llvm::Instruction *Def) {
 
 bool WorkitemLoopsImpl::shouldNotBeContextSaved(llvm::Instruction *Instr) {
 
+#if LLVM_MAJOR >= 23
+  if (isa<UncondBrInst>(Instr) || isa<CondBrInst>(Instr)) return true;
+#else
   if (isa<BranchInst>(Instr)) return true;
+#endif
 
   // The local memory allocation call is uniform, the same pointer to the
   // work-group shared memory area is returned to all work-items. It must

@@ -49,6 +49,9 @@ set(POCL_CMAKE_CXX_STANDARD ${CMAKE_CXX_STANDARD})
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# uncomment to debug CMake target dependencies
+#set_property(GLOBAL PROPERTY GLOBAL_DEPENDS_DEBUG_MODE 1)
+
 if(MSVC)
   set(SUPPORTED_C_STD_VERSION "11")
 
@@ -95,7 +98,6 @@ endmacro()
 
 include(CheckCCompilerFlag)
 include(CheckCXXCompilerFlag)
-include(CMakeDependentOption)
 include(CPackComponent)
 include(CheckFunctionExists)
 
@@ -149,9 +151,9 @@ if(HAVE_CXX_WERROR_VLA)
   add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-Werror=vla>")
 endif()
 
-set(MAJOR_VERSION 7)
-set(MINOR_VERSION 1)
-set(VERSION_SUFFIX_FIXED_TEXT "")
+set(MAJOR_VERSION 8)
+set(MINOR_VERSION 0)
+set(VERSION_SUFFIX_FIXED_TEXT "-pre")
 set(VERSION_SUFFIX "${VERSION_SUFFIX_FIXED_TEXT}")
 set(VERSION_STRING ${MAJOR_VERSION}.${MINOR_VERSION}${VERSION_SUFFIX})
 set(POCL_VERSION_BASE ${VERSION_STRING})
@@ -166,6 +168,14 @@ endif()
 enable_testing()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+#####################################################
+
+# Unfortunately CMAKE_SYSROOT is inserted into FIND_ROOT_PATH and there is no way to disable this behavior, AFAICT.
+# As consequence, find_program() finds binaries in Target ROOTFS not Host. Using this to ignore binaries from the Target sysroot:
+if(CMAKE_CROSSCOMPILING AND CMAKE_SYSROOT)
+  set(CMAKE_SYSTEM_IGNORE_PATH "${CMAKE_SYSROOT}/usr/bin;${CMAKE_SYSROOT}/usr/sbin;${CMAKE_SYSROOT}/bin;${CMAKE_SYSROOT}/sbin")
+endif()
 
 #####################################################
 
@@ -316,6 +326,8 @@ option(ENABLE_PRINTF_IMMEDIATE_FLUSH "[currently only applies to CPU drivers] if
 
 option(ENABLE_LLVM_FILECHECKS "Enable kernel compiler/autovectorizer filechecks. The FileCheck binary can be defined via LLVM_FILECHECK_BIN, otherwise it's autodetected. Note: the checks are targeted against recent Intel X86/SIMD CPUs for now." ON)
 
+option(ENABLE_CLANGIR "Build pocl with ClangIR. Default is OFF." OFF)
+
 if(ENABLE_LEVEL0)
   set(DEFAULT_STATIC_LLVM ON)
 else()
@@ -324,6 +336,13 @@ endif()
 
 option(STATIC_LLVM "If ON, link to static LLVM libraries. OFF (default) = link to shared LLVM libraries." ${DEFAULT_STATIC_LLVM})
 
+# When dynamically linking LLVM, add rpaths to installed binaries so they can
+# find LLVM libraries without requiring LD_LIBRARY_PATH/DYLD_LIBRARY_PATH.
+# This is especially important on macOS where DYLD_LIBRARY_PATH doesn't help
+# resolve @rpath references.
+if(NOT STATIC_LLVM)
+  set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
+endif()
 
 if(WIN32)
   set(DEFAULT_LLVM_PLATFORM_SUPPORT ON)
@@ -382,7 +401,7 @@ endif()
 
 option(ENABLE_EXTRA_VALIDITY_CHECKS "Enable extra checks on cl_* object validity" OFF)
 
-option(DEVELOPER_MODE "This will SIGNIFICANTLY reduce PoCL's performance, but speeds up its compilation for faster development-test cycles. Only turn on if you know what you're doing." OFF)
+option(DEVELOPER_MODE "Currently disables LTO and enables a few extra warnings." OFF)
 
 option(USE_POCL_MEMMANAGER "Enables custom memory manager. Except for special circumstances, this should be disabled." OFF)
 
@@ -397,6 +416,8 @@ option(ENABLE_EXAMPLES "Build examples. Defaults to ON" ON)
 option(ENABLE_RDMA "Enable usage of RDMA libraries for memory allocations. Requires libRDMAcm and libverbs" OFF)
 
 option(RENAME_POCL "Rename PoCL's OpenCL functions to PO<ocl_function>. Allows an user to call both PoCL and another OpenCL implementation." OFF)
+
+option(ENABLE_OPENCL_3_1 "Temporary option to enable OpenCL 3.1 support. Will be removed when 3.1 is made default" OFF)
 
 ##########################################################
 
@@ -432,7 +453,7 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "ppc")
   set(POWERPC 1)
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "mips")
   set(MIPS 1)
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "(arm|aarch64)")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "(arm|aarch64|ARM64)")
   set(ARM 1)
   if(HOST_DEVICE_ADDRESS_BITS MATCHES "32")
     set(ARM32 1)
@@ -762,8 +783,51 @@ find_program(XARGS_EXEC
 
 ######################################################################################
 
+# IPO support for runtime library
+if(POLICY CMP0069)
+  cmake_policy(SET CMP0069 NEW)
+endif()
+
+if(NOT DEFINED DEFAULT_ENABLE_IPO)
+  set(DEFAULT_ENABLE_IPO OFF CACHE BOOL "IPO" FORCE)
+
+  if(NOT CMAKE_VERSION VERSION_LESS "3.9")
+
+    if(DEVELOPER_MODE)
+      set(IPO 0)
+    elseif(MINGW)
+      # XXX: IPO on MinGW runs into linker errors (such as `two or more sections
+      # for .gnu.lto__ZN4llvm12DenseMapInfoIPKNS_8MetadataEvE7isEqualES3_S3_.65576.2f694590`)
+      set(IPO 0)
+    else()
+      include(CheckIPOSupported)
+      check_ipo_supported(RESULT IPO OUTPUT IPO_OUTPUT)
+    endif()
+    set(DEFAULT_ENABLE_IPO ${IPO} CACHE BOOL "IPO" FORCE)
+
+    message(STATUS "Compiler supports IPO: ${DEFAULT_ENABLE_IPO}")
+    #message(STATUS "IPO check message: ${IPO_OUTPUT}")
+  endif()
+endif()
+
+setup_cached_var(ENABLE_IPO "Enable Link-Time Optimization (IPO) while building pocl runtime"
+  "Requested build with IPO, but IPO is not available"
+  "IPO available, but requested build without it")
+
+if(HAVE_VALGRIND)
+  option(ENABLE_VALGRIND "Enable valgrind support (this may slow down PoCL)" OFF)
+else()
+  set(ENABLE_VALGRIND OFF CACHE BOOL "valgrind is not available" FORCE)
+endif()
+
+######################################################################################
+
 if(ENABLE_LLVM)
 
+  # The Formosa SDK supplies its pinned translator under the PoCL 7.1 option.
+  if((ENABLE_FORMOSA OR ENABLE_SIMTSIM) AND LLVM_SPIRV AND NOT DEFINED HOST_LLVM_SPIRV)
+    set(HOST_LLVM_SPIRV "${LLVM_SPIRV}")
+  endif()
   include(LLVM RESULT_VARIABLE RES)
   if(NOT RES)
     message(FATAL_ERROR "Could not load LLVM.cmake")
@@ -788,20 +852,10 @@ else()
 
 endif()
 
-# SIGFPE and SIGUSR2
+# SIGUSR2
 if(UNIX AND (CMAKE_SYSTEM_NAME MATCHES "Linux"))
-  # this is now handled by a LLVM pass
-  if(ENABLE_HOST_CPU_DEVICES AND X86 AND
-     (NOT ENABLE_HOST_CPU_DEVICES_OPENMP) AND
-     (NOT ENABLE_TBB_DEVICE))
-    set(DEFAULT_SIGFPE ON)
-  else()
-    set(DEFAULT_SIGFPE OFF)
-  endif()
-  option(ENABLE_SIGFPE_HANDLER "enable SIGFPE signal handler" ${DEFAULT_SIGFPE})
   option(ENABLE_SIGUSR2_HANDLER "enable SIGUSR2 signal handler" ON)
 else()
-  set(ENABLE_SIGFPE_HANDLER OFF CACHE INTERNAL "enable SIGFPE signal handler" FORCE)
   set(ENABLE_SIGUSR2_HANDLER OFF CACHE INTERNAL "enable SIGUSR2 signal handler" FORCE)
 endif()
 
@@ -821,7 +875,7 @@ if(UNIX OR MINGW)
   include(CheckSymbolExists)
 
   # don't allow implicit function declarations
-  set(CMAKE_REQUIRED_FLAGS "-std=c99 ${FORBID_IMPLICIT_FUNCTIONS}")
+  string(JOIN " " CMAKE_REQUIRED_FLAGS "-std=c99" ${FORBID_IMPLICIT_FUNCTIONS})
   if (CMAKE_SYSTEM_NAME MATCHES "Linux")
     set(CMAKE_REQUIRED_LIBRARIES "rt")
   endif ()
@@ -999,45 +1053,6 @@ file(RELATIVE_PATH POCL_INSTALL_FROM_LIB_TO_PRIVATE_LIBDIR
 
 ######################################################################################
 
-# IPO support for runtime library
-if(POLICY CMP0069)
-  cmake_policy(SET CMP0069 NEW)
-endif()
-
-if(NOT DEFINED DEFAULT_ENABLE_IPO)
-  set(DEFAULT_ENABLE_IPO OFF CACHE BOOL "IPO" FORCE)
-
-  if(NOT CMAKE_VERSION VERSION_LESS "3.9")
-
-    if(DEVELOPER_MODE)
-      set(IPO 0)
-    elseif(MINGW)
-      # XXX: IPO on MinGW runs into linker errors (such as `two or more sections
-      # for .gnu.lto__ZN4llvm12DenseMapInfoIPKNS_8MetadataEvE7isEqualES3_S3_.65576.2f694590`)
-      set(IPO 0)
-    else()
-      include(CheckIPOSupported)
-      check_ipo_supported(RESULT IPO OUTPUT IPO_OUTPUT)
-    endif()
-    set(DEFAULT_ENABLE_IPO ${IPO} CACHE BOOL "IPO" FORCE)
-
-    message(STATUS "Compiler supports IPO: ${DEFAULT_ENABLE_IPO}")
-    #message(STATUS "IPO check message: ${IPO_OUTPUT}")
-  endif()
-endif()
-
-setup_cached_var(ENABLE_IPO "Enable Link-Time Optimization (IPO) while building pocl runtime"
-  "Requested build with IPO, but IPO is not available"
-  "IPO available, but requested build without it")
-
-if(HAVE_VALGRIND)
-  option(ENABLE_VALGRIND "Enable valgrind support (this may slow down PoCL)" OFF)
-else()
-  set(ENABLE_VALGRIND OFF CACHE BOOL "valgrind is not available" FORCE)
-endif()
-
-######################################################################################
-
 set(HAVE_LIBSVML 0)
 if(X86)
   set(ORIG_CMAKE_FIND_LIBRARY_SUFFIXES ${CMAKE_FIND_LIBRARY_SUFFIXES})
@@ -1096,8 +1111,9 @@ if(ENABLE_CONFORMANCE AND (NOT ENABLE_SLEEF))
   message(FATAL_ERROR "conformance needs enabled SLEEF")
 endif()
 
+# CONFORMANCE + VECTORIZE_BUILTINS is disabled b/c we cannot guarantee ULP of the vectorized functions
 set(ENABLE_HOST_CPU_VECTORIZE_BUILTINS OFF)
-if(ENABLE_LLVM AND ENABLE_HOST_CPU_DEVICES AND (LLVM_VERSION_MAJOR GREATER 17) AND (NOT ENABLE_CONFORMANCE))
+if(ENABLE_LLVM AND ENABLE_HOST_CPU_DEVICES AND (NOT ENABLE_CONFORMANCE) AND (LLVM_VERSION_MAJOR GREATER_EQUAL 19))
   # these are experimental options and may change in future
   option(ENABLE_HOST_CPU_VECTORIZE_SLEEF "vectorize builtins with SLEEF (ARM only)" ${HAVE_SLEEF})
   option(ENABLE_HOST_CPU_VECTORIZE_LIBMVEC "vectorize builtins with LIBMVEC" ${HAVE_LIBMVEC})
@@ -1109,8 +1125,102 @@ if(ENABLE_LLVM AND ENABLE_HOST_CPU_DEVICES AND (LLVM_VERSION_MAJOR GREATER 17) A
     message(STATUS "CPU device: enabled vectorization of OpenCL builtins")
     set(ENABLE_HOST_CPU_VECTORIZE_BUILTINS ON)
   endif()
-
 endif()
+
+# Record the compiler runtime archive for the JIT. The Clang-driver final link
+# used to add libgcc/compiler-rt implicitly; the in-process JIT needs the same
+# helper symbols (e.g. __truncdfhf2 for FP16 conversions) available through ORC.
+set(HOST_CPU_COMPILER_RT_LIBRARY "")
+set(HOST_CPU_COMPILER_RT_LIBRARY_SOURCE "" CACHE FILEPATH "Compiler runtime archive to install for CPU JIT kernels")
+if(HOST_CPU_ENABLE_JIT)
+  set(POCL_COMPILER_RT_LIBRARY "${HOST_CPU_COMPILER_RT_LIBRARY_SOURCE}")
+  if(NOT POCL_COMPILER_RT_LIBRARY)
+    # `-print-libgcc-file-name` is a GCC option; clang's answer may name a nonexistent archive
+    # (cross MinGW/clang). Fall back to `-print-file-name=libgcc.a` and require it to exist.
+    execute_process(
+      COMMAND "${CMAKE_C_COMPILER}" -print-libgcc-file-name
+      OUTPUT_VARIABLE POCL_COMPILER_RT_LIBRARY
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET)
+    if(NOT (POCL_COMPILER_RT_LIBRARY AND EXISTS "${POCL_COMPILER_RT_LIBRARY}"))
+      execute_process(
+        COMMAND "${CMAKE_C_COMPILER}" -print-file-name=libgcc.a
+        OUTPUT_VARIABLE POCL_COMPILER_RT_LIBRARY
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    endif()
+  endif()
+  if(POCL_COMPILER_RT_LIBRARY AND EXISTS "${POCL_COMPILER_RT_LIBRARY}")
+    get_filename_component(POCL_COMPILER_RT_LIBRARY_NAME
+      "${POCL_COMPILER_RT_LIBRARY}" NAME)
+    install(FILES "${POCL_COMPILER_RT_LIBRARY}"
+      DESTINATION "${POCL_INSTALL_PRIVATE_DATADIR_REL}" COMPONENT "lib")
+    set(HOST_CPU_COMPILER_RT_LIBRARY "${POCL_COMPILER_RT_LIBRARY_NAME}")
+  elseif(HOST_COMPILER_SUPPORTS_FLOAT16)
+    # Warn rather than silently ship a driver whose FP16 kernels can't JIT (__truncdfhf2).
+    message(WARNING
+      "Could not locate a compiler runtime archive (libgcc/compiler-rt) for the CPU JIT. "
+      "FP16 kernels that emit soft-float helpers such as __truncdfhf2 will fail to resolve "
+      "at run time. Point PoCL at one with -DHOST_CPU_COMPILER_RT_LIBRARY_SOURCE=<libgcc.a>.")
+  endif()
+endif()
+
+# Record the SONAME of the SLEEF library for the JIT to link against
+set(HOST_CPU_SLEEF_LIBRARY "")
+set(HOST_CPU_SLEEF_LIBRARY_FALLBACK "")
+if(ENABLE_HOST_CPU_VECTORIZE_SLEEF AND LIBSLEEF)
+  set(HOST_CPU_SLEEF_LIBRARY "${LIBSLEEF}")
+  if(CMAKE_OBJDUMP)
+    execute_process(
+      COMMAND "${CMAKE_OBJDUMP}" -p "${LIBSLEEF}"
+      OUTPUT_VARIABLE POCL_SLEEF_OBJDUMP_OUTPUT
+      ERROR_QUIET
+      RESULT_VARIABLE POCL_SLEEF_OBJDUMP_RESULT)
+    if(POCL_SLEEF_OBJDUMP_RESULT STREQUAL "0")
+      string(REGEX MATCH "SONAME[ \t]+([^ \r\n]+)"
+             POCL_SLEEF_SONAME_MATCH "${POCL_SLEEF_OBJDUMP_OUTPUT}")
+      if(POCL_SLEEF_SONAME_MATCH)
+        set(HOST_CPU_SLEEF_LIBRARY "${CMAKE_MATCH_1}")
+        set(HOST_CPU_SLEEF_LIBRARY_FALLBACK "${LIBSLEEF}")
+      endif()
+    endif()
+  endif()
+endif()
+
+# Record the SONAME of the libmvec library for the JIT to dlopen at run time. LIBMVEC may be
+# the system libmvec (SONAME libmvec.so.1) or a libmvec-ABI-compatible replacement pointed at
+# via -DLIBMVEC=... (e.g. SLEEF's libsleefgnuabi.so); recording the SONAME lets the JIT resolve
+# the vectorized _ZGV* math symbols without relying on a system libmvec (absent on musl / old
+# glibc). Mirrors the SLEEF recording above.
+set(HOST_CPU_LIBMVEC_LIBRARY "")
+set(HOST_CPU_LIBMVEC_LIBRARY_FALLBACK "")
+if(ENABLE_HOST_CPU_VECTORIZE_LIBMVEC AND LIBMVEC)
+  set(HOST_CPU_LIBMVEC_LIBRARY "${LIBMVEC}")
+  if(CMAKE_OBJDUMP)
+    execute_process(
+      COMMAND "${CMAKE_OBJDUMP}" -p "${LIBMVEC}"
+      OUTPUT_VARIABLE POCL_LIBMVEC_OBJDUMP_OUTPUT
+      ERROR_QUIET
+      RESULT_VARIABLE POCL_LIBMVEC_OBJDUMP_RESULT)
+    if(POCL_LIBMVEC_OBJDUMP_RESULT STREQUAL "0")
+      string(REGEX MATCH "SONAME[ \t]+([^ \r\n]+)"
+             POCL_LIBMVEC_SONAME_MATCH "${POCL_LIBMVEC_OBJDUMP_OUTPUT}")
+      if(POCL_LIBMVEC_SONAME_MATCH)
+        set(HOST_CPU_LIBMVEC_LIBRARY "${CMAKE_MATCH_1}")
+        set(HOST_CPU_LIBMVEC_LIBRARY_FALLBACK "${LIBMVEC}")
+      endif()
+    endif()
+  endif()
+endif()
+
+# Record the paths to the SVML static libraries for the JIT to link against.
+set(HOST_CPU_SVML_LIBRARY "")
+set(HOST_CPU_IRC_LIBRARY "")
+if(ENABLE_HOST_CPU_VECTORIZE_SVML AND LIBSVML AND LIBIRC)
+  set(HOST_CPU_SVML_LIBRARY "${LIBSVML}")
+  set(HOST_CPU_IRC_LIBRARY "${LIBIRC}")
+endif()
+
 ######################################################################################
 ######################################################################################
 
@@ -1162,13 +1272,20 @@ if(UNIX)
   else()
     set(DEFAULT_HOST_LD_FLAGS "-shared -nostartfiles")
     if(ENABLE_HOST_CPU_VECTORIZE_LIBMVEC)
-      set(DEFAULT_HOST_LD_FLAGS "${DEFAULT_HOST_LD_FLAGS} -lmvec")
+      # Reference libmvec by its resolved absolute path, like SLEEF/SVML below.
+      # The in-process lld link (CPU_USE_LLD_LINK) carries over only absolute-path
+      # link inputs, not bare -l flags (it has no library search paths); a dropped
+      # -lmvec leaves the kernel's vectorized math calls unresolved.
+      set(DEFAULT_HOST_LD_FLAGS "${DEFAULT_HOST_LD_FLAGS} ${LIBMVEC}")
     endif()
     if(ENABLE_HOST_CPU_VECTORIZE_SLEEF)
       set(DEFAULT_HOST_LD_FLAGS "${DEFAULT_HOST_LD_FLAGS} ${LIBSLEEF}")
     endif()
     if(ENABLE_HOST_CPU_VECTORIZE_SVML)
       set(DEFAULT_HOST_LD_FLAGS "${DEFAULT_HOST_LD_FLAGS} ${LIBSVML} ${LIBIRC}")
+    endif()
+    if(CLANG_NEEDS_RTLIB AND CLANG_RTLIB_LOCATION)
+      set(DEFAULT_HOST_LD_FLAGS "${DEFAULT_HOST_LD_FLAGS} ${CLANG_RTLIB_LOCATION}")
     endif()
   endif()
   set(LIBMATH "-lm")
@@ -1180,10 +1297,6 @@ elseif(WIN32)
     add_compile_options("/wd4624" "/EHsc")
   endif()
   set(LIBMATH)
-endif()
-
-if(CLANG_NEEDS_RTLIB)
-  set(DEFAULT_HOST_LD_FLAGS "${DEFAULT_HOST_LD_FLAGS} --rtlib=compiler-rt")
 endif()
 
 ######################################################################################
@@ -1208,9 +1321,14 @@ else()
 endif()
 
 if(ENABLE_SPIRV)
-  # required for the wrapper generator
-  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  # use find_program instead of find_package, to ensure this finds Host python3
+  # needed for SPIRV wrapper generator
+  find_program(HOST_PYTHON3 NAMES python3 REQUIRED)
+else()
+  find_program(HOST_PYTHON3 NAMES python3)
 endif()
+# optional, may find Python on Target (not Host), used by several testsuites in examples/
+find_package(Python3 3.8 COMPONENTS Interpreter)
 
 # Determine whether we can use SPIRV on the host CPU device
 # - we don't have a useful SPIRV wrapper for 32bit SPIRV
@@ -1220,6 +1338,35 @@ endif()
 set(HOST_CPU_ENABLE_SPIRV OFF)
 if(ENABLE_HOST_CPU_DEVICES AND ENABLE_SPIRV AND (NOT MSVC) AND (HOST_DEVICE_ADDRESS_BITS MATCHES "64"))
   set(HOST_CPU_ENABLE_SPIRV ON)
+endif()
+
+# The JIT for CPU devices is supported on
+#   - non-Windows platforms whose architecture has a JITLink ELF/Mach-O
+#     backend (x86(-64), AArch64, ARM32, RISC-V, PPC64, LoongArch); s390x,
+#     MIPS and SPARC have none, so they keep the Clang+dlopen path;
+#   - Windows x86_64 (MinGW) via JITLink's COFF_x86_64 backend. Windows arm64
+#     has no COFF_aarch64 backend, and MSVC keeps its existing link paths
+#     (in-process lld-link, or the Clang driver).
+set(HOST_CPU_JIT_SUPPORTED OFF)
+if(ENABLE_HOST_CPU_DEVICES AND ENABLE_LLVM)
+  if((NOT WIN32) AND (CMAKE_SYSTEM_PROCESSOR MATCHES
+     "^(x86_64|amd64|AMD64|i[3-6]86|aarch64|arm64|arm.*|riscv32|riscv64|ppc64|ppc64le|powerpc64|powerpc64le|loongarch64)$"))
+    set(HOST_CPU_JIT_SUPPORTED ON)
+  elseif(MINGW
+         AND (CMAKE_SIZEOF_VOID_P EQUAL 8)
+         AND (CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64|AMD64|amd64|x64)"))
+    # Windows x86_64 (MinGW): JITLink's COFF_x86_64 backend; no COFF_aarch64.
+    set(HOST_CPU_JIT_SUPPORTED ON)
+  endif()
+endif()
+
+option(HOST_CPU_ENABLE_JIT
+       "JIT CPU kernels via ORC/JITLink instead of Clang+dlopen."
+       ${HOST_CPU_JIT_SUPPORTED})
+if(HOST_CPU_ENABLE_JIT AND NOT HOST_CPU_JIT_SUPPORTED)
+  message(FATAL_ERROR "HOST_CPU_ENABLE_JIT was requested, but JITLink has no "
+          "backend for this platform "
+          "(${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR}).")
 endif()
 
 ######################################################################################
@@ -1491,7 +1638,12 @@ if(NOT DEFINED DEFAULT_ENABLE_ICD)
         endif()
       endif()
       if(NOT OPENCL_FOUND)
-        find_library(OPENCL_LIBRARIES OpenCL)
+        # issue 2111
+        if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.24.0)
+          find_library(OPENCL_LIBRARIES OpenCL NO_CMAKE_INSTALL_PREFIX)
+        else()
+          find_library(OPENCL_LIBRARIES OpenCL)
+        endif()
         # version check the found library
         if(OPENCL_LIBRARIES)
           set(CMAKE_REQUIRED_LIBRARIES "${OPENCL_LIBRARIES}")
@@ -1571,10 +1723,14 @@ if(NOT DEFINED INSTALL_OPENCL_HEADERS)
   option(INSTALL_OPENCL_HEADERS "Install POCL's OpenCL headers. (Ones from Khronos should be installed instead)" ${IOH})
 endif()
 
-#  force the use of PoCL's own 3.0 headers -> enables some additional tests
-message(STATUS "Using PoCL's OpenCL 3.0 headers")
-# PoCL's internal headers are OpenCL 3.0
-set(OPENCL_HEADER_VERSION 300)
+#  force the use of PoCL's own 3.1 headers -> enables some additional tests
+# PoCL's internal headers are OpenCL 3.1
+message(STATUS "Using PoCL's OpenCL 3.1 headers")
+if(ENABLE_OPENCL_3_1)
+  set(OPENCL_HEADER_VERSION 310)
+else()
+  set(OPENCL_HEADER_VERSION 300)
+endif()
 
 add_definitions(-DCL_USE_DEPRECATED_OPENCL_1_0_APIS -DCL_USE_DEPRECATED_OPENCL_1_1_APIS
                 -DCL_USE_DEPRECATED_OPENCL_1_2_APIS -DCL_USE_DEPRECATED_OPENCL_2_0_APIS
@@ -1619,52 +1775,68 @@ endif()
 # FP16 support requires _Float16 type
 # LLVM <15 doesn't support _Float16;
 # LLVM 15 crashes on some code; LLVM 16 seems to work but fails with ldexp; LLVM 18 fails with isinf
-# CONFORMANCE=ON disables FP16 b/c PoCL support is incomplete
+# The host check is on the *build* machine, not the target -- so Yggdrasil's
+# Linux cross-builds already ship working FP16 in the macOS/Windows binaries.
+# Linux and MinGW are validated; FreeBSD is kept out (native _Float16 build
+# failure, see #1776).
 if((LLVM_VERSION_MAJOR GREATER_EQUAL 19)
-   AND (NOT ENABLE_CONFORMANCE)
-   AND (NOT RISCV) AND (NOT I386)
-   AND (CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
-   AND ENABLE_HOST_CPU_VECTORIZE_BUILTINS
+   AND (X86_64 OR RISCV64 OR ARM64)
+   AND ((CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux") OR MINGW)
    AND CLANG_SUPPORTS_FLOAT16_ON_CPU
    AND HOST_COMPILER_SUPPORTS_FLOAT16)
   message(STATUS "CPU device support for cl_khr_fp16 enabled")
   set(HOST_CPU_ENABLE_CL_KHR_FP16 1)
+  set(DEFAULT_HOST_CLANG_FLAGS "${DEFAULT_HOST_CLANG_FLAGS} -D_HAS_FLOAT16_TYPE")
 else()
   message(STATUS "CPU device support for cl_khr_fp16 disabled")
   set(HOST_CPU_ENABLE_CL_KHR_FP16 0)
 endif()
 
-if(HOST_CPU_SUPPORTS_DOUBLE)
+if(HOST_CPU_SUPPORTS_DOUBLE AND NOT (RISCV AND ENABLE_CONFORMANCE))
   set(HOST_CPU_ENABLE_CL_KHR_FP64 1)
 else()
   set(HOST_CPU_ENABLE_CL_KHR_FP64 0)
 endif()
-if(HOST_CPU_ENABLE_CL_KHR_FP16)
-  set(DEFAULT_HOST_CLANG_FLAGS "${DEFAULT_HOST_CLANG_FLAGS} -D_HAS_FLOAT16_TYPE")
-endif()
 
 # set the host device OpenCL version (and OpenCL C version too)
-# LLVM 14 has sufficient OpenCL 3.0 support, so just enable it
 set(HOST_DEVICE_CL_VERSION_MAJOR 3)
-set(HOST_DEVICE_CL_VERSION_MINOR 0)
+if(ENABLE_OPENCL_3_1)
+  set(HOST_DEVICE_CL_VERSION_MINOR 1)
+else()
+  set(HOST_DEVICE_CL_VERSION_MINOR 0)
+endif()
 
 # Probe native host CPU support for cl_khr_kernel_clock
 include(CheckHostCpuKernelClock)
 
 # Host CPU device: list of extensions that are always enabled, for both OpenCL 1.2 and 3.0
+# NOTE: update README.md when changing the list
 set(HOST_DEVICE_EXTENSIONS "cl_khr_byte_addressable_store cl_khr_global_int32_base_atomics \
 cl_khr_global_int32_extended_atomics cl_khr_local_int32_base_atomics \
-cl_khr_local_int32_extended_atomics cl_khr_3d_image_writes cl_ext_float_atomics \
-cl_intel_unified_shared_memory cl_ext_buffer_device_address")
+cl_khr_local_int32_extended_atomics cl_khr_3d_image_writes \
+cl_intel_unified_shared_memory cl_ext_buffer_device_address cl_khr_device_uuid \
+cl_khr_suggested_local_work_size cl_khr_integer_dot_product cl_ext_float_atomics")
+
+# Clang 20 is required for __builtin_elementwise_bitreverse
+if(LLVM_VERSION_MAJOR GREATER_EQUAL 20)
+  set(HOST_DEVICE_EXTENSIONS "${HOST_DEVICE_EXTENSIONS} cl_khr_extended_bit_ops")
+  set(HOST_DEVICE_SPV_VERSIONS "SPIR-V_1.5 SPIR-V_1.4 SPIR-V_1.3 SPIR-V_1.2 SPIR-V_1.1 SPIR-V_1.0")
+  set(HOST_DEVICE_MAX_SPV_VERSION "1.5")
+else()
+  set(HOST_DEVICE_SPV_VERSIONS "SPIR-V_1.4 SPIR-V_1.3 SPIR-V_1.2 SPIR-V_1.1 SPIR-V_1.0")
+  set(HOST_DEVICE_MAX_SPV_VERSION "1.4")
+endif()
 
 # Host CPU device: list of OpenCL 3.0 features that are always enabled
 # TODO: __opencl_c_atomic_scope_all_devices works with CPU device but not others
 # for now it's included because CTS test 'C11 atomics' subtest 'atomic_flag' requires it
 # .... seems like a bug in CTS, but needs to be investigated.
-set(HOST_DEVICE_FEATURES_30 "__opencl_c_3d_image_writes  __opencl_c_images \
+set(HOST_DEVICE_FEATURES "__opencl_c_3d_image_writes  __opencl_c_images \
 __opencl_c_atomic_order_acq_rel __opencl_c_atomic_order_seq_cst \
 __opencl_c_atomic_scope_device __opencl_c_atomic_scope_all_devices \
-__opencl_c_generic_address_space __opencl_c_work_group_collective_functions")
+__opencl_c_generic_address_space __opencl_c_work_group_collective_functions \
+__opencl_c_integer_dot_product_input_4x8bit __opencl_c_integer_dot_product_input_4x8bit_packed \
+__opencl_c_program_scope_global_variables")
 
 # enabled by default
 # when disabled, depending on setting of ENABLE_CONFORMANCE, denorms are disabled
@@ -1693,10 +1865,10 @@ if(NOT ENABLE_CONFORMANCE)
   set(HOST_DEVICE_EXTENSIONS "${HOST_DEVICE_EXTENSIONS} \
 cl_khr_subgroups cl_khr_subgroup_ballot cl_khr_subgroup_shuffle \
 cl_intel_subgroups cl_intel_subgroups_short cl_intel_subgroups_char cl_intel_required_subgroup_size cl_exp_tensor")
-  # read-write images are still partially broken
   # program-scope variables work on OpenCL C input, but breaks with SPIR-V input (llvm-spirv bugs)
-  set(HOST_DEVICE_FEATURES_30  "${HOST_DEVICE_FEATURES_30} __opencl_c_subgroups __opencl_c_read_write_images __opencl_c_program_scope_global_variables")
+  set(HOST_DEVICE_FEATURES  "${HOST_DEVICE_FEATURES} __opencl_c_subgroups")
 endif()
+set(HOST_DEVICE_FEATURES  "${HOST_DEVICE_FEATURES} __opencl_c_read_write_images")
 
 # Extensions that are considered feature-complete (preferably CTS-tested).
 #
@@ -1715,7 +1887,10 @@ endif()
 # * cl_khr_subgroup_ballot: sub_group_ballot() works for uniform calls, the rest
 #   are unimplemented.
 #
-# * cl_intel_subgroups: The block reads/writes are unimplemented.
+# * cl_intel_subgroups: The image block reads/writes are unimplemented. The
+#   shuffles are implemented with work-group barriers, so unlike what the spec
+#   requires, they only work in control flow that is uniform across the
+#   work-group.
 #
 # * cl_intel_required_subgroup_size: CL_​KERNEL_​SPILL_​MEM_​SIZE_​INTEL and
 #   CL_​KERNEL_​COMPILE_​SUB_​GROUP_​SIZE_​INTEL are yet to implement.
@@ -1729,21 +1904,21 @@ endif()
 #   is required for PoCL CPU device pass the official upstream OpenCL-CTS.
 
 if(HOST_DEVICE_EXTENSIONS MATCHES "cl_khr_subgroup")
-  set(HOST_DEVICE_FEATURES_30 "${HOST_DEVICE_FEATURES_30} __opencl_c_subgroups")
+  set(HOST_DEVICE_FEATURES "${HOST_DEVICE_FEATURES} __opencl_c_subgroups")
 endif()
 
 if(HOST_CPU_ENABLE_SPIRV)
-  set(HOST_DEVICE_EXTENSIONS "${HOST_DEVICE_EXTENSIONS} cl_khr_il_program cl_khr_spirv_queries")
+  set(HOST_DEVICE_EXTENSIONS "${HOST_DEVICE_EXTENSIONS} cl_khr_il_program cl_khr_spirv_queries cl_khr_spirv_linkonce_odr cl_khr_spirv_no_integer_wrap_decoration")
 endif()
 
 if(HOST_CPU_ENABLE_CL_KHR_FP16)
   set(HOST_DEVICE_EXTENSIONS "${HOST_DEVICE_EXTENSIONS} cl_khr_fp16")
-  set(HOST_DEVICE_FEATURES_30 "${HOST_DEVICE_FEATURES_30} __opencl_c_fp16")
+  set(HOST_DEVICE_FEATURES "${HOST_DEVICE_FEATURES} __opencl_c_fp16")
 endif()
 
 if(HOST_CPU_ENABLE_CL_KHR_FP64)
   set(HOST_DEVICE_EXTENSIONS "${HOST_DEVICE_EXTENSIONS} cl_khr_fp64")
-  set(HOST_DEVICE_FEATURES_30 "${HOST_DEVICE_FEATURES_30} __opencl_c_fp64")
+  set(HOST_DEVICE_FEATURES "${HOST_DEVICE_FEATURES} __opencl_c_fp64")
 endif()
 
 if(HOST_CPU_ENABLE_CL_KHR_KERNEL_CLOCK)
@@ -1758,12 +1933,29 @@ if(HOST_DEVICE_EXTENSIONS MATCHES "cl_khr_kernel_clock")
   )
 endif()
 
+set(HOST_DEVICE_SPV_EXTENSIONS "+SPV_KHR_no_integer_wrap_decoration,+SPV_KHR_linkonce_odr,+SPV_KHR_expect_assume,+SPV_INTEL_fp_fast_math_mode,+SPV_INTEL_unstructured_loop_controls,+SPV_INTEL_arbitrary_precision_integers,+SPV_INTEL_memory_access_aliasing,+SPV_INTEL_inline_assembly,+SPV_KHR_integer_dot_product")
 if(HOST_DEVICE_EXTENSIONS MATCHES "cl_ext_float_atomics")
-  set(HOST_DEVICE_FEATURES_30 "${HOST_DEVICE_FEATURES_30} __opencl_c_ext_fp32_global_atomic_add __opencl_c_ext_fp32_local_atomic_add __opencl_c_ext_fp32_global_atomic_min_max __opencl_c_ext_fp32_local_atomic_min_max")
+  set(HOST_DEVICE_FEATURES "${HOST_DEVICE_FEATURES} __opencl_c_ext_fp32_global_atomic_add __opencl_c_ext_fp32_local_atomic_add __opencl_c_ext_fp32_global_atomic_min_max __opencl_c_ext_fp32_local_atomic_min_max")
+  set(HOST_DEVICE_SPV_EXTENSIONS "${HOST_DEVICE_SPV_EXTENSIONS},+SPV_EXT_shader_atomic_float_add,+SPV_EXT_shader_atomic_float_min_max")
   if(HOST_CPU_ENABLE_CL_KHR_FP64)
-    set(HOST_DEVICE_FEATURES_30 "${HOST_DEVICE_FEATURES_30} __opencl_c_ext_fp64_global_atomic_add __opencl_c_ext_fp64_local_atomic_add __opencl_c_ext_fp64_global_atomic_min_max __opencl_c_ext_fp64_local_atomic_min_max")
+    set(HOST_DEVICE_FEATURES "${HOST_DEVICE_FEATURES} __opencl_c_ext_fp64_global_atomic_add __opencl_c_ext_fp64_local_atomic_add __opencl_c_ext_fp64_global_atomic_min_max __opencl_c_ext_fp64_local_atomic_min_max")
   endif()
   # __opencl_c_ext_fp16_global_atomic_add __opencl_c_ext_fp16_local_atomic_add __opencl_c_ext_fp16_global_atomic_min_max __opencl_c_ext_fp16_local_atomic_min_max
+endif()
+if(HOST_DEVICE_EXTENSIONS MATCHES "cl_khr_extended_bit_ops")
+  set(HOST_DEVICE_SPV_EXTENSIONS "${HOST_DEVICE_SPV_EXTENSIONS},+SPV_KHR_bit_instructions")
+endif()
+# SPV_KHR_float_controls2 carries per-instruction fast-math flags, such as
+# AllowContract, that the base FPFastMathMode cannot express. The translator
+# reads it since version 23.
+if(LLVM_VERSION_MAJOR GREATER_EQUAL 23)
+  set(HOST_DEVICE_SPV_EXTENSIONS "${HOST_DEVICE_SPV_EXTENSIONS},+SPV_KHR_float_controls2")
+endif()
+# The SPIR-V side of cl_intel_subgroups: shuffles (also of vectors) and buffer block
+# reads/writes. cl_intel_spirv_subgroups is not advertised, as it also requires the
+# image block reads/writes.
+if(HOST_DEVICE_EXTENSIONS MATCHES "cl_intel_subgroups")
+  set(HOST_DEVICE_SPV_EXTENSIONS "${HOST_DEVICE_SPV_EXTENSIONS},+SPV_INTEL_subgroups")
 endif()
 
 # don't include cl_khr_int64 in HOST_DEVICE_EXTENSIONS list, because
@@ -1771,7 +1963,7 @@ endif()
 # for FULL profile, int64 is always enabled;
 # for embedded profiles, it's optional
 set(HOST_DEVICE_EXTENSION_DEFINES "${HOST_DEVICE_EXTENSION_DEFINES} -Dcl_khr_int64=1")
-set(HOST_DEVICE_FEATURES_30 "${HOST_DEVICE_FEATURES_30} __opencl_c_int64")
+set(HOST_DEVICE_FEATURES "${HOST_DEVICE_FEATURES} __opencl_c_int64")
 set(HOST_DEVICE_EXTENSIONS "${HOST_DEVICE_EXTENSIONS} cl_khr_int64_base_atomics cl_khr_int64_extended_atomics")
 
 
@@ -1784,7 +1976,7 @@ foreach(EXT ${TEMP_EXT})
 endforeach()
 
 if(HOST_DEVICE_CL_VERSION_MAJOR GREATER_EQUAL 3)
-  set(TEMP_EXT "${HOST_DEVICE_FEATURES_30}")
+  set(TEMP_EXT "${HOST_DEVICE_FEATURES}")
   separate_arguments(TEMP_EXT)
   foreach(EXT ${TEMP_EXT})
     set(HOST_DEVICE_EXTENSION_DEFINES "${HOST_DEVICE_EXTENSION_DEFINES} -D${EXT}=1")
@@ -2043,9 +2235,9 @@ if(ENABLE_TCE)
     set(OCL_DRIVERS "${OCL_DRIVERS} tcemc") # TCEMC is a "superset" of TCE (lp:tce) features.
   endif()
 
-  if(TCE_LLVM_CONFIG AND LLVM_CONFIG)
-    if(NOT (LLVM_CONFIG STREQUAL TCE_LLVM_CONFIG))
-      message(FATAL_ERROR "openasip-config returned llvm-config is ${TCE_LLVM_CONFIG} but LLVM_CONFIG used by PoCL is ${LLVM_CONFIG}")
+  if(TCE_LLVM_CONFIG AND LLVM_CONFIG_BIN)
+    if(NOT (LLVM_CONFIG_BIN STREQUAL TCE_LLVM_CONFIG))
+      message(FATAL_ERROR "openasip-config returned llvm-config is ${TCE_LLVM_CONFIG} but LLVM_CONFIG used by PoCL is ${LLVM_CONFIG_BIN}")
     endif()
   endif()
 
@@ -2060,8 +2252,8 @@ if(ENABLE_TCE)
   set(TCE_DEVICE_CL_VERSION "120")
   set(TCE_DEVICE_CL_STD "1.2")
 
-  if(LLVM_VERSION VERSION_GREATER_EQUAL 18.0)
-    message(FATAL_ERROR "OpenASIP requires LLVM/Clang <= 17")
+  if(NOT LLVM_VERSION_MAJOR EQUAL 21)
+    message(FATAL_ERROR "OpenASIP target requires LLVM/Clang 21 supported by OpenASIP v2.2")
   endif()
 
   if("${LLVM_CXXFLAGS}" MATCHES "-fno-rtti")
@@ -2199,6 +2391,7 @@ if (ENABLE_LEVEL0)
     message(STATUS "Level Zero: using LLVM SPIRV backend")
     set(HAVE_LLVM_SPIRV 0)
     set(HAVE_LLVM_SPIRV_LIB 0)
+    set(HAVE_LLVM_SPIRV_LIB_ERROR_HANDLING 0)
   endif()
 
 endif()
@@ -2238,7 +2431,7 @@ if(ENABLE_SIMTSIM)
     list(APPEND CMAKE_PREFIX_PATH "${SIMTSIM_ROOT}")
   endif()
   find_package(Simtsim REQUIRED)
-  
+
   set(OCL_DRIVERS "${OCL_DRIVERS} simtsim")
   set(OCL_TARGETS "${OCL_TARGETS} simtsim")
   set(BUILD_SIMTSIM 1)
@@ -2265,7 +2458,7 @@ if(ENABLE_CUDA)
   endif()
 
   if(LLVM_VERSION_MAJOR EQUAL 21)
-    message(FATAL_ERROR "CUDA driver does not work with LLVM/Clang 21")
+    message(FATAL_ERROR "CUDA driver does not work with LLVM/Clang 21: https://github.com/llvm/llvm-project/issues/154772")
   endif()
 
   set(OCL_DRIVERS "${OCL_DRIVERS} cuda")
@@ -2280,6 +2473,7 @@ if(ENABLE_CUDA)
   set(CUDA_DEVICE_CL_STD "3.0")
 
   # CUDA device: list of extensions that are always enabled, for both OpenCL 1.2 and 3.0
+  # NOTE: update README.md when changing the list
   set(CUDA_DEVICE_EXTENSIONS "cl_khr_byte_addressable_store cl_khr_global_int32_base_atomics \
     cl_khr_global_int32_extended_atomics cl_khr_local_int32_base_atomics \
     cl_khr_local_int32_extended_atomics cl_khr_int64_base_atomics \
@@ -2307,6 +2501,11 @@ if(ENABLE_CUDA)
     set(CUDA_DEVICE_EXTENSIONS "${CUDA_DEVICE_EXTENSIONS} cl_khr_subgroups")
     #set(CUDA_DEVICE_EXTENSIONS "${CUDA_DEVICE_EXTENSIONS} cl_khr_subgroup_ballot \
     #  cl_khr_subgroup_shuffle cl_intel_subgroups cl_intel_required_subgroup_size")
+  endif()
+
+  option(ENABLE_CUDA_IMAGES "experimental (and unfinished) image support" OFF)
+  if(ENABLE_CUDA_IMAGES)
+    set(CUDA_DEVICE_FEATURES_30 "${CUDA_DEVICE_FEATURES_30} __opencl_c_images")
   endif()
 
   if(CUDA_DEVICE_EXTENSIONS MATCHES "cl_khr_subgroup")
@@ -2355,7 +2554,6 @@ else()
 endif()
 
 ##########################################################
-
 
 string(TOUPPER "${CMAKE_BUILD_TYPE}" BTYPE)
 if("${CMAKE_C_FLAGS_${BTYPE}}" MATCHES "DNDEBUG")
@@ -2423,10 +2621,12 @@ endif()
 # 15:0:13 == 6.0 (the libpocl.so will be named libpocl.so.2.13.X )
 # 16:0:14 == 7.0 (the libpocl.so will be named libpocl.so.2.14.X )
 # 17:0:15 == 7.1 (the libpocl.so will be named libpocl.so.2.15.X )
+# 18:0:16 == 7.2 (the libpocl.so will be named libpocl.so.2.16.X )
+# 19:0:17 == 8.0 (the libpocl.so will be named libpocl.so.2.17.X )
 
-set(LIB_CURRENT_VERSION 17)
+set(LIB_CURRENT_VERSION 19)
 set(LIB_REVISION_VERSION 0)
-set(LIB_AGE_VERSION 15)
+set(LIB_AGE_VERSION 17)
 
 math(EXPR LIB_FIRST_VERSION "${LIB_CURRENT_VERSION} - ${LIB_AGE_VERSION}")
 
@@ -2765,18 +2965,29 @@ MESSAGE(STATUS "POCL_INSTALL_PUBLIC_LIBDIR: ${POCL_INSTALL_PUBLIC_LIBDIR}")
 
 MESSAGE(STATUS " ")
 
-if (ENABLE_LLVM)
+if(ENABLE_LLVM)
+  if(CMAKE_CROSSCOMPILING)
+    MESSAGE(STATUS " ")
+    MESSAGE(STATUS "******* Target LLVM Programs: (in ${CMAKE_SYSROOT})")
+    MESSAGE(STATUS " ")
+    MESSAGE(STATUS "LLVM_OPT: ${TARGET_LLVM_OPT}")
+    MESSAGE(STATUS "LLVM_LLC: ${TARGET_LLVM_LLC}")
+    MESSAGE(STATUS "LLVM_AS: ${TARGET_LLVM_AS}")
+    MESSAGE(STATUS "LLVM_LINK: ${TARGET_LLVM_LINK}")
+    MESSAGE(STATUS "LLVM_LLI: ${TARGET_LLVM_LLI}")
+    MESSAGE(STATUS "LLVM_FILECHECK: ${TARGET_LLVM_FILECHECK}")
+    MESSAGE(STATUS "LLVM_CONFIG (CMake Package file): ${LLVM_CONFIG}")
+  endif()
   MESSAGE(STATUS " ")
-  MESSAGE(STATUS "******* LLVM Programs:")
+  MESSAGE(STATUS "******* Host LLVM Programs:")
   MESSAGE(STATUS " ")
-  MESSAGE(STATUS "LLVM_CONFIG: ${LLVM_CONFIG}")
-  MESSAGE(STATUS "LLVM_OPT: ${LLVM_OPT}")
-  MESSAGE(STATUS "LLVM_LLC: ${LLVM_LLC}")
-  MESSAGE(STATUS "LLVM_AS: ${LLVM_AS}")
-  MESSAGE(STATUS "LLVM_LINK: ${LLVM_LINK}")
-  MESSAGE(STATUS "LLVM_LLI: ${LLVM_LLI}")
-  MESSAGE(STATUS "LLVM_FILECHECK_BIN: ${LLVM_FILECHECK_BIN}")
+  MESSAGE(STATUS "LLVM_OPT: ${HOST_LLVM_OPT}")
+  MESSAGE(STATUS "LLVM_LLC: ${HOST_LLVM_LLC}")
+  MESSAGE(STATUS "LLVM_AS: ${HOST_LLVM_AS}")
+  MESSAGE(STATUS "LLVM_LINK: ${HOST_LLVM_LINK}")
+  MESSAGE(STATUS "LLVM_FILECHECK: ${HOST_LLVM_FILECHECK}")
   MESSAGE(STATUS "WITH_LLVM_CONFIG (User preferred llvm-config): ${WITH_LLVM_CONFIG}")
+  MESSAGE(STATUS "LLVM_CONFIG_BIN: ${LLVM_CONFIG_BIN}")
 endif()
 
 MESSAGE(STATUS " ")
@@ -2821,29 +3032,21 @@ MESSAGE(STATUS "final KERNEL_C_FLAGS: ${KERNEL_C_FLAGS}")
 
 if (ENABLE_LLVM)
   MESSAGE(STATUS "")
-  MESSAGE(STATUS "CLANG_HAS_64B_MATH: ${CLANG_HAS_64B_MATH}")
-  MESSAGE(STATUS "CLANG_HAS_128B_MATH: ${CLANG_HAS_128B_MATH}")
-  MESSAGE(STATUS "CLANG_NEEDS_RTLIB: ${CLANG_NEEDS_RTLIB}")
-  MESSAGE(STATUS "LLVM_VERSION: ${LLVM_VERSION}")
-  MESSAGE(STATUS "LLVM_LIB_IS_SHARED: ${LLVM_LIB_IS_SHARED}")
+  MESSAGE(STATUS "LLVM_VERSION: ${LLVM_VERSION_MAJOR}.${LLVM_VERSION_MINOR}")
   MESSAGE(STATUS "LLVM_HAS_RTTI: ${LLVM_HAS_RTTI}")
-  MESSAGE(STATUS "LLVM_LIB_MODE: ${LLVM_LIB_MODE}")
   MESSAGE(STATUS "LLVM_ASSERTS_BUILD: ${LLVM_ASSERTS_BUILD}")
   MESSAGE(STATUS "LLVM_BUILD_MODE: ${LLVM_BUILD_MODE}")
-  MESSAGE(STATUS "LLVM_CFLAGS: ${LLVM_CFLAGS}")
-  MESSAGE(STATUS "LLVM_CXXFLAGS: ${LLVM_CXXFLAGS}")
-  MESSAGE(STATUS "LLVM_CPPFLAGS: ${LLVM_CPPFLAGS}")
-  MESSAGE(STATUS "LLVM_LDFLAGS: ${LLVM_LDFLAGS}")
   MESSAGE(STATUS "LLVM_LIBDIR: ${LLVM_LIBDIR}")
   MESSAGE(STATUS "LLVM_INCLUDE_DIRS: ${LLVM_INCLUDE_DIRS}")
   MESSAGE(STATUS "LLVM_ALL_TARGETS: ${LLVM_ALL_TARGETS}")
   MESSAGE(STATUS "LLVM_HOST_TARGET: ${LLVM_HOST_TARGET}")
   MESSAGE(STATUS "HAVE_LLVM_SPIRV: ${HAVE_LLVM_SPIRV}")
   MESSAGE(STATUS "HAVE_LLVM_SPIRV_LIB: ${HAVE_LLVM_SPIRV_LIB}")
+  MESSAGE(STATUS "HAVE_LLVM_SPIRV_LIB_ERROR_HANDLING: ${HAVE_LLVM_SPIRV_LIB_ERROR_HANDLING}")
   MESSAGE(STATUS "USE_LLVM_SPIRV_TARGET: ${USE_LLVM_SPIRV_TARGET}")
   if(ENABLE_HOST_CPU_DEVICES)
   MESSAGE(STATUS "CLANG_MARCH_FLAG: ${CLANG_MARCH_FLAG}")
-  MESSAGE(STATUS "CPU_USE_LLD_LINK_WIN32: ${CPU_USE_LLD_LINK_WIN32}")
+  MESSAGE(STATUS "CPU_USE_LLD_LINK: ${CPU_USE_LLD_LINK}")
   MESSAGE(STATUS "LLC_TRIPLE: ${LLC_TRIPLE}")
   MESSAGE(STATUS "LLC_HOST_CPU_AUTO: ${LLC_HOST_CPU_AUTO}")
   MESSAGE(STATUS "LLC_HOST_CPU: ${LLC_HOST_CPU}")
@@ -2857,6 +3060,7 @@ if (ENABLE_LLVM)
   MESSAGE(STATUS "ENABLE_HOST_CPU_VECTORIZE_LIBMVEC: ${ENABLE_HOST_CPU_VECTORIZE_LIBMVEC}")
   MESSAGE(STATUS "ENABLE_HOST_CPU_VECTORIZE_SVML: ${ENABLE_HOST_CPU_VECTORIZE_SVML}")
   MESSAGE(STATUS "ENABLE_HOST_CPU_VECTORIZE_BUILTINS: ${ENABLE_HOST_CPU_VECTORIZE_BUILTINS}")
+  MESSAGE(STATUS "HOST_CPU_ENABLE_JIT: ${HOST_CPU_ENABLE_JIT}")
   endif()
 endif()
 MESSAGE(STATUS "")
@@ -2865,8 +3069,9 @@ MESSAGE(STATUS "OCL_KERNEL_TARGET: ${OCL_KERNEL_TARGET}")
 MESSAGE(STATUS "OCL_KERNEL_TARGET_CPU: ${OCL_KERNEL_TARGET_CPU}")
 MESSAGE(STATUS "HOST_DEVICE_ADDRESS_BITS: ${HOST_DEVICE_ADDRESS_BITS}")
 MESSAGE(STATUS "HOST_CPU_ENABLE_CL_KHR_FP16: ${HOST_CPU_ENABLE_CL_KHR_FP16}")
+MESSAGE(STATUS "HOST_CPU_ENABLE_CL_KHR_FP64: ${HOST_CPU_ENABLE_CL_KHR_FP64}")
 MESSAGE(STATUS "HOST_CPU_ENABLE_SPIRV: ${HOST_CPU_ENABLE_SPIRV}")
-if (ENABLE_TCE)
+if(ENABLE_TCE)
   MESSAGE(STATUS "")
   MESSAGE(STATUS "TCE_TARGET_CLANG_FLAGS: ${TCE_TARGET_CLANG_FLAGS}")
   MESSAGE(STATUS "TCE_TARGET_LLC_FLAGS: ${TCE_TARGET_LLC_FLAGS}")
@@ -2880,11 +3085,19 @@ MESSAGE(STATUS "")
 
 if (ENABLE_LLVM)
 MESSAGE(STATUS "----------- -------------------------------- --------")
-MESSAGE(STATUS "llvm libs libpocl will be linked to (LLVM_LINK_LIBRARIES):")
+MESSAGE(STATUS "libpocl will be linked to these llvm libs:")
+if(LLVM_PACKAGE_VERSION)
+MESSAGE(STATUS "${POCL_LLVM_LINK_TARGETS}")
+else()
 MESSAGE(STATUS "${LLVM_LINK_LIBRARIES}")
+endif()
 MESSAGE(STATUS "----------- -------------------------------- --------")
-MESSAGE(STATUS "clang libs libpocl will be linked to (CLANG_LINK_LIBRARIES):")
+MESSAGE(STATUS "libpocl will be linked to these clang libs:")
+if(LLVM_PACKAGE_VERSION)
+MESSAGE(STATUS "${POCL_CLANG_LINK_TARGETS}")
+else()
 MESSAGE(STATUS "${CLANG_LINK_LIBRARIES}")
+endif()
 MESSAGE(STATUS "----------- -------------------------------- --------")
 MESSAGE(STATUS "system libs libpocl will be linked to (LLVM_SYSLIBS):")
 MESSAGE(STATUS "${LLVM_SYSLIBS}")
@@ -2932,7 +3145,6 @@ MESSAGE(STATUS "ENABLE_RDMA: ${ENABLE_RDMA}")
 MESSAGE(STATUS "ENABLE_CL_GET_GL_CONTEXT: ${ENABLE_CL_GET_GL_CONTEXT}")
 MESSAGE(STATUS "ENABLE_OPENGL_INTEROP: ${ENABLE_OPENGL_INTEROP}")
 MESSAGE(STATUS "ENABLE_EGL_INTEROP: ${ENABLE_EGL_INTEROP}")
-MESSAGE(STATUS "ENABLE_SIGFPE_HANDLER: ${ENABLE_SIGFPE_HANDLER}")
 MESSAGE(STATUS "ENABLE_SIGUSR2_HANDLER: ${ENABLE_SIGUSR2_HANDLER}")
 MESSAGE(STATUS "ENABLE_SLEEF: ${ENABLE_SLEEF}")
 MESSAGE(STATUS "ENABLE_SPIRV: ${ENABLE_SPIRV}")
@@ -2941,6 +3153,7 @@ MESSAGE(STATUS "INSTALL_OPENCL_HEADERS (Install our headers): ${INSTALL_OPENCL_H
 MESSAGE(STATUS "OCL_DRIVERS (Drivers built): ${OCL_DRIVERS}")
 MESSAGE(STATUS "OCL_TARGETS (Targets built): ${OCL_TARGETS}")
 MESSAGE(STATUS "ENABLE_LLVM: ${ENABLE_LLVM}")
+MESSAGE(STATUS "ENABLE_CLANGIR: ${ENABLE_CLANGIR}")
 if(PARALLEL_COMPILE_JOBS AND CMAKE_GENERATOR STREQUAL "Ninja")
   MESSAGE(STATUS "PARALLEL_COMPILE_JOBS: ${PARALLEL_COMPILE_JOBS}")
 endif()

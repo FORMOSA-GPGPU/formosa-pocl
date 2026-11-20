@@ -45,26 +45,16 @@ if(NOT EXISTS "${AMD_APP_SDK_TGZ}")
   return()
 endif()
 
-find_package(Python3 3.8 COMPONENTS Interpreter)
-if(NOT Python3_FOUND)
+if(NOT Python3_EXECUTABLE)
   message(STATUS "Disabling testsuite ${TS_NAME}, can't find suitable python3")
   return()
 else()
-  message(STATUS "Using Python3: ${Python3_EXECUTABLE}")
   set(PYTHON_INTERP "${Python3_EXECUTABLE}")
 endif()
 
 message(STATUS "Enabling testsuite ${TS_NAME}")
 list(APPEND ACTUALLY_ENABLED_TESTSUITES "${TS_NAME}")
 set(ACTUALLY_ENABLED_TESTSUITES ${ACTUALLY_ENABLED_TESTSUITES} PARENT_SCOPE)
-
-set(UPSTREAM_CMAKE_ARGS "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}")
-if(CMAKE_C_COMPILER_LAUNCHER)
-  list(APPEND UPSTREAM_CMAKE_ARGS "-DCMAKE_C_COMPILER_LAUNCHER=${CMAKE_C_COMPILER_LAUNCHER}")
-endif()
-if(CMAKE_CXX_COMPILER_LAUNCHER)
-  list(APPEND UPSTREAM_CMAKE_ARGS "-DCMAKE_CXX_COMPILER_LAUNCHER=${CMAKE_CXX_COMPILER_LAUNCHER}")
-endif()
 
 ExternalProject_Add(
   ${TS_NAME}
@@ -76,7 +66,7 @@ ExternalProject_Add(
   DOWNLOAD_COMMAND ""
 
   PATCH_COMMAND  ${BASH} -c "if [ ! -e ${TS_ROOT}/AMD-APP-SDK-3.0/install.sh ] $<SEMICOLON> then \
-         ${AMD_APP_SDK_TGZ} --noexec --keep --target AMD-APP-SDK-3.0 && \
+         ${AMD_APP_SDK_TGZ} --nox11 --noexec --keep --target AMD-APP-SDK-3.0 && \
          patch -p1 -i ${CMAKE_CURRENT_SOURCE_DIR}/amdsdk3_0.patch && \
          rm ${TS_ROOT}/AMD-APP-SDK-3.0/lib/x86_64/libOpenCL* \
          $<SEMICOLON> fi"

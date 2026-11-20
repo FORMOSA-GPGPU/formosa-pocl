@@ -247,11 +247,21 @@ _CL_OVERLOADABLE itype __pocl_argReductionLargeS(vtype *r, vtype *rr, vtype x)
 
 _CL_OVERLOADABLE itype __pocl_argReductionS(vtype *r, vtype *rr, vtype x)
 {
-    itype retval = __pocl_argReductionSmallS(r, rr, x);
+    vtype rs, rrs;
+    itype retval = __pocl_argReductionSmallS(&rs, &rrs, x);
     itype cond = (x >= (vtype)0x1.0p+23f);
     if (SV_ANY(cond)) {
-        retval = __pocl_argReductionLargeS(r, rr, x);
+        /* The large-argument reduction is only valid for the lanes that
+         * need it. Select per lane instead of overwriting every lane;
+         * the large path returns garbage for tiny inputs. */
+        vtype rl, rrl;
+        itype retl = __pocl_argReductionLargeS(&rl, &rrl, x);
+        retval = cond ? retl : retval;
+        rs = cond ? rl : rs;
+        rrs = cond ? rrl : rrs;
     }
+    *r = rs;
+    *rr = rrs;
     return retval;
 }
 
@@ -377,4 +387,24 @@ _CL_OVERLOADABLE vtype __pocl_sinf_piby4(vtype x, vtype y) {
                         pocl_fma(y, (vtype)0.5f, -v*r), -y));
 
     return ret;
+}
+
+_CL_OVERLOADABLE vtype
+__pocl_tanf_piby4 (vtype x, vtype regn)
+{
+  // Core Remez [1,2] approximation to tan(x) on the interval [0,pi/4].
+  vtype r = x * x;
+
+  vtype a
+    = pocl_fma (r, -0.0172032480471481694693109f, 0.385296071263995406715129f);
+
+  vtype b = pocl_fma (
+    r,
+    pocl_fma (r, 0.01844239256901656082986661f, -0.51396505478854532132342f),
+    1.15588821434688393452299f);
+
+  vtype t = pocl_fma (x * r, MATH_DIVIDE (a, b), x);
+  vtype tr = -MATH_RECIP (t);
+
+  return ((as_itype (regn) & (itype)1) != (itype)0) ? tr : t;
 }

@@ -113,14 +113,7 @@ void pocl_cuda_svm_copy_async (CUstream, void *restrict, const void *restrict,
 typedef struct pocl_cuda_queue_data_s
 {
   CUstream stream;
-  int use_threads;
-  pthread_t submit_thread;
-  pthread_t finalize_thread;
   pthread_mutex_t lock;
-  pthread_cond_t pending_cond;
-  pthread_cond_t running_cond;
-  _cl_command_node *volatile pending_queue;
-  _cl_command_node *volatile running_queue;
   cl_command_queue queue;
 } pocl_cuda_queue_data_t;
 
@@ -150,7 +143,6 @@ typedef struct pocl_cuda_event_data_s
   CUevent end;
   volatile int events_ready;
   cl_int *ext_event_flag;
-  pthread_cond_t event_cond;
   volatile unsigned num_ext_events;
 } pocl_cuda_event_data_t;
 
@@ -178,9 +170,6 @@ typedef struct pocl_cuda_device_data_s
 } pocl_cuda_device_data_t;
 
 extern uint64_t pocl_num_devices;
-
-void *pocl_cuda_submit_thread (void *);
-void *pocl_cuda_finalize_thread (void *);
 
 static void
 pocl_cuda_abort_on_error (CUresult result, unsigned line, const char *func,
@@ -462,7 +451,7 @@ pocl_cuda_init_device_ops (struct pocl_device_ops *ops)
   ops->flush = pocl_cuda_flush;
   ops->init_build = pocl_cuda_init_build;
   // TODO
-  ops->notify_event_finished = pocl_cuda_notify_event_finished;
+  ops->notify_event_finished = NULL;
 
   ops->get_device_info_ext = pocl_cuda_get_device_info_ext;
   ops->set_kernel_exec_info_ext = pocl_cuda_set_kernel_exec_info_ext;
@@ -470,6 +459,7 @@ pocl_cuda_init_device_ops (struct pocl_device_ops *ops)
   ops->build_source = pocl_driver_build_source;
   ops->link_program = pocl_driver_link_program;
   ops->build_binary = pocl_driver_build_binary;
+  ops->count_kernels = pocl_driver_count_kernels;
   ops->setup_metadata = pocl_driver_setup_metadata;
   ops->supports_binary = pocl_driver_supports_binary;
   ops->build_poclbinary = pocl_driver_build_poclbinary;
@@ -506,6 +496,8 @@ pocl_cuda_init_device_ops (struct pocl_device_ops *ops)
   ops->svm_unmap = NULL;
   ops->svm_copy = pocl_cuda_svm_copy;
   ops->svm_fill = pocl_cuda_svm_fill;
+
+  ops->get_subgroup_info_ext = pocl_cuda_get_subgroup_info_ext;
 }
 
 cl_int
@@ -547,19 +539,21 @@ pocl_cuda_init (unsigned j, cl_device_id dev, const char *parameters)
 #if LLVM_MAJOR >= 20
   dev->supported_spir_v_versions
     = "SPIR-V_1.5 SPIR-V_1.4 SPIR-V_1.3 SPIR-V_1.2 SPIR-V_1.1 SPIR-V_1.0";
-#elif LLVM_MAJOR >= 18
+#else
   dev->supported_spir_v_versions
     = "SPIR-V_1.4 SPIR-V_1.3 SPIR-V_1.2 SPIR-V_1.1 SPIR-V_1.0";
-#else
-  dev->supported_spir_v_versions = "SPIR-V_1.2 SPIR-V_1.1 SPIR-V_1.0";
 #endif
   dev->supported_spirv_extensions = "+SPV_KHR_no_integer_wrap_decoration"
                                     ",+SPV_INTEL_fp_fast_math_mode"
                                     ",+SPV_EXT_shader_atomic_float_add";
 #endif
 
-  /* TODO: Get images working */
+  /* TODO: Implement image formats other than IMAGE1D_BUFFER */
+#ifdef ENABLE_CUDA_IMAGES
+  dev->image_support = CL_TRUE;
+#else
   dev->image_support = CL_FALSE;
+#endif
 
   dev->autolocals_to_args
       = POCL_AUTOLOCALS_TO_ARGS_ONLY_IF_DYNAMIC_LOCALS_PRESENT;
@@ -615,6 +609,7 @@ pocl_cuda_init (unsigned j, cl_device_id dev, const char *parameters)
       GET_CU_PROP (INTEGRATED, dev->host_unified_memory);
       data->supports_managed_memory = 0;
       GET_CU_PROP (MANAGED_MEMORY, data->supports_managed_memory);
+      GET_CU_PROP (WARP_SIZE, data->warp_size);
     }
   if (CUDA_CHECK_ERROR (result, "cuDeviceGetAttribute"))
     ret = CL_INVALID_DEVICE;
@@ -624,11 +619,11 @@ pocl_cuda_init (unsigned j, cl_device_id dev, const char *parameters)
     {
       result = cuDriverGetVersion(&driver_version);
       if (CUDA_CHECK_ERROR (result, "cuDriverGetVersion"))
-	{
+        {
           ret = CL_INVALID_DEVICE;
-	}
+        }
       else
-	{
+        {
 #if CUDA_VERSION >= 11010
           if (driver_version >= 11010)
             {
@@ -657,7 +652,7 @@ pocl_cuda_init (unsigned j, cl_device_id dev, const char *parameters)
   data->available = CL_TRUE;
   dev->available = &data->available;
 
-  dev->preferred_wg_size_multiple = 32;
+  dev->preferred_wg_size_multiple = data->warp_size;
   dev->preferred_vector_width_char = 1;
   dev->preferred_vector_width_short = 1;
   dev->preferred_vector_width_int = 1;
@@ -693,10 +688,6 @@ pocl_cuda_init (unsigned j, cl_device_id dev, const char *parameters)
 
 
   dev->local_mem_type = CL_LOCAL;
-
-  int warp_size = 32;
-  cuDeviceGetAttribute (&warp_size, CU_DEVICE_ATTRIBUTE_WARP_SIZE,
-                        data->device);
 
   if (ret != CL_INVALID_DEVICE)
     choose_sm_ptx_version_combo (driver_version, dev, data);
@@ -808,8 +799,7 @@ pocl_cuda_init (unsigned j, cl_device_id dev, const char *parameters)
   dev->sub_group_independent_forward_progress
       = (data->sm >= 70) ? CL_TRUE : CL_FALSE;
 
-  /* Just an arbitrary number here based on assumption of SG size 32. */
-  dev->max_num_sub_groups = dev->max_work_group_size / 32;
+  dev->max_num_sub_groups = dev->max_work_group_size / data->warp_size;
 
   // All devices starting from Compute Capability 2.0 have this limit;
   // See e.g.
@@ -824,11 +814,9 @@ pocl_cuda_init (unsigned j, cl_device_id dev, const char *parameters)
   dev->run_program_scope_variables_pass = CL_FALSE;
   dev->generic_as_support = CL_TRUE;
 
-  pocl_setup_opencl_c_with_version (dev, CL_TRUE);
-  pocl_setup_features_with_version (dev);
-#else
-  pocl_setup_opencl_c_with_version (dev, CL_FALSE);
 #endif
+  pocl_setup_opencl_c_with_version (dev);
+  pocl_setup_features_with_version (dev);
 
   pocl_setup_extensions_with_version (dev);
 
@@ -860,31 +848,7 @@ pocl_cuda_init_queue (cl_device_id device, cl_command_queue queue)
   if (CUDA_CHECK_ERROR (result, "cuStreamCreate"))
     return CL_OUT_OF_RESOURCES;
 
-  queue_data->use_threads
-      = !pocl_get_bool_option ("POCL_CUDA_DISABLE_QUEUE_THREADS", 1);
-
-  if (queue_data->use_threads)
-    {
-      PTHREAD_CHECK (pthread_mutex_init (&queue_data->lock, NULL));
-      PTHREAD_CHECK (pthread_cond_init (&queue_data->pending_cond, NULL));
-      PTHREAD_CHECK (pthread_cond_init (&queue_data->running_cond, NULL));
-      int err = pthread_create (&queue_data->submit_thread, NULL,
-                                pocl_cuda_submit_thread, queue_data);
-      if (err)
-        {
-          POCL_MSG_ERR ("[CUDA] Error creating submit thread: %d\n", err);
-          return CL_OUT_OF_RESOURCES;
-        }
-
-      err = pthread_create (&queue_data->finalize_thread, NULL,
-                            pocl_cuda_finalize_thread, queue_data);
-      if (err)
-        {
-          POCL_MSG_ERR ("[CUDA] Error creating finalize thread: %d\n", err);
-          return CL_OUT_OF_RESOURCES;
-        }
-    }
-
+  PTHREAD_CHECK (pthread_mutex_init (&queue_data->lock, NULL));
   return CL_SUCCESS;
 }
 
@@ -895,21 +859,6 @@ pocl_cuda_free_queue (cl_device_id device, cl_command_queue queue)
 
   cuCtxSetCurrent (((pocl_cuda_device_data_t *)queue->device->data)->context);
   cuStreamDestroy (queue_data->stream);
-
-  assert (queue_data->pending_queue == NULL);
-  assert (queue_data->running_queue == NULL);
-
-  /* Kill queue threads */
-  if (queue_data->use_threads)
-    {
-      PTHREAD_CHECK (pthread_mutex_lock (&queue_data->lock));
-      queue_data->queue = NULL;
-      PTHREAD_CHECK (pthread_cond_signal (&queue_data->pending_cond));
-      PTHREAD_CHECK (pthread_cond_signal (&queue_data->running_cond));
-      PTHREAD_CHECK (pthread_mutex_unlock (&queue_data->lock));
-      PTHREAD_CHECK (pthread_join (queue_data->submit_thread, NULL));
-      PTHREAD_CHECK (pthread_join (queue_data->finalize_thread, NULL));
-    }
 
   POCL_MEM_FREE(queue->data);
 
@@ -958,7 +907,7 @@ pocl_cuda_uninit (unsigned j, cl_device_id device)
 {
   pocl_cuda_device_data_t *data = device->data;
 
-  if (*(device->available) == CL_TRUE)
+  if (POCL_ATOMIC_LOAD_PTR (device->available) == CL_TRUE)
     {
       cuEventDestroy (data->epoch_event);
       cuCtxDestroy (data->context);
@@ -1084,6 +1033,12 @@ pocl_cuda_alloc_mem_obj (cl_device_id device, cl_mem mem, void *host_ptr)
           mem->latest_version = 1;
           p->version = 1;
         }
+    }
+  else if (mem->is_image && mem->type != CL_MEM_OBJECT_IMAGE1D_BUFFER)
+    {
+      POCL_MSG_ERR ("This PoCL-CUDA only supports images of type "
+                    "CL_MEM_OBJECT_IMAGE1D_BUFFER!\n");
+      return CL_OUT_OF_RESOURCES;
     }
   else
     {
@@ -1656,6 +1611,9 @@ pocl_cuda_post_build_program (cl_program program, cl_uint device_i)
   CUmodule ofs_module;
 
   assert (program->llvm_irs[device_i]);
+  result = pocl_cuda_define_sub_group_size (program->llvm_irs[device_i],
+                                            ddata->warp_size);
+  assert (result == CL_SUCCESS);
   result = pocl_llvm_run_passes_on_program (program, device_i);
   assert (result == CL_SUCCESS);
 
@@ -1743,15 +1701,15 @@ pocl_cuda_create_kernel (cl_device_id device, cl_program program,
       = (pocl_cuda_program_data_t *)program->data[device_i];
   assert (pdata != NULL);
   pocl_cuda_kernel_data_t *kdata
-      = (pocl_cuda_kernel_data_t *)meta->data[device_i];
+    = (pocl_cuda_kernel_data_t *)meta->devices[device_i].driver_data;
   if (kdata != NULL)
     {
       ++kdata->refcount;
       return CL_SUCCESS;
     }
 
-  kdata = meta->data[device_i]
-      = (void *)calloc (1, sizeof (pocl_cuda_kernel_data_t));
+  kdata = meta->devices[device_i].driver_data
+    = (void *)calloc (1, sizeof (pocl_cuda_kernel_data_t));
 
   /* Get kernel function */
   CUfunction function = NULL;
@@ -1766,7 +1724,7 @@ pocl_cuda_create_kernel (cl_device_id device, cl_program program,
   if (result != CUDA_SUCCESS)
     {
       POCL_MSG_ERR ("pocl_cuda_create_kernel: cuModuleGetFunction() failed\n");
-      POCL_MEM_FREE (meta->data[device_i]);
+      POCL_MEM_FREE (meta->devices[device_i].driver_data);
       return CL_OUT_OF_RESOURCES;
     }
 
@@ -1788,14 +1746,14 @@ pocl_cuda_free_kernel (cl_device_id device, cl_program program,
 {
   pocl_kernel_metadata_t *meta = kernel->meta;
   pocl_cuda_kernel_data_t *kdata
-      = (pocl_cuda_kernel_data_t *)meta->data[device_i];
+    = (pocl_cuda_kernel_data_t *)meta->devices[device_i].driver_data;
   if (kdata != NULL)
     {
       --kdata->refcount;
       if (kdata->refcount == 0)
         {
-          POCL_MEM_FREE (kdata);
-          meta->data[device_i] = NULL;
+          kdata = NULL;
+          POCL_MEM_FREE (meta->devices[device_i].driver_data);
         }
     }
   return CL_SUCCESS;
@@ -1806,7 +1764,7 @@ void
 submit_cudnn_kernel(CUstream stream, _cl_command_node *cmd,
                     cl_device_id device, cl_event event)
 {
-  
+
   _cl_command_run run = cmd->command.run;
   cl_kernel kernel = run.kernel;
   cl_program prog = kernel->program;
@@ -1837,14 +1795,14 @@ submit_cudnn_kernel(CUstream stream, _cl_command_node *cmd,
   int filt_c = *(int*)(arguments[8].value);
   int filt_h = *(int*)(arguments[9].value);
   int filt_w = *(int*)(arguments[10].value);
-  
+
   int str_h = *(int*)(arguments[11].value);
   int str_w = *(int*)(arguments[12].value);
   int dil_h = *(int*)(arguments[13].value);
   int dil_w = *(int*)(arguments[14].value);
   int pad_h = *(int*)(arguments[15].value);
   int pad_w = *(int*)(arguments[16].value);
-  
+
   int groups = *(int*)(arguments[17].value);
 
   float alpha = *(float*)(arguments[18].value);
@@ -1903,7 +1861,7 @@ submit_cudnn_kernel(CUstream stream, _cl_command_node *cmd,
   // CUDNN_CALL(cudnnSetConvolutionMathType(conv_desc, CUDNN_TENSOR_OP_MATH)); // this may not be necessary
 
   // workspace
-  size_t ws_size; 
+  size_t ws_size;
   CUDNN_CALL(cudnnGetConvolutionForwardWorkspaceSize(
         cudnn, in_desc, filt_desc, conv_desc, out_desc, algo, &ws_size));
   float *ws_data;
@@ -1994,7 +1952,8 @@ pocl_cuda_submit_kernel (CUstream stream, _cl_command_node *cmd,
             }
         }
       int has_offsets1 = 1;
-      kdata = (pocl_cuda_kernel_data_t *)meta->data[cmd->program_device_i];
+      kdata = (pocl_cuda_kernel_data_t *)meta->devices[cmd->program_device_i]
+                .driver_data;
       pocl_cuda_program_data_t *pdata
           = (pocl_cuda_program_data_t *)prog->data[cmd->program_device_i];
       module = has_offsets1 ? pdata->module_offsets : pdata->module;
@@ -2038,15 +1997,18 @@ pocl_cuda_submit_kernel (CUstream stream, _cl_command_node *cmd,
                 size_t align = kdata->alignments[i];
                 if (align < 1)
                   align = 1;
+                if (size == 0)
+                  params[i] = NULL;
+                else {
+                  /* Pad offset to align memory */
+                  if (sharedMemBytes % align)
+                    sharedMemBytes += align - (sharedMemBytes % align);
 
-                /* Pad offset to align memory */
-                if (sharedMemBytes % align)
-                  sharedMemBytes += align - (sharedMemBytes % align);
+                  sharedMemOffsets[i] = sharedMemBytes;
+                  params[i] = sharedMemOffsets + i;
 
-                sharedMemOffsets[i] = sharedMemBytes;
-                params[i] = sharedMemOffsets + i;
-
-                sharedMemBytes += size;
+                  sharedMemBytes += size;
+                }
               }
             else if (arguments[i].is_raw_ptr == 1)
               {
@@ -2109,6 +2071,49 @@ pocl_cuda_submit_kernel (CUstream stream, _cl_command_node *cmd,
             break;
           }
         case POCL_ARG_TYPE_IMAGE:
+          {
+            if (arguments[i].value)
+              {
+                cl_mem mem = *(void **)arguments[i].value;
+                dev_image_t tmp = {
+                  mem->device_ptrs[device->global_mem_id].mem_ptr,
+                  mem->image_width,
+                  mem->image_height,
+                  mem->image_depth,
+                  mem->image_array_size,
+                  mem->image_row_pitch,
+                  mem->image_slice_pitch,
+                  mem->num_mip_levels,
+                  mem->num_samples,
+                  mem->image_channel_order,
+                  mem->image_channel_data_type,
+                  mem->image_channels,
+                  mem->image_elem_size,
+                };
+
+                if (mem->type == CL_MEM_OBJECT_IMAGE1D_BUFFER)
+                  {
+                    /* On ARM with USE_HOST_PTR, perform explicit copy to
+                     * device */
+                    if ((mem->flags & CL_MEM_USE_HOST_PTR)
+                        && !((pocl_cuda_device_data_t *)device->data)
+                              ->supports_cu_mem_host_register)
+                      {
+                        cuMemcpyHtoD (*(CUdeviceptr *)(params[i]),
+                                      mem->mem_host_ptr, mem->size);
+                        cuStreamSynchronize (0);
+                      }
+                  }
+                else
+                  {
+                    POCL_ABORT ("Unsupported image type for CUDA\n");
+                  }
+
+                dev_image_t *arg_img = malloc (sizeof (dev_image_t));
+                memcpy (arg_img, &tmp, sizeof (dev_image_t));
+                params[i] = arg_img;
+              }
+          }
         case POCL_ARG_TYPE_SAMPLER:
         case POCL_ARG_TYPE_PIPE:
           POCL_ABORT ("Unhandled argument type for CUDA\n");
@@ -2163,6 +2168,18 @@ pocl_cuda_submit_kernel (CUstream stream, _cl_command_node *cmd,
                            pc.num_groups[2], pc.local_size[0],
                            pc.local_size[1], pc.local_size[2], sharedMemBytes,
                            stream, params, NULL);
+
+  for (i = 0; i < meta->num_args; i++)
+    {
+      pocl_argument_type type = meta->arg_info[i].type;
+      if (type == POCL_ARG_TYPE_IMAGE)
+        {
+          if (arguments[i].value)
+            {
+              POCL_MEM_FREE (params[i]);
+            }
+        }
+    }
   CUDA_CHECK_ABORT (result, "cuLaunchKernel");
 }
 
@@ -2197,7 +2214,7 @@ pocl_cuda_submit_node (_cl_command_node *node, cl_command_queue cq, int locked)
                 = (pocl_cuda_event_data_t *)dep->event->data;
 
             /* Wait until dependency has finished being submitted */
-            while (!dep_data->events_ready)
+            while (!POCL_ATOMIC_LOAD (dep_data->events_ready))
               ;
 
             result = cuStreamWaitEvent (stream, dep_data->end, 0);
@@ -2205,13 +2222,7 @@ pocl_cuda_submit_node (_cl_command_node *node, cl_command_queue cq, int locked)
           }
       }
     else
-      {
-        if (!((pocl_cuda_queue_data_t *)cq->data)->use_threads)
-          POCL_ABORT (
-              "Can't handle non-CUDA dependencies without queue threads\n");
-
-        event_data->num_ext_events++;
-      }
+      event_data->num_ext_events++;
     }
 
   /* Wait on flag for external events */
@@ -2249,6 +2260,15 @@ pocl_cuda_submit_node (_cl_command_node *node, cl_command_queue cq, int locked)
   cl_device_id dev = node->device;
   _cl_command_t *cmd = &node->command;
 
+  /* If a wait-list dependency has already failed, this command must not run:
+   * skip issuing any device work for it (its inputs may have been aborted), but
+   * still record the end event below so pocl_cuda_finalize_command can sync and
+   * clean up on valid CUDA handles. finalize_command honors failed_dependency
+   * and terminates the command via the error cascade. Unlike the other drivers
+   * CUDA does not call pocl_update_event_failed from submit: its finalize path
+   * already drives the failure, and bailing out here would leave the end event
+   * unrecorded (finalize would cuEventSynchronize on a garbage handle). */
+  if (!event->failed_dependency)
   switch (node->type)
     {
     case CL_COMMAND_READ_BUFFER:
@@ -2397,11 +2417,11 @@ pocl_cuda_submit_node (_cl_command_node *node, cl_command_queue cq, int locked)
         {
           for (unsigned int i = 0; i < cmd->svm_free.num_svm_pointers; i++)
             {
-	      void *ptr = cmd->svm_free.svm_pointers[i];
-	      /* This updates bookkeeping associated with the 'ptr'
-		 done by the PoCL core. */
-	      POname (clSVMFree) (event->context, ptr);
-	    }
+          void *ptr = cmd->svm_free.svm_pointers[i];
+          /* This updates bookkeeping associated with the 'ptr'
+         done by the PoCL core. */
+          POname (clSVMFree) (event->context, ptr);
+        }
         }
       break;
     case CL_COMMAND_READ_IMAGE:
@@ -2426,7 +2446,7 @@ pocl_cuda_submit_node (_cl_command_node *node, cl_command_queue cq, int locked)
   result = cuEventRecord (event_data->end, stream);
   CUDA_CHECK_ABORT (result, "cuEventRecord");
 
-  event_data->events_ready = 1;
+  POCL_ATOMIC_STORE (event_data->events_ready, 1);
 }
 
 void
@@ -2437,24 +2457,9 @@ pocl_cuda_submit (_cl_command_node *node, cl_command_queue cq)
       = (pocl_cuda_event_data_t *)calloc (1, sizeof (pocl_cuda_event_data_t));
   node->sync.event.event->data = p;
 
-  if (((pocl_cuda_queue_data_t *)cq->data)->use_threads)
-    {
-
-      PTHREAD_CHECK (pthread_cond_init (&p->event_cond, NULL));
-      /* Add command to work queue */
-      POCL_UNLOCK_OBJ (node->sync.event.event);
-      pocl_cuda_queue_data_t *queue_data = (pocl_cuda_queue_data_t *)cq->data;
-      PTHREAD_CHECK (pthread_mutex_lock (&queue_data->lock));
-      DL_APPEND (queue_data->pending_queue, node);
-      PTHREAD_CHECK (pthread_cond_signal (&queue_data->pending_cond));
-      PTHREAD_CHECK (pthread_mutex_unlock (&queue_data->lock));
-    }
-  else
-    {
-      /* Submit command in this thread */
-      cuCtxSetCurrent (((pocl_cuda_device_data_t *)cq->device->data)->context);
-      pocl_cuda_submit_node (node, cq, 1);
-    }
+  /* Submit command in this thread */
+  cuCtxSetCurrent (((pocl_cuda_device_data_t *)cq->device->data)->context);
+  pocl_cuda_submit_node (node, cq, 1);
 }
 
 void
@@ -2534,8 +2539,14 @@ pocl_cuda_finalize_command (cl_device_id device, cl_event event)
 
   /* Handle failed events */
 
+  /* Read the failed-dependency flag before pocl_update_event_running, which
+   * transitions the event to CL_RUNNING and so would mask a status that
+   * pocl_cuda_notify set to a negative value. A failed dependency means the
+   * command was not issued (see pocl_cuda_submit_node) and must be terminated. */
+  int failed_dependency = event->failed_dependency;
+
   pocl_update_event_running (event);
-  if (event->status < 0)
+  if (event->status < 0 || failed_dependency)
     POCL_UPDATE_EVENT_FAILED_MSG (CL_FAILED, event, "CUDA event failed");
   else
     POCL_UPDATE_EVENT_COMPLETE_MSG (event, "CUDA event");
@@ -2583,46 +2594,47 @@ pocl_cuda_update_event (cl_device_id device, cl_event event)
     }
 }
 
+/* Waits for event and dependencies to be completed */
+/* Should be called with queue->data locked */
 void
 pocl_cuda_wait_event_recurse (cl_device_id device, cl_event event)
 {
-  while (event->wait_list)
-    pocl_cuda_wait_event_recurse (device, event->wait_list->event);
+  while (1)
+    {
+      POCL_LOCK_OBJ (event);
+      /* Lock event so that wait list is not modified in pocl_create_event_sync() */
+      if (!event->wait_list)
+        { 
+          POCL_UNLOCK_OBJ (event);
+          break;
+        }
+      cl_event wait_event = event->wait_list->event;
+      POCL_UNLOCK_OBJ (event);
+      pocl_cuda_wait_event_recurse(device, wait_event);
+    }
 
-  if (event->status > CL_COMPLETE)
-    pocl_cuda_finalize_command (device, event);
-}
-
-void
-pocl_cuda_notify_event_finished (cl_event event)
-{
+  assert (event->status > CL_COMPLETE);
+  /* If another thread has handled submission, event data might not have been created yet */
+   while (!POCL_ATOMIC_LOAD (event->data))
+    ;
   pocl_cuda_event_data_t *e_d = (pocl_cuda_event_data_t *)event->data;
-
-  if (((pocl_cuda_queue_data_t *)event->queue->data)->use_threads)
-    PTHREAD_CHECK (pthread_cond_broadcast (&e_d->event_cond));
+  while (!POCL_ATOMIC_LOAD (e_d->events_ready))
+    ;
+  assert (event->status == CL_SUBMITTED);
+  pocl_cuda_finalize_command (device, event);
+  assert (event->status == CL_COMPLETE);
 }
 
 void
 pocl_cuda_wait_event (cl_device_id device, cl_event event)
 {
-  pocl_cuda_event_data_t *e_d = (pocl_cuda_event_data_t *)event->data;
+  pocl_cuda_queue_data_t *q_d = (pocl_cuda_queue_data_t *)event->queue->data;
 
-  if (((pocl_cuda_queue_data_t *)event->queue->data)->use_threads)
-    {
-      /* Wait until background thread marks command as complete */
-      POCL_LOCK_OBJ (event);
-      while (event->status > CL_COMPLETE)
-        {
-          PTHREAD_CHECK (
-              pthread_cond_wait (&e_d->event_cond, &event->pocl_lock));
-        }
-      POCL_UNLOCK_OBJ (event);
-    }
-  else
-    {
-      /* Recursively finalize commands in this thread */
-      pocl_cuda_wait_event_recurse (device, event);
-    }
+  PTHREAD_CHECK (pthread_mutex_lock (&q_d->lock));
+  /* Ensure this event is completed */
+  if (event->status > CL_COMPLETE)
+	pocl_cuda_wait_event_recurse (device, event);
+  PTHREAD_CHECK (pthread_mutex_unlock (&q_d->lock));
 }
 
 void
@@ -2632,7 +2644,6 @@ pocl_cuda_free_event_data (cl_event event)
     {
       pocl_cuda_event_data_t *event_data
           = (pocl_cuda_event_data_t *)event->data;
-      PTHREAD_CHECK (pthread_cond_destroy (&event_data->event_cond));
       if (event->queue->properties & CL_QUEUE_PROFILING_ENABLE)
         cuEventDestroy (event_data->start);
       cuEventDestroy (event_data->end);
@@ -2648,114 +2659,43 @@ pocl_cuda_free_event_data (cl_event event)
 void
 pocl_cuda_join (cl_device_id device, cl_command_queue cq)
 {
-  /* Grab event at end of queue */
+  /* Grab event at end of queue as soon as possible */
   POCL_LOCK_OBJ (cq);
   cl_event event = cq->last_event.event;
+  uint64_t event_id;
+  if (event)
+    event_id = event->id;
+  POCL_UNLOCK_OBJ (cq);
   if (!event)
+    return;
+
+  /* Only one user thread at a time may wait for events (non-threaded queue) */
+  pocl_cuda_queue_data_t *queue_data = (pocl_cuda_queue_data_t *)cq->data;
+  PTHREAD_CHECK (pthread_mutex_lock (&queue_data->lock));
+
+  POCL_LOCK_OBJ (cq);
+
+  /* Check if event has already been handled */
+  /* The command queue is locked so no need to obtain a lock on wait list events */
+  cl_event wait_event;
+  for (wait_event = cq->last_event.event; wait_event; wait_event = wait_event->wait_list->event)
+    {
+      if (wait_event->id == event_id)
+        break;
+    }
+  if (!wait_event)
     {
       POCL_UNLOCK_OBJ (cq);
+      PTHREAD_CHECK (pthread_mutex_unlock (&queue_data->lock));
       return;
     }
   POname (clRetainEvent) (event);
   POCL_UNLOCK_OBJ (cq);
 
-  pocl_cuda_wait_event (device, event);
+  pocl_cuda_wait_event_recurse (device, event);
 
   POname (clReleaseEvent) (event);
-}
-
-void *
-pocl_cuda_submit_thread (void *data)
-{
-  pocl_cuda_queue_data_t *queue_data = (pocl_cuda_queue_data_t *)data;
-
-  cl_command_queue queue = queue_data->queue;
-  if (queue)
-    cuCtxSetCurrent (
-        ((pocl_cuda_device_data_t *)queue->device->data)->context);
-  else
-    /* This queue has already been released */
-    return NULL;
-
-  while (1)
-    {
-      /* Attempt to get next command from work queue */
-      _cl_command_node *node = NULL;
-      PTHREAD_CHECK (pthread_mutex_lock (&queue_data->lock));
-      if (!queue_data->queue)
-        {
-          PTHREAD_CHECK (pthread_mutex_unlock (&queue_data->lock));
-          break;
-        }
-      if (!queue_data->pending_queue)
-        {
-          PTHREAD_CHECK (pthread_cond_wait (&queue_data->pending_cond,
-                                            &queue_data->lock));
-        }
-      if (queue_data->pending_queue)
-        {
-          node = queue_data->pending_queue;
-          DL_DELETE (queue_data->pending_queue, node);
-        }
-      PTHREAD_CHECK (pthread_mutex_unlock (&queue_data->lock));
-
-      /* Submit command, if we found one */
-      if (node)
-        {
-          pocl_cuda_submit_node (node, queue_data->queue, 0);
-
-          /* Add command to running queue */
-          PTHREAD_CHECK (pthread_mutex_lock (&queue_data->lock));
-          DL_APPEND (queue_data->running_queue, node);
-          PTHREAD_CHECK (pthread_cond_signal (&queue_data->running_cond));
-          PTHREAD_CHECK (pthread_mutex_unlock (&queue_data->lock));
-        }
-    }
-
-  return NULL;
-}
-
-void *
-pocl_cuda_finalize_thread (void *data)
-{
-  pocl_cuda_queue_data_t *queue_data = (pocl_cuda_queue_data_t *)data;
-
-  cl_command_queue queue = queue_data->queue;
-  if (queue)
-    cuCtxSetCurrent (
-        ((pocl_cuda_device_data_t *)queue->device->data)->context);
-  else
-    /* This queue has already been released */
-    return NULL;
-
-  while (1)
-    {
-      /* Attempt to get next node from running queue */
-      _cl_command_node *node = NULL;
-      PTHREAD_CHECK (pthread_mutex_lock (&queue_data->lock));
-      if (!queue_data->queue)
-        {
-          PTHREAD_CHECK (pthread_mutex_unlock (&queue_data->lock));
-          break;
-        }
-      if (!queue_data->running_queue)
-        {
-          PTHREAD_CHECK (pthread_cond_wait (&queue_data->running_cond,
-                                            &queue_data->lock));
-        }
-      if (queue_data->running_queue)
-        {
-          node = queue_data->running_queue;
-          DL_DELETE (queue_data->running_queue, node);
-        }
-      PTHREAD_CHECK (pthread_mutex_unlock (&queue_data->lock));
-
-      /* Wait for command to finish, if we found one */
-      if (node)
-        pocl_cuda_finalize_command (queue->device, node->sync.event.event);
-    }
-
-  return NULL;
+  PTHREAD_CHECK (pthread_mutex_unlock (&queue_data->lock));
 }
 
 char* pocl_cuda_init_build(void *data)
@@ -2936,4 +2876,69 @@ pocl_cuda_get_device_info_ext (cl_device_id device, cl_device_info param_name,
                     param_name);
       return CL_INVALID_VALUE;
     }
+}
+
+cl_int
+pocl_cuda_get_subgroup_info_ext (cl_device_id dev,
+                                 cl_kernel kernel,
+                                 unsigned int program_device_i,
+                                 cl_kernel_sub_group_info param_name,
+                                 size_t input_value_size,
+                                 const void *input_value,
+                                 size_t param_value_size,
+                                 void *param_value,
+                                 size_t *param_value_size_ret)
+{
+  cl_int errcode = CL_SUCCESS;
+  pocl_cuda_device_data_t *ddata = (pocl_cuda_device_data_t *)dev->data;
+  size_t sg_size = ddata->warp_size;
+
+  switch (param_name)
+    {
+    case CL_KERNEL_MAX_SUB_GROUP_SIZE_FOR_NDRANGE:
+      {
+        POCL_RETURN_GETINFO (size_t, sg_size);
+      }
+    case CL_KERNEL_SUB_GROUP_COUNT_FOR_NDRANGE:
+      {
+        size_t a = (size_t)dev->max_num_sub_groups;
+        size_t ndcount[3] = { 1, 1, 1 };
+        for (size_t i = 0; i < 3; ++i)
+          {
+            if (input_value_size / sizeof (size_t) > i)
+              ndcount[i] = ((size_t *)input_value)[i];
+          }
+        size_t b = ndcount[0] * ndcount[1] * ndcount[2];
+        b = (b + sg_size - 1) / sg_size;
+        POCL_RETURN_GETINFO (size_t, a < b ? a : b);
+      }
+    case CL_KERNEL_LOCAL_SIZE_FOR_SUB_GROUP_COUNT:
+      {
+        POCL_GOTO_ERROR_ON ((input_value == NULL), CL_INVALID_VALUE,
+                              "SG size wish not given.");
+        size_t n_wish = *(size_t *)input_value;
+
+        size_t nd[3];
+        if (n_wish * sg_size > dev->max_work_group_size)
+          {
+            nd[0] = nd[1] = nd[2] = 0;
+            POCL_RETURN_GETINFO_ARRAY (size_t,
+                                       param_value_size / sizeof (size_t), nd);
+          }
+        else
+          {
+            nd[0] = n_wish * sg_size;
+            nd[1] = 1;
+            nd[2] = 1;
+            POCL_RETURN_GETINFO_ARRAY (size_t,
+                                       param_value_size / sizeof (size_t), nd);
+          }
+      }
+    default:
+      POCL_GOTO_ERROR_ON (1, CL_INVALID_VALUE, "Unknown param_name: %u\n",
+                            param_name);
+    }
+
+ERROR:
+  return errcode;
 }

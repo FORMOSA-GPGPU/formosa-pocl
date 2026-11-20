@@ -32,30 +32,40 @@ defaults:
 jobs:
   msvc_test_matrix:
     name: LLVM ${{ matrix.llvm_version }} - ${{ matrix.config }} - shared libs:${{ matrix.shared_libs }} - ICD ${{ matrix.enable_icd }}
-    runs-on: [windows-2022]
+    runs-on: [windows-latest]
     strategy:
       fail-fast: false
       matrix:
-        llvm_version: [19, 20]
+        llvm_version: [22]
         shared_libs: [ON, OFF]
         config: [cpu]
         enable_icd: [ON, OFF]
         exclude:
           - enable_icd: ON
             shared_libs: OFF
+        include:
+          - config: cpu
+            llvm_version: 21
+            enable_icd: OFF
+            shared_libs: ON
+          # builds an .exe installer
+          - config: nsis
+            llvm_version: 22
+            enable_icd: ON
+            shared_libs: ON
 
     steps:
       - name: Checkout PoCL
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       # Source MSVC tools. This is a known way to have the PoCL configuration
       # step to pick up MSVC compiler (cl.exe) instead of MinGW's gcc.
       - name: Setup MSVC Developer Command Prompt
-        uses: TheMrMilchmann/setup-msvc-dev@79dac248aac9d0059f86eae9d8b5bfab4e95e97c
+        uses: TheMrMilchmann/setup-msvc-dev@368ef7d1ee4d1171b31d4a7f67f4d954f903f5a9
         with:
           arch: x64
 
-      - uses: mamba-org/setup-micromamba@add3a49764cedee8ee24e82dfde87f5bc2914462
+      - uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39
         with:
           environment-name: pocl-deps
           init-shell: >-
@@ -73,6 +83,11 @@ jobs:
       - name: Load Env vars
         id: load-env
         run: |
+          # in CI environment, this DLL also exists in C:/Windows/system32 ;
+          # this causes a problem for CMake's DLL dependency resolution,
+          # since it has two identically named DLLs, and can't decide
+          # how to resolve ambiguity; hence remove it
+          del %MAMBA_ROOT_PREFIX%\envs\pocl-deps\vcruntime140.dll
           cat ${{ github.workspace }}/.github/variables.txt >> $GITHUB_ENV
 
       - name: Check llvm
@@ -84,29 +99,42 @@ jobs:
       # (docs/sphinx/source/windows.rst). This configuration step is
       # intended to pick up MSVC as the compiler, but if the
       # environment is not set properly, it might pick up MinGW-gcc instead.
+      # add this CMake option for verbose build output:
+      #        -DCMAKE_VERBOSE_MAKEFILE=1 ^
       - name: Configure PoCL
         run: |
           set "CC=cl.exe"
           set "CXX=cl.exe"
           set "DEPS_DIR=%MAMBA_ROOT_PREFIX%\envs\pocl-deps\Library"
+
           :: Fix an issue with llvm-config on windows
           copy %DEPS_DIR%\lib\zstd.lib %DEPS_DIR%\lib\zstd.dll.lib
+
+          if ${{ matrix.config == 'nsis' }}==false (
+            set "EXTRA_FLAGS=-DLLC_HOST_CPU=haswell"
+          ) else (
+            set "EXTRA_FLAGS=-DENABLE_LOADABLE_DRIVERS=0 -DENABLE_EXAMPLES=0 -DENABLE_TESTS=0 -DENABLE_CONFORMANCE=1 -DENABLE_RELOCATION=1 -DKERNELLIB_HOST_CPU_VARIANTS=distro -DENABLE_POCL_BUILDING=0"
+          )
+
           cmake -S . -B build-pocl ^
               -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}\install-pocl ^
               -DCMAKE_PREFIX_PATH=%DEPS_DIR% ^
               -DENABLE_ICD=${{ matrix.enable_icd }} ^
-              -DENABLE_LLVM=1 ^
+              -DENABLE_LLVM=ON ^
               -DENABLE_LOADABLE_DRIVERS=${{ matrix.shared_libs }} ^
               -DSTATIC_LLVM=ON ^
+              -DENABLE_TESTS=${{ matrix.shared_libs }} ^
               -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL ^
               -DBUILD_SHARED_LIBS=${{ matrix.shared_libs }} ^
               -DCMAKE_BUILD_TYPE=Release ^
+              %EXTRA_FLAGS% ^
               -G "Ninja"
 
       - name: Build PoCL
         run: cmake --build build-pocl --target install
 
       - name: Run Tests
+        if: ${{ matrix.config != 'nsis' }}
         env:
           POCL_CACHE_DIR: "${{ runner.temp }}/GH_POCL_CACHE"
         timeout-minutes: 120
@@ -128,5 +156,40 @@ jobs:
           cd ${{ github.workspace }}\build-pocl
           & ${{ github.workspace }}\tools\scripts\run_cpu_tests.ps1 --output-on-failure -j$Env:NUMBER_OF_PROCESSORS
 
+      - name: Install NSIS with 8192-character limit override
+        if: ${{ matrix.config == 'nsis' }}
+        env:
+          NSIS_VERSION: '3.11'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest "https://sourceforge.net/projects/nsis/files/NSIS%203/${env:NSIS_VERSION}/nsis-${env:NSIS_VERSION}.zip/download" -UserAgent "PowerShell" -Outfile "./nsis.zip"
+          Expand-Archive -LiteralPath ./nsis.zip -DestinationPath "${env:ProgramFiles(x86)}\"
+          Invoke-WebRequest "https://sourceforge.net/projects/nsis/files/NSIS%203/${env:NSIS_VERSION}/nsis-${env:NSIS_VERSION}-strlen_8192.zip/download" -UserAgent "PowerShell" -Outfile "./nsis-8192.zip"
+          Expand-Archive -Force -LiteralPath ./nsis-8192.zip -DestinationPath "${env:ProgramFiles(x86)}\nsis-${env:NSIS_VERSION}\"
+          echo "${env:ProgramFiles(x86)}\nsis-${env:NSIS_VERSION}" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - name: Test packaging
-        run: cpack --config ${{ github.workspace }}\build-pocl\CPackConfig.cmake -G NSIS
+        if: ${{ matrix.config == 'nsis' }}
+        run: |
+          cat ${{ github.workspace }}\build-pocl\CPackConfig.cmake
+          cpack --config ${{ github.workspace }}\build-pocl\CPackConfig.cmake -G NSIS
+
+      - name: Upload install-dir Artifact
+        if: ${{ matrix.config != 'nsis' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: 'PoCL-MSVC-x86_64-LLVM_${{ matrix.llvm_version }}-ICD_${{ matrix.enable_icd }}-Shared_${{ matrix.shared_libs }}-${{ github.sha }}'
+          path: '${{  github.workspace }}/install-pocl/'
+          if-no-files-found: error
+          compression-level: 4
+          archive: true
+
+      - name: Upload NSIS installer Artifact
+        if: ${{ matrix.config == 'nsis' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          # NOTE: if archive is false, the uploaded file's name is used as artifact name
+          #name: 'PoCL-MSVC-NSIS-x86_64-LLVM_${{ matrix.llvm_version }}-ICD_${{ matrix.enable_icd }}-Shared_${{ matrix.shared_libs }}-${{ github.sha }}'
+          path: 'D:\a\pocl\pocl\PoCL*.exe'
+          if-no-files-found: error
+          archive: false

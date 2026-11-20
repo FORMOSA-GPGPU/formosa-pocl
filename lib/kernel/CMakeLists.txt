@@ -91,20 +91,6 @@ get_local_size.c
 get_num_groups.c
 get_work_dim.c
 hadd.cl
-half_cos.cl
-half_divide.cl
-half_exp10.cl
-half_exp2.cl
-half_exp.cl
-half_log10.cl
-half_log2.cl
-half_log.cl
-half_powr.cl
-half_recip.cl
-half_rsqrt.cl
-half_sin.cl
-half_sqrt.cl
-half_tan.cl
 hypot.cl
 ilogb.cl
 isequal.cl
@@ -123,7 +109,6 @@ isunordered.cl
 ldexp.cl
 length.cl
 lgamma.cl
-lgamma_r.cl
 log.cl
 log10.cl
 log1p.cl
@@ -237,7 +222,16 @@ if(OCL_TARGETS MATCHES "cuda")
   add_subdirectory("cuda")
 endif()
 
+if (ENABLE_MLIR)
+  add_subdirectory("mlir")
+endif()
+
 #*********************************************************************
+
+set(FORMOSA_MATH_SOURCES
+  half_cos.cl half_divide.cl half_exp10.cl half_exp2.cl half_exp.cl
+  half_log10.cl half_log2.cl half_log.cl half_powr.cl half_recip.cl half_rsqrt.cl half_sin.cl
+  half_sqrt.cl half_tan.cl formosa/lgamma_r.cl)
 
 if(OCL_TARGETS MATCHES "formosa")
   add_subdirectory("formosa")

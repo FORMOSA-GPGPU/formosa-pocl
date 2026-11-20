@@ -17,6 +17,7 @@ on:
       - 'CREDITS'
       - 'LICENSE'
       - 'README.*'
+      - 'tools/docker/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref || github.run_id }}
@@ -31,30 +32,30 @@ jobs:
       matrix:
         include:
           - julia-version: '1.10'
-            llvm: 20
-          - julia-version: '1.11'
-            llvm: 20
+            llvm: 21
+          - julia-version: '1.12'
+            llvm: 21
 
     steps:
       - name: Checkout PoCL
-        uses: actions/checkout@v5.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           path: pocl
 
       - name: Checkout OpenCL.jl
-        uses: actions/checkout@v5.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: JuliaGPU/OpenCL.jl
           path: OpenCL.jl
 
       - name: Setup Julia
-        uses: julia-actions/setup-julia@v2
+        uses: julia-actions/setup-julia@v3
         with:
           version: ${{ matrix.julia-version }}
           arch: x64
 
       - name: Setup Julia cache
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         env:
           cache-name: cache-artifacts
         with:
@@ -69,6 +70,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake ninja-build pkg-config libhwloc-dev libpciaccess-dev libnuma-dev
+
+      - name: Julia information
+        run: julia --color=yes -e 'using InteractiveUtils; versioninfo()'
 
       - name: Install Julia dependencies
         run: |
@@ -114,7 +118,7 @@ jobs:
                        -DCMAKE_BUILD_TYPE=Debug
                        -DENABLE_TESTS:Bool=OFF
                        -DENABLE_EXAMPLES:Bool=OFF
-                       -DENABLE_CONFORMANCE:Bool=ON
+                       -DLLC_HOST_CPU=haswell
                        -DCMAKE_INSTALL_PREFIX=$destdir
                        -DWITH_LLVM_CONFIG=$(LLVM_full_jll.artifact_dir)/tools/llvm-config
                        -DCMAKE_PREFIX_PATH="$(join(prefix, ";"))"

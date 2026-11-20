@@ -38,6 +38,7 @@ void pocl_simtsim_init_device_ops(struct pocl_device_ops *ops) {
   ops->build_source = pocl_driver_build_source;
   ops->link_program = pocl_driver_link_program;
   ops->build_binary = pocl_driver_build_binary;
+  ops->count_kernels = pocl_driver_count_kernels;
   ops->setup_metadata = pocl_driver_setup_metadata;
   ops->supports_binary = pocl_driver_supports_binary;
   ops->build_poclbinary = pocl_driver_build_poclbinary;
@@ -321,10 +322,10 @@ int pocl_simtsim_free_program(cl_device_id device, cl_program program,
 cl_int pocl_simtsim_create_kernel(cl_device_id device, cl_program program,
                                   cl_kernel kernel, unsigned program_device_i) {
   pocl_kernel_metadata_t *meta = kernel->meta;
-  assert(meta->data != NULL);
+  assert(meta->devices != NULL);
   simtsim_kernel_data_t *kdata =
-      (simtsim_kernel_data_t *)program->data[program_device_i];
-  if (!kdata) {
+      (simtsim_kernel_data_t *)meta->devices[program_device_i].driver_data;
+  if (kdata != NULL) {
     ++kdata->ref_count;
     return CL_SUCCESS;
   }
@@ -344,25 +345,26 @@ cl_int pocl_simtsim_create_kernel(cl_device_id device, cl_program program,
   }
   assert(found);
   kdata = calloc(1, sizeof(simtsim_kernel_data_t));
+  if (kdata == NULL) return CL_OUT_OF_HOST_MEMORY;
   kdata->id = i;
   ++kdata->ref_count;
-  meta->data[program_device_i] = kdata;
+  meta->devices[program_device_i].driver_data = kdata;
   return CL_SUCCESS;
 }
 
 cl_int pocl_simtsim_free_kernel(cl_device_id device, cl_program program,
                                 cl_kernel kernel, unsigned program_device_i) {
   pocl_kernel_metadata_t *meta = kernel->meta;
-  assert(meta->data != NULL);
+  assert(meta->devices != NULL);
   simtsim_kernel_data_t *kdata =
-      (simtsim_kernel_data_t *)meta->data[program_device_i];
+      (simtsim_kernel_data_t *)meta->devices[program_device_i].driver_data;
   if (!kdata) {
     return CL_SUCCESS;
   }
 
   if (--kdata->ref_count == 0) {
     POCL_MEM_FREE(kdata);
-    meta->data[program_device_i] = NULL;
+    meta->devices[program_device_i].driver_data = NULL;
   }
   return CL_SUCCESS;
 }
@@ -434,6 +436,14 @@ static void simtsim_command_scheduler(pocl_simtsim_data_t *d) {
 void pocl_simtsim_submit(_cl_command_node *node, cl_command_queue cq) {
   pocl_simtsim_data_t *dd = (pocl_simtsim_data_t *)node->device->data;
 
+  cl_event event = node->sync.event.event;
+  if (event->failed_dependency) {
+    node->state = POCL_COMMAND_FAILED;
+    POCL_UNLOCK_OBJ(event);
+    pocl_update_event_failed(CL_FAILED, NULL, 0, event, NULL);
+    return;
+  }
+
   node->state = POCL_COMMAND_READY;
   POCL_LOCK(dd->cq_lock);
   pocl_command_push(node, &dd->ready_list, &dd->command_list);
@@ -471,18 +481,22 @@ void pocl_simtsim_notify(cl_device_id device, cl_event event,
 
   _cl_command_node *volatile node = event->command;
 
-  if (finished->status < CL_COMPLETE) {
-    pocl_unlock_events_inorder(event, finished);
-    pocl_update_event_failed(CL_FAILED, NULL, 0, event, NULL);
-    pocl_lock_events_inorder(finished, event);
-    return;
-  }
-
   if (node->state != POCL_COMMAND_READY) {
     POCL_MSG_PRINT_EVENTS(
         "simtsim: command related to the notified event %" PRIu64
         " not ready\n",
         event->id);
+    return;
+  }
+
+  if (finished->status < CL_COMPLETE || event->failed_dependency) {
+    POCL_LOCK(dd->cq_lock);
+    CDL_DELETE(dd->command_list, node);
+    node->state = POCL_COMMAND_FAILED;
+    POCL_UNLOCK(dd->cq_lock);
+    pocl_unlock_events_inorder(event, finished);
+    pocl_update_event_failed(CL_FAILED, NULL, 0, event, NULL);
+    pocl_lock_events_inorder(finished, event);
     return;
   }
 
@@ -586,7 +600,7 @@ void pocl_simtsim_run(void *data, _cl_command_node *cmd) {
   simtsim_program_data_t *pdata =
       (simtsim_program_data_t *)program->data[device_i];
   SimtsimConfig cfg = simtsim_get_config(dd->sim);
-  simtsim_kernel_data_t *kdata = (simtsim_kernel_data_t *)meta->data[device_i];
+  simtsim_kernel_data_t *kdata = (simtsim_kernel_data_t *)meta->devices[device_i].driver_data;
   struct pocl_context *context = &cmd->command.run.pc;
   int err = 0;
 

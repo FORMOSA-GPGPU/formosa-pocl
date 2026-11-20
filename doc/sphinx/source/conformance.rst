@@ -17,10 +17,19 @@ Conformance related CMake options
 
     * read-write images are disabled (some 1D/2D image array tests fail)
     * the list of supported image formats is much smaller
+    * device partitioning is disabled: the CPU device reports no partition
+      properties, so it can't be split into sub-devices
     * SLEEF is always enforced for the builtin library
-    * cl_khr_fp16 is disabled
+    * cl_khr_subgroups is disabled, and with it the ``__opencl_c_subgroups``
+      feature, so applications that require sub-groups do not see the device
     * cl_khr_subgroup_{ballot,shuffle} are disabled
-    * cl_intel_subgroups,cl_intel_required_subgroup_size are disabled
+    * cl_intel_subgroups, cl_intel_subgroups_short, cl_intel_subgroups_char
+      and cl_intel_required_subgroup_size are disabled
+    * cl_khr_command_buffer, cl_khr_command_buffer_multi_device and
+      cl_khr_command_buffer_mutable_dispatch are disabled, as are
+      cl_pocl_command_buffer_svm and cl_pocl_command_buffer_host_buffer
+    * cl_pocl_svm_rect and cl_exp_tensor are disabled
+    * cl_exp_defined_builtin_kernels is disabled
 
   If ENABLE_CONFORMANCE is OFF, and ENABLE_HOST_CPU_DEVICES is ON,
   the conformance testsuite is disabled in CMake. This is because
@@ -31,7 +40,6 @@ Supported & Unsupported optional OpenCL 3.0 features
 
 This list is only related to CPU devices (cpu & cpu-minimal drivers).
 Other drivers (CUDA, TCE etc) only support OpenCL 1.2.
-Note that 3.0 support on CPU devices requires LLVM 14 or newer.
 
 Supported 3.0 features:
 
@@ -40,7 +48,7 @@ Supported 3.0 features:
   * 3D Image Writes
   * SPIR-V
   * Program Scope Global Variables
-  * Subgroups
+  * Subgroups (only when ENABLE_CONFORMANCE is OFF)
   * Generic Address Space
 
 Unsupported 3.0 features:
@@ -88,21 +96,6 @@ Note that running ``ctest -L conformance_suite_micro`` will run *both* variants
 
 Additionally, there is a new cmake label, ``conformance_30_only``
 to run tests which are only relevant to OpenCL 3.0.
-
-.. _known-issues:
-
-Known issues related to CTS
----------------------------
-
-- With LLVM 15 and 16, when running CTS with the offline compilation mode
-  (= via SPIR-V), Clang + SPIR-V translator produce invalid
-  SPIR-V for several tests. PoCL bugreport:
-  `<https://github.com/pocl/pocl/issues/1232>`_
-  Related Khronos issues:
-  `<https://github.com/KhronosGroup/SPIRV-LLVM-Translator/issues/2008>`_
-  `<https://github.com/KhronosGroup/SPIRV-LLVM-Translator/issues/2024>`_
-  `<https://github.com/KhronosGroup/SPIRV-LLVM-Translator/issues/2025>`_
-
 
 Conformance tests results
 -----------------------------------------------------------------------

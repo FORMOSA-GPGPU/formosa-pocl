@@ -37,19 +37,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - llvm: 19
+          - llvm: 21
             conformance: 0
             npu: 0
-          - llvm: 20
+          - llvm: 22
             conformance: 0
             npu: 1
-          - llvm: 21
+          - llvm: 23
             conformance: 1
             npu: 0
 
     steps:
       - name: Checkout
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Load Env vars
         id: load-env
@@ -60,7 +60,7 @@ jobs:
         id: cmake
         run: |
           runCMake() {
-            BUILD_FLAGS="-O1 -march=native -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
+            BUILD_FLAGS="-O2 -march=x86-64-v2 -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
             cmake -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DDEVELOPER_MODE=ON \
             -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_FLAGS_RELEASE=$BUILD_FLAGS" "-DCMAKE_CXX_FLAGS_RELEASE=$BUILD_FLAGS" \
             "$@" -B ${{ github.workspace }}/build ${{ github.workspace }}
@@ -101,6 +101,8 @@ jobs:
         id: ctest
         timeout-minutes: 120
         run: |
+          # hardcoded path in test_compiler / execute_after_included_header_link
+          rm -rf /tmp/foo
           rm -rf ${{ env.POCL_CACHE_DIR }}
           mkdir ${{ env.POCL_CACHE_DIR }}
           # exclude long tests
@@ -109,3 +111,16 @@ jobs:
           else
             cd ${{ github.workspace }}/build && ${{ github.workspace }}/tools/scripts/run_level0_tests -j2 $CTEST_FLAGS -L conformance_suite_micro_main -LE long -E "(conformance_main_buffers_micro_|conformance_main_basic_micro_other|conformance_main_vectors_micro|conformance_main_spirv_new_micro_)"
           fi
+
+      - name: Archive Artifacts
+        run: |
+          cd ${{ github.workspace }}/build && make install DESTDIR=/tmp/pocl_level0_llvm_${{ matrix.llvm }}_${{ github.sha }}
+          tar -C /tmp -cavf /tmp/pocl_level0_llvm_${{ matrix.llvm }}_${{ github.sha }}.tar.zst pocl_level0_llvm_${{ matrix.llvm }}_${{ github.sha }}
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: "PoCL-LevelZero-CTS_${{ matrix.conformance }}-LLVM_${{ matrix.llvm }}-${{ github.sha }}"
+          path: "/tmp/pocl_level0_llvm_${{ matrix.llvm }}_${{ github.sha }}.tar.zst"
+          if-no-files-found: error
+          archive: false

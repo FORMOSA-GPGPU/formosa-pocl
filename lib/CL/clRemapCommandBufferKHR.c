@@ -22,9 +22,9 @@
 */
 
 #include "pocl_cl.h"
+#include "pocl_cmdbuf.h"
 #include "pocl_mem_management.h"
 #include "pocl_shared.h"
-#include "pocl_util.h"
 
 CL_API_ENTRY cl_command_buffer_khr CL_API_CALL
 POname (clRemapCommandBufferKHR) (cl_command_buffer_khr command_buffer,
@@ -284,8 +284,7 @@ POname (clRemapCommandBufferKHR) (cl_command_buffer_khr command_buffer,
       goto ERROR;
   }
 
-  if (command_buffer->state == CL_COMMAND_BUFFER_STATE_EXECUTABLE_KHR
-      || command_buffer->state == CL_COMMAND_BUFFER_STATE_PENDING_KHR)
+  if (command_buffer->state == CL_COMMAND_BUFFER_STATE_EXECUTABLE_KHR)
     {
       errcode = POname (clFinalizeCommandBufferKHR) (new_cmdbuf);
       if (errcode != CL_SUCCESS)

@@ -1,0 +1,153 @@
+---
+name: Linux CPU / Polybench benchmarks
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  schedule:
+# at 2:23 UTC every sunday
+    - cron: '23 2 * * 0'
+  pull_request:
+    paths-ignore:
+      - 'doc/**'
+      - 'CHANGES'
+      - 'COPYING'
+      - 'CREDITS'
+      - 'LICENSE'
+      - 'README.*'
+      - 'tools/docker/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  CCACHE_BASEDIR: "${{ github.workspace }}"
+  CCACHE_DIR: "${{ github.workspace }}/../../../ccache_storage"
+  EXAMPLES_DIR: "${{ github.workspace }}/../../../examples"
+  BUILD_DIR: "${{ github.workspace }}/build"
+
+jobs:
+  polybench_matrix:
+    name: "LLVM ${{ matrix.llvm }} - Polybench benchmarks on ${{ matrix.device }} CPU"
+    runs-on: [self-hosted, linux, "polybench_${{matrix.device}}" ]
+    strategy:
+      fail-fast: false
+      matrix:
+        llvm: [22]
+        device: [x86_64, RISCV]
+        isPR:
+          - ${{ github.event_name == 'pull_request' }}
+        # don't run RISC-V on PR, only on schedule
+        exclude:
+          - device: RISCV
+            isPR: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Load Env vars
+        id: load_env
+        run: |
+          cat ${{ github.workspace }}/.github/variables.txt >> $GITHUB_ENV
+
+      - name: Load RISCV Env vars
+        id: load_riscv_env
+        if: ${{ matrix.device == 'RISCV' }}
+        run: |
+          cat $RISCV_CROSS_ENVIRONMENT >> $GITHUB_ENV
+
+      - name: CMake
+        id: cmake
+        run: |
+          runCMake() {
+            cmake -DCMAKE_BUILD_TYPE=Release  -DENABLE_TESTSUITES=polybenchGPU \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            "-DCMAKE_C_FLAGS_RELEASE=$BUILD_FLAGS" "-DCMAKE_CXX_FLAGS_RELEASE=$BUILD_FLAGS" \
+            -DWITH_LLVM_CONFIG=/usr/bin/llvm-config-${{ matrix.llvm }} \
+            "$@" -B ${{ github.workspace }}/build ${{ github.workspace }}
+          }
+
+          rm -rf ${{ github.workspace }}/build
+          mkdir ${{ github.workspace }}/build
+
+          if [ "${{ matrix.device }}" == "x86_64" ]; then
+            BUILD_FLAGS="-O2 -march=native"
+            runCMake -DENABLE_ICD=0
+          elif [ "${{ matrix.device }}" == "RISCV" ]; then
+            BUILD_FLAGS="-O2 -DNDEBUG"
+            runCMake -DCMAKE_MAKE_PROGRAM=/usr/bin/make -DENABLE_ICD=0 \
+            -DLLVM_DIR=${TARGET_ROOT}/opt/LLVM_${{ matrix.llvm }} -DCMAKE_INSTALL_PREFIX=/usr \
+            -DHOST_DEVICE_BUILD_HASH=${TARGET_TRIPLE} -DCMAKE_TOOLCHAIN_FILE=${TARGET_TOOLCHAIN_FILE}  \
+            -DLLC_TRIPLE=${TARGET_TRIPLE} -DLLC_HOST_CPU=${TARGET_CPU} -DCMAKE_PREFIX_PATH=${TARGET_ROOT} \
+            -DENABLE_LOADABLE_DRIVERS=0 -DKERNELLIB_HOST_CPU_VARIANTS=${TARGET_CPU}
+          else
+            echo "Unknown configuration" && exit 1
+          fi
+
+      - name: Build PoCL
+        id: build_pocl
+        timeout-minutes: 30
+        run: |
+          cd ${{ github.workspace }}/build && make -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh)
+
+      - name: Build Examples
+        id: build_examples
+        timeout-minutes: 30
+        run: |
+          cd ${{ github.workspace }}/build/examples/polybenchGPU && make -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh) polybenchGPU
+
+      # Download previous benchmark result from cache (if exists)
+      # make sure to store with github.ref_name but always restore with 'main' branch,
+      # this way we're always comparing to latest main
+      - name: Download previous benchmark data
+        id: download_bench
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: benchmark_cache
+          key: polybench-${{ runner.name }}-llvm-${{ matrix.llvm }}-${{ matrix.device }}-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: polybench-${{ runner.name }}-llvm-${{ matrix.llvm }}-${{ matrix.device }}-main
+
+      - name: Run Polybench benchmarks
+        id: run_polybench
+        env:
+          POCL_CACHE_DIR: "${{ runner.temp }}/GH_POCL_CACHE"
+        timeout-minutes: 60
+        run: |
+          rm -rf ${{ env.POCL_CACHE_DIR }}
+          mkdir ${{ env.POCL_CACHE_DIR }}
+
+          if [ "${{ matrix.device }}" == "x86_64" ]; then
+            cd ${{ github.workspace }}/build && ctest -j1 -L polybenchGPU -LE long
+          elif [ "${{ matrix.device }}" == "RISCV" ]; then
+            cd ${{ github.workspace }}/build && ${{ github.workspace }}/tools/scripts/run_cross_compiled_cpu_tests ${{ github.workspace }} ${BUILD_DIR} ${REMOTE_ADDRESS} ${REMOTE_USER} ctest --output-on-failure -j1 -L polybenchGPU -LE long
+          else
+            echo "Unknown configuration" && exit 1
+          fi
+
+          # replace the last ',' in the file by a closing bracket
+          sed -i '$s/,$/ ]/' "${{ github.workspace }}/build/polybench_result.json"
+          cat "${{ github.workspace }}/build/polybench_result.json"
+
+      # Run `github-action-benchmark` action
+      - name: Store benchmark result
+        uses: benchmark-action/github-action-benchmark@4322e5726e6334590d251fc4f92bec0efafc45dc
+        with:
+          # What benchmark tool the output.txt came from
+          tool: 'customSmallerIsBetter'
+          # Where the output from the benchmark tool is stored
+          output-file-path: build/polybench_result.json
+          # Where the previous data file is stored
+          external-data-json-path: benchmark_cache/polybench_result.json
+          # GitHub API token required for non-PR runs
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Enable Job Summary for PRs
+          summary-always: true
+          # Workflow will fail when an alert happens
+          fail-on-alert: true
+          # Threshold which determines if an alert should happen
+          alert-threshold: '120%'
+
+      # Upload the updated cache file for the next job by actions/cache

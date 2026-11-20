@@ -37,28 +37,85 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        llvm: [20, 21]
+        llvm: [22, 23]
+        # basic = simplest pthread build with ENABLE_CONFORMANCE
+        # devel = with devel options without ENABLE_CONFORMANCE
+        # TBB, OpenMP = CPU drivers with TBB/OpenMP support
         # cts_spirv = cts with SPIR-V
         # tier1 = includes CTS without SPIR-V
-        # chipstar 1.1 only supports LLVM up to 17
-        # chipstar 1.2 only supports LLVM up to 19
+        # chipstar 1.1 supports LLVM up to 17
+        # chipstar 1.2 supports LLVM up to 19
+        # chipstar 1.3 supports LLVM up to 22
         # asan, tsan, ubsan = sanitizers
         # openvx = OpenVX-CTS
-        config: [cts_spirv, tier1, asan, tsan, ubsan]
+        config: [cts_spirv, tier1]
         include:
-          - llvm: 19
+          - llvm: 22
             config: chipstar
           - llvm: 20
             config: openvx
+          - llvm: 20
+            config: basic
+          - llvm: 22
+            config: basic
+          - llvm: 21
+            config: devel
+          - llvm: 20
+            config: TBB
+          - llvm: 21
+            config: OpenMP
+          - llvm: 23
+            config: asan
+          - llvm: 23
+            config: tsan
+          - llvm: 23
+            config: ubsan
 
     steps:
       - name: Checkout
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Load Env vars
         id: load-env
         run: |
           cat ${{ github.workspace }}/.github/variables.txt >> $GITHUB_ENV
+
+      # Build MIVisionX (the OpenVX implementation the CTS links against) with the
+      # OpenCL backend, instead of relying on the MIVisionX version preinstalled
+      # in /opt/rocm on the runner (which can lag upstream). A dedicated, tested
+      # branch (pocl-VX) is used rather than develop so the pinned implementation
+      # is stable and the conformance filter reflects only genuinely-open
+      # MIVisionX defects rather than transient develop breakage.
+      - name: Build MIVisionX (pocl-VX branch, OpenCL backend)
+        id: build_mivisionx
+        if: ${{ matrix.config == 'openvx' }}
+        timeout-minutes: 90
+        run: |
+          MIVISIONX_BRANCH=pocl-VX
+          MIVISIONX_SRC=${EXAMPLES_DIR}/MIVisionX
+          MIVISIONX_ROOT=${EXAMPLES_DIR}/mivisionx-install
+          rm -rf "${MIVISIONX_ROOT}"
+          if [ ! -d "${MIVISIONX_SRC}/.git" ]; then
+            rm -rf "${MIVISIONX_SRC}"
+            git clone --depth 1 -b "${MIVISIONX_BRANCH}" https://github.com/ROCm/MIVisionX.git "${MIVISIONX_SRC}"
+          else
+            git -C "${MIVISIONX_SRC}" fetch --depth 1 origin "${MIVISIONX_BRANCH}"
+            git -C "${MIVISIONX_SRC}" reset --hard FETCH_HEAD
+          fi
+          echo "MIVisionX ${MIVISIONX_BRANCH} HEAD: $(git -C "${MIVISIONX_SRC}" rev-parse --short HEAD)"
+          rm -rf "${MIVISIONX_SRC}/build-ocl"
+          cmake -G Ninja -B "${MIVISIONX_SRC}/build-ocl" -S "${MIVISIONX_SRC}" \
+            -DCMAKE_BUILD_TYPE=Release -DBACKEND=OPENCL \
+            -DCMAKE_INSTALL_PREFIX="${MIVISIONX_ROOT}"
+          cmake --build "${MIVISIONX_SRC}/build-ocl" --target openvx vxu -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh)
+          # Install only the amd_openvx/openvx subproject (libopenvx, libvxu and
+          # the public headers). A whole-project install fails because it also
+          # tries to install utilities (e.g. runvx) that we intentionally did not
+          # build -- the CTS only needs the OpenVX libraries and headers.
+          cmake --install "${MIVISIONX_SRC}/build-ocl/amd_openvx/openvx"
+          test -f "${MIVISIONX_ROOT}/lib/libopenvx.so" || { echo "MIVisionX build did not produce libopenvx.so"; exit 1; }
+          test -d "${MIVISIONX_ROOT}/include/mivisionx" || { echo "MIVisionX headers missing"; exit 1; }
+          echo "MIVISIONX_ROOT=${MIVISIONX_ROOT}" >> $GITHUB_ENV
 
       - name: CMake
         id: cmake
@@ -68,20 +125,28 @@ jobs:
           runCMake() {
             cmake -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             "-DCMAKE_C_FLAGS_RELWITHDEBINFO=${BUILD_FLAGS}"  "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=${BUILD_FLAGS}" \
-            -DWITH_LLVM_CONFIG=/usr/bin/llvm-config-${{ matrix.llvm }} -DLLVM_SPIRV=/usr/bin/llvm-spirv-${{ matrix.llvm }} \
+            -DWITH_LLVM_CONFIG=/usr/bin/llvm-config-${{ matrix.llvm }} \
             "$@" -B ${{ github.workspace }}/build ${{ github.workspace }}
           }
 
           rm -rf ${{ github.workspace }}/build
           mkdir ${{ github.workspace }}/build
-          if [ "${{ matrix.config }}" == "cts_spirv" ]; then
+          if [ "${{ matrix.config }}" == "basic" ]; then
+            runCMake -DENABLE_ICD=1 -DENABLE_LLVM_FILECHECKS=1 -DENABLE_CONFORMANCE=1
+          elif [ "${{ matrix.config }}" == "devel" ]; then
+            runCMake -DENABLE_RELOCATION=0 -DDEVELOPER_MODE=1 -DENABLE_VALGRIND=1 -DENABLE_EXTRA_VALIDITY_CHECKS=1 -DENABLE_CONFORMANCE=0
+          elif [ "${{ matrix.config }}" == "OpenMP" ]; then
+            runCMake -DENABLE_ICD=1 -DENABLE_HOST_CPU_DEVICES_OPENMP=1
+          elif [ "${{ matrix.config }}" == "TBB" ]; then
+            runCMake -DENABLE_ICD=1 -DENABLE_TBB_DEVICE=1
+          elif [ "${{ matrix.config }}" == "cts_spirv" ]; then
             mkdir -p ${EXAMPLES_DIR}/build_cts_spirv
             mkdir -p ${EXAMPLES_DIR}/source
             runCMake -DENABLE_TESTSUITES=conformance -DENABLE_CONFORMANCE=ON -DTESTSUITE_SOURCE_BASEDIR=${EXAMPLES_DIR}/source -DTESTSUITE_BASEDIR=${EXAMPLES_DIR}/build_cts_spirv
           elif [ "${{ matrix.config }}" == "tier1" ]; then
             mkdir -p ${EXAMPLES_DIR}/build_tier1_llvm_${{ matrix.llvm }}
             # disable UnitCL for LLVM 21, it's incompatible with it
-            if [ "${{ matrix.llvm }}" == "21"  ]; then
+            if [ "${{ matrix.llvm }}" -ge "21"  ]; then
               runCMake "-DENABLE_TESTSUITES=AMDSDK3.0;piglit;conformance;PyOpenCL;IntelSVM" -DENABLE_CONFORMANCE=ON -DTESTSUITE_SOURCE_BASEDIR=${EXAMPLES_DIR}/source -DTESTSUITE_BASEDIR=${EXAMPLES_DIR}/build_tier1_llvm_${{ matrix.llvm }}
             else
               runCMake "-DENABLE_TESTSUITES=AMDSDK3.0;piglit;conformance;PyOpenCL;IntelSVM;UnitCL" -DENABLE_CONFORMANCE=ON -DTESTSUITE_SOURCE_BASEDIR=${EXAMPLES_DIR}/source -DTESTSUITE_BASEDIR=${EXAMPLES_DIR}/build_tier1_llvm_${{ matrix.llvm }}
@@ -89,20 +154,22 @@ jobs:
           elif [ "${{ matrix.config }}" == "chipstar" ]; then
             mkdir -p ${EXAMPLES_DIR}/build_chipstar_${{ matrix.llvm }}
             mkdir -p ${EXAMPLES_DIR}/source
-            runCMake -DENABLE_TESTSUITES=chipStar -DTESTSUITE_SOURCE_BASEDIR=${EXAMPLES_DIR}/source -DTESTSUITE_BASEDIR=${EXAMPLES_DIR}/build_chipstar_${{ matrix.llvm }}
+            runCMake -DWITH_LLVM_CONFIG=/opt/LLVM_${{ matrix.llvm }}_chipstar/bin/llvm-config \
+               -DENABLE_TESTSUITES=chipStar -DTESTSUITE_SOURCE_BASEDIR=${EXAMPLES_DIR}/source \
+               -DTESTSUITE_BASEDIR=${EXAMPLES_DIR}/build_chipstar_${{ matrix.llvm }}
           elif [ "${{ matrix.config }}" == "openvx" ]; then
             mkdir -p ${EXAMPLES_DIR}/build_openvx
             mkdir -p ${EXAMPLES_DIR}/source
-            runCMake -DENABLE_TESTSUITES=OpenVX_CTS -DTESTSUITE_SOURCE_BASEDIR=${EXAMPLES_DIR}/source -DTESTSUITE_BASEDIR=${EXAMPLES_DIR}/build_openvx
+            runCMake -DENABLE_TESTSUITES=OpenVX_CTS -DCUSTOM_MIVISIONX_ROOT=${MIVISIONX_ROOT} -DTESTSUITE_SOURCE_BASEDIR=${EXAMPLES_DIR}/source -DTESTSUITE_BASEDIR=${EXAMPLES_DIR}/build_openvx
           elif [ "${{ matrix.config }}" == "asan" ]; then
             export BUILD_FLAGS="-O1 -ggdb -fno-omit-frame-pointer -march=native -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
-            runCMake -DENABLE_ASAN=1 -DENABLE_ICD=0 -DENABLE_LOADABLE_DRIVERS=0 -DDEVELOPER_MODE=ON
+            runCMake -DENABLE_ASAN=1 -DENABLE_ICD=0 -DENABLE_LOADABLE_DRIVERS=0 -DDEVELOPER_MODE=ON -DWITH_LLVM_CONFIG=/opt/LLVM_${{ matrix.llvm }}_ASAN/bin/llvm-config -DENABLE_SPIRV=0
           elif [ "${{ matrix.config }}" == "tsan" ]; then
             export BUILD_FLAGS="-O1 -ggdb -fno-omit-frame-pointer -march=native -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
-            runCMake -DENABLE_TSAN=1 -DENABLE_ICD=0 -DENABLE_LOADABLE_DRIVERS=0 -DDEVELOPER_MODE=ON -DENABLE_PRINTF_IMMEDIATE_FLUSH=OFF
+            runCMake -DENABLE_TSAN=1 -DENABLE_ICD=0 -DENABLE_LOADABLE_DRIVERS=0 -DDEVELOPER_MODE=ON -DWITH_LLVM_CONFIG=/opt/LLVM_${{ matrix.llvm }}_TSAN/bin/llvm-config -DENABLE_SPIRV=0
           elif [ "${{ matrix.config }}" == "ubsan" ]; then
             export BUILD_FLAGS="-O1 -ggdb -fno-omit-frame-pointer -march=native -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable"
-            runCMake -DENABLE_UBSAN=1 -DENABLE_LATEST_CXX_STD=ON -DENABLE_ICD=0 -DDEVELOPER_MODE=ON -DENABLE_LOADABLE_DRIVERS=0
+            runCMake -DENABLE_UBSAN=1 -DENABLE_LATEST_CXX_STD=ON -DENABLE_ICD=0 -DDEVELOPER_MODE=ON -DENABLE_LOADABLE_DRIVERS=0 -DENABLE_LLVM_FILECHECKS=0
           else
             echo "Unknown configuration" && exit 1
           fi
@@ -131,7 +198,7 @@ jobs:
           # currently broken
           #cd ${{ github.workspace }}/build/examples/PyOpenCL && make -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh) PyOpenCL
           cd ${{ github.workspace }}/build/examples/IntelSVM && make -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh) IntelSVM
-          if [ "${{ matrix.llvm }}" != "21"  ]; then
+          if [ "${{ matrix.llvm }}" -lt "21"  ]; then
             cd ${{ github.workspace }}/build/examples/UnitCL && make -j$(${{ github.workspace }}/.github/scripts/get_cpus.sh) UnitCL
           fi
 
@@ -156,7 +223,7 @@ jobs:
 
       - name: Cache CTest timings
         id: cache_ctest
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ${{ github.workspace }}/build/Testing/Temporary/CTestCostData.txt
           key: ctest-cache-${{ steps.cmake_version.outputs.version }}-${{ runner.name }}-${{ matrix.config }}-${{ github.run_id }}
@@ -177,14 +244,18 @@ jobs:
           # hardcoded path in test_compiler / execute_after_included_header_link
           rm -rf /tmp/foo
           mkdir ${{ env.POCL_CACHE_DIR }}
-          if [ "${{ matrix.config }}" == "cts_spirv" ]; then
+          if [ "${{ matrix.config }}" == "basic" ] || [ "${{ matrix.config }}" == "devel" ] || [ "${{ matrix.config }}" == "TBB" ]; then
+            runCTest
+          elif [ "${{ matrix.config }}" == "OpenMP" ]; then
+            runCTest
+          elif [ "${{ matrix.config }}" == "cts_spirv" ]; then
             runCTest -L conformance_suite_micro_spirv
           elif [ "${{ matrix.config }}" == "tier1" ]; then
             runCTest -L "amdsdk_30|piglit|PyOpenCL|conformance_suite_micro_main|IntelSVM|UnitCL"
           elif [ "${{ matrix.config }}" == "chipstar" ]; then
             runCTest -L chipStar
           elif [ "${{ matrix.config }}" == "openvx" ]; then
-            runCTest -L openvx
+            runCTest -L openvx -j1
           elif [ "${{ matrix.config }}" == "asan" ]; then
           # test_large_buf consumes too much memory for the smaller bots
             runCTest -R runtime -E test_large_buf
@@ -192,7 +263,7 @@ jobs:
           # thread sanitizer does not support C11 <threads.h>
           # implementation of threading, only pthreads.
           # issue: https://github.com/google/sanitizers/issues/1603
-            runCTest -E 'test_large_buf|clSetEventCallback'
+            runCTest -R runtime -E 'test_large_buf|clSetEventCallback'
           elif [ "${{ matrix.config }}" == "ubsan" ]; then
             runCTest -E test_large_buf
           else

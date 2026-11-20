@@ -9,13 +9,8 @@ updates:
     directory: "/" # Location of package manifests
     schedule:
       interval: "weekly"
-
-  - package-ecosystem: "docker"
-    directories:
-      - "/tools/docker/Ubuntu"
-      - "/tools/docker/ArchLinux"
-    schedule:
-      interval: "weekly"
-    commit-message:
-      # Prefix all commit messages with "[docker] " (no colon, but a trailing whitespace)
-      prefix: "[docker] "
+    groups:
+      codeql-dependencies:
+        applies-to: "version-updates"
+        patterns:
+          - "github/codeql-action/*"

@@ -137,6 +137,16 @@ pocl.
  default cache directory will be used, which is ``$XDG_CACHE_HOME/pocl/kcache``
  (if set) or ``$HOME/.cache/pocl/kcache/`` on Unix-like systems.
 
+- **POCL_CPU_JIT**
+
+ Specific to the CPU drivers, and only effective when PoCL was built with
+ ``-DHOST_CPU_ENABLE_JIT=ON``. Set to 0 to link kernels into shared libraries
+ and ``dlopen()`` them (in-process through lld where compiled in, through the
+ Clang driver otherwise) rather than loading them with the in-process
+ ORC/JITLink loader. Read once at device initialization; defaults to 1. Use it
+ to work around a JIT-specific problem without rebuilding PoCL. See
+ :ref:`cpu-jit`.
+
 - **POCL_CPU_LOCAL_MEM_SIZE**
 
  Set the local memory size of the CPU devices (cpu, cpu-minimal, cpu-tbb) to the
@@ -169,6 +179,19 @@ pocl.
  'error', 'warning', 'general', 'memory', 'llvm', 'events', 'cache', 'locking',
  'refcounts', 'timing', 'hsa', 'tce', 'cuda', 'vulkan', 'proxy' and 'all'.
  Note: setting POCL_DEBUG to 1 still works and equals error+warning+general.
+
+- **POCL_DEBUG_LLVM_OPTS**
+
+  Set LLVM options for debugging purposes. Multiple options are
+  supported and are separated by ``,``. Options taking values are
+  defined as ``-some-option=some-value``. Leading dashes on the option
+  names are optional.
+
+  Most of the options listed in ``opt-XX --help`` and ``opt-XX
+  --help-hidden`` are assumed to work but some of them may be
+  unavailable due to being tied to specific tools and not to the LLVM
+  library or depending on the configuration of LLVM (e.g. ``-debug``
+  may not work in release builds of LLVM).
 
 - **POCL_DEBUG_LLVM_PASSES**
 
@@ -280,7 +303,7 @@ pocl.
   if enabled, some drivers (CUDA, CPU, Level0) use an extra step of
   verification of LLVM modules at certain stages (program.bc always,
   kernel bitcode (parallel.bc) only with some drivers).
-  Defaults to 0 if CMAKE_BUILD_TYPE=Debug and 1 otherwise.
+  Defaults to 1 if CMAKE_BUILD_TYPE=Debug and 0 otherwise.
 
 - **POCL_MAX_WORK_GROUP_SIZE**
 
@@ -348,7 +371,7 @@ pocl.
 - **POCL_REMOTE_XXX**
 
  These variables are used to configure different aspects of the remote driver
- and daemon. See :ref:`remote_label` for details.
+ and daemon. See :ref:`remote-label` for details.
 
   * **POCL_REMOTE_SEARCH_DOMAINS** -- To specify DNS domains for unicast-DNS-SD
                                    based discovery queries.

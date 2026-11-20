@@ -28,21 +28,44 @@ set(C_PROGRAMS_TO_BUILD test_assign_loop_variable_to_privvar_makes_it_local
      test_program_from_binary_with_local_1_1_1
      test_assign_loop_variable_to_privvar_makes_it_local_2
      test_llvm_segfault_issue_889
-     test_issue_1711 test_issue_1794 test_issue_1747
+     test_issue_1711 test_issue_1794 test_issue_1747 test_issue_1958
+     test_unreachable_kernel
+     test_spirv_float_controls2
+     test_unreachable_in_infinite_loop
      test_rematerialized_alloca_load_with_outside_pr_users
+     test_peeled_wi_global_id
+     test_multi_exit_barrier_region
+     test_divergent_implicit_barrier_entry
+     test_uniform_implicit_barrier_entry
+     test_localmem_load_across_barrier
+     test_replicated_wi_subgroup_alloca
+     test_spirv_intel_subgroups
+     test_indirect_ptrs
+     test_usm_indirect_ptrs
+     test_usm_free_realloc
+     test_large_private_workgroup
+     test_sanitize_divrem
+     test_cr_divide_sqrt_option
+     test_tall_grid
 )
+if(UNIX)
+  list(APPEND C_PROGRAMS_TO_BUILD test_signal_handlers)
+endif()
 foreach(PROG ${C_PROGRAMS_TO_BUILD})
   add_executable("${PROG}" "${PROG}.c")
   target_link_libraries("${PROG}" ${POCLU_LINK_OPTIONS})
   add_symlink_to_built_opencl_dynlib("${PROG}")
 endforeach()
 
+target_include_directories(test_indirect_ptrs
+  PRIVATE $<TARGET_PROPERTY:${POCL_LIBRARY_NAME},INCLUDE_DIRECTORIES>)
 
 set(PROGRAMS_TO_BUILD test_barrier_between_for_loops test_early_return
   test_for_with_var_iteration_count test_id_dependent_computation
   test_locals test_multi_level_loops_with_barriers
   test_simple_for_with_a_barrier test_structs_as_args test_vectors_as_args
-  test_barrier_before_return test_infinite_loop test_constant_array
+  test_barrier_before_return test_infinite_loop test_infinite_loop_with_barrier
+  test_constant_array
   test_undominated_variable test_setargs test_null_arg
   test_fors_with_var_iteration_counts test_issue_231 test_issue_445
   test_autolocals_in_constexprs test_issue_553 test_issue_577 test_issue_757
@@ -52,7 +75,12 @@ set(PROGRAMS_TO_BUILD test_barrier_between_for_loops test_early_return
   test_workitem_func_outside_kernel test_program_scope_vars test_issue_1548
   test_issue_1525 test_issue_1608 test_issue_1826 test_builtin_regression
   test_mem_host_ptr_issue test_issue_1962 test_issue_2005
+  test_global_atomics test_large_stack_frame test_linear_filter_border
+  test_rect_copy_null test_trig_lane_mix
 )
+if(UNIX)
+  list(APPEND PROGRAMS_TO_BUILD test_issue_2174)
+endif()
 
 if (MSVC)
   add_compile_options(${OPENCL_CFLAGS})
@@ -80,6 +108,10 @@ endif()
 
 add_test_pocl(NAME "regression/test_issue_231" COMMAND "test_issue_231")
 
+add_test_pocl(NAME "regression/test_global_atomics" COMMAND "test_global_atomics")
+add_cpu_jit_test("atomics" test_global_atomics)
+add_cpu_jit_test("stack_probe" test_large_stack_frame)
+
 add_test_pocl(NAME "regression/test_issue_445" COMMAND "test_issue_445")
 
 add_test_pocl(NAME "regression/test_issue_553" COMMAND "test_issue_553")
@@ -89,6 +121,10 @@ add_test_pocl(NAME "regression/test_issue_577" COMMAND "test_issue_577")
 add_test_pocl(NAME "regression/test_issue_757" COMMAND "test_issue_757")
 
 add_test_pocl(NAME "regression/test_issue_1435" COMMAND "test_issue_1435")
+
+add_test_pocl(NAME "regression/test_linear_filter_border" COMMAND "test_linear_filter_border")
+
+add_test_pocl(NAME "regression/test_rect_copy_null" COMMAND "test_rect_copy_null")
 
 # fails on windows/MinGW with "access violation"
 add_test_pocl(NAME "regression/test_issue_1525" LABELS "mingw_fail;win_fail"
@@ -100,8 +136,11 @@ add_test_pocl(NAME "regression/test_issue_1608" COMMAND "test_issue_1608")
 
 add_test_pocl(NAME "regression/test_issue_1826" COMMAND "test_issue_1826")
 
+add_test_pocl(NAME "regression/test_trig_lane_mix" COMMAND "test_trig_lane_mix")
+
 add_test_pocl(NAME "regression/test_builtin_regression"
   COMMAND "test_builtin_regression")
+add_cpu_jit_test("kernel_library" test_builtin_regression)
 
 
 add_test_pocl(NAME "regression/test_mem_host_ptr_issue"
@@ -110,6 +149,23 @@ add_test_pocl(NAME "regression/test_mem_host_ptr_issue"
 add_test_pocl(NAME "regression/test_issue_1962" COMMAND "test_issue_1962")
 
 add_test_pocl(NAME "regression/test_issue_2005" COMMAND "test_issue_2005")
+
+if(UNIX)
+  add_test_pocl(NAME "regression/test_issue_2174" COMMAND "test_issue_2174")
+  # libxsmm_init(), called during device initialization, installs its own
+  # SIGSEGV and SIGABRT handlers.
+  if(NOT HAVE_LIBXSMM)
+    add_test_pocl(NAME "regression/test_signal_handlers" COMMAND "test_signal_handlers")
+    # The basic driver runs kernels on the application's thread.
+    if(BUILD_BASIC)
+      add_test_pocl(NAME "regression/test_signal_handlers_basic" COMMAND "test_signal_handlers")
+      foreach(VARIANT loopvec cbs)
+        set_tests_properties("regression/test_signal_handlers_basic_${VARIANT}" PROPERTIES
+          ENVIRONMENT "POCL_WORK_GROUP_METHOD=${VARIANT};POCL_DEVICES=basic")
+      endforeach()
+    endif()
+  endif()
+endif()
 
 add_test_pocl(NAME "regression/test_workitem_func_outside_kernel" COMMAND "test_workitem_func_outside_kernel")
 
@@ -139,6 +195,45 @@ add_test_pocl(NAME "regression/test_issue_1794b" COMMAND "test_issue_1794" "0" "
 
 add_test_pocl(NAME "regression/test_issue_1747" COMMAND "test_issue_1747" "0" "${CMAKE_CURRENT_SOURCE_DIR}/test_issue_1747.spv" LABELS ${SPIRV_LABELS})
 
+add_test_pocl(NAME "regression/test_issue_1958" WORKITEM_HANDLER "loops;loopvec;cbs;" COMMAND "test_issue_1958" LABELS ${SPIRV_LABELS})
+
+add_test_pocl(NAME "regression/test_unreachable_kernel" WORKITEM_HANDLER "loops;loopvec;cbs;" COMMAND "test_unreachable_kernel" LABELS ${SPIRV_LABELS})
+
+add_test_pocl(NAME "regression/test_spirv_float_controls2" WORKITEM_HANDLER "loops;loopvec;cbs;" COMMAND "test_spirv_float_controls2" LABELS ${SPIRV_LABELS})
+
+add_test_pocl(NAME "regression/unreachable_in_infinite_loop" WORKITEM_HANDLER "loops;loopvec;cbs;" COMMAND "test_unreachable_in_infinite_loop")
+
+add_test_pocl(NAME "regression/peeled_wi_global_id" WORKITEM_HANDLER "loopvec;cbs;" COMMAND "test_peeled_wi_global_id" LABELS ${SPIRV_LABELS})
+
+add_test_pocl(NAME "regression/multi_exit_barrier_region" WORKITEM_HANDLER "loops;loopvec;cbs;" COMMAND "test_multi_exit_barrier_region" LABELS ${SPIRV_LABELS})
+
+add_test_pocl(NAME "regression/spirv_intel_subgroups" WORKITEM_HANDLER "loops;loopvec;cbs;" COMMAND "test_spirv_intel_subgroups" LABELS ${SPIRV_LABELS})
+
+add_test_pocl(NAME "regression/divergent_implicit_barrier_entry" WORKITEM_HANDLER "loops;loopvec;cbs;" COMMAND "test_divergent_implicit_barrier_entry")
+
+add_test_pocl(NAME "regression/tall_grid" COMMAND "test_tall_grid")
+
+add_test_pocl(NAME "regression/uniform_implicit_barrier_entry" WORKITEM_HANDLER "loops;loopvec;cbs;" COMMAND "test_uniform_implicit_barrier_entry")
+
+add_test_pocl(NAME "regression/localmem_load_across_barrier" WORKITEM_HANDLER "loops;loopvec;cbs;" COMMAND "test_localmem_load_across_barrier")
+
+add_test_pocl(NAME "regression/replicated_wi_subgroup_alloca" WORKITEM_HANDLER "loops;loopvec;cbs;" COMMAND "test_replicated_wi_subgroup_alloca")
+set_tests_properties("regression/replicated_wi_subgroup_alloca_loops" PROPERTIES ENVIRONMENT "POCL_WORK_GROUP_METHOD=loops;POCL_WILOOPS_MAX_UNROLL_COUNT=4")
+set_tests_properties("regression/replicated_wi_subgroup_alloca_loopvec" PROPERTIES ENVIRONMENT "POCL_WORK_GROUP_METHOD=loopvec;POCL_WILOOPS_MAX_UNROLL_COUNT=4")
+
+add_test_pocl(NAME "regression/test_indirect_ptrs" COMMAND "test_indirect_ptrs")
+
+add_test_pocl(NAME "regression/test_usm_indirect_ptrs" COMMAND "test_usm_indirect_ptrs")
+
+add_test_pocl(NAME "regression/test_usm_free_realloc" COMMAND "test_usm_free_realloc" WORKITEM_HANDLER "loopvec")
+
+add_test_pocl(NAME "regression/test_large_private_workgroup" COMMAND "test_large_private_workgroup")
+add_test_pocl(NAME "regression/test_sanitize_divrem" COMMAND "test_sanitize_divrem" LABELS ${SPIRV_LABELS})
+
+# Builds only; the CUDA and Vulkan devices lack CL_FP_CORRECTLY_ROUNDED_DIVIDE_SQRT.
+add_test_pocl(NAME "regression/test_cr_divide_sqrt_option" COMMAND "test_cr_divide_sqrt_option"
+  WORKITEM_HANDLER "loopvec" LABELS "cuda;vulkan;level0")
+
 add_test_pocl(NAME "regression/test_issue_893" COMMAND "test_issue_893")
 
 add_test_pocl(NAME "regression/test_flatten_barrier_subs" COMMAND "test_flatten_barrier_subs" EXPECTED_OUTPUT "test_flatten_barrier_subs.output")
@@ -160,6 +255,8 @@ add_test_pocl(NAME "regression/id-dependent_computation_before_kernel_exit" WORK
 add_test_pocl(NAME "regression/barrier_just_before_return" WORKITEM_HANDLER "loopvec;cbs;" COMMAND "test_barrier_before_return")
 
 add_test_pocl(NAME "regression/infinite_loop" WORKITEM_HANDLER "loopvec;cbs;" COMMAND "test_infinite_loop")
+
+add_test_pocl(NAME "regression/infinite_loop_with_barrier" WORKITEM_HANDLER "loopvec;cbs;" COMMAND "test_infinite_loop_with_barrier")
 
 add_test_pocl(NAME "regression/undominated_variable_from_conditional_barrier_handling"
   WORKITEM_HANDLER "loopvec;cbs;" COMMAND "test_undominated_variable")
@@ -191,6 +288,7 @@ set_tests_properties(
   "regression/id-dependent_computation_before_kernel_exit_${VARIANT}"
   "regression/barrier_just_before_return_${VARIANT}"
   "regression/infinite_loop_${VARIANT}"
+  "regression/infinite_loop_with_barrier_${VARIANT}"
   "regression/undominated_variable_from_conditional_barrier_handling_${VARIANT}"
   "regression/assigning_a_loop_iterator_variable_to_a_private_makes_it_local_${VARIANT}"
   "regression/assigning_a_loop_iterator_variable_to_a_private_makes_it_local_2_${VARIANT}"
@@ -317,6 +415,11 @@ set_property(TEST
   "regression/test_flatten_barrier_subs_cbs"
   "regression/infinite_loop_loopvec"
   "regression/infinite_loop_cbs"
+  "regression/infinite_loop_with_barrier_loopvec"
+  "regression/infinite_loop_with_barrier_cbs"
+  "regression/unreachable_in_infinite_loop_loops"
+  "regression/unreachable_in_infinite_loop_loopvec"
+  "regression/unreachable_in_infinite_loop_cbs"
   APPEND PROPERTY LABELS "mingw_fail")
 
 # Label tests that work with CUDA backend
@@ -384,6 +487,14 @@ set_property(TEST
   "regression/test_alignment_with_dynamic_wg3_loopvec"
   "regression/clSetKernelArg_overwriting_the_previous_kernel's_args_loopvec"
   APPEND PROPERTY LABELS "vulkan")
+
+# Label tests that work with MLIR
+set_property(TEST
+  "regression/clSetKernelArg_overwriting_the_previous_kernel's_args_cbs"
+  "regression/test_issue_445_cbs"
+  "regression/test_issue_757_cbs"
+  "regression/test_workitem_func_outside_kernel_cbs"
+  APPEND PROPERTY LABELS "mlir")
 
 if(ENABLE_LEVEL0)
 set_property(TEST

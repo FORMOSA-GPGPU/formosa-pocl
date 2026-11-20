@@ -31,7 +31,9 @@
 #ifndef _DEFAULT_SOURCE
 #define _DEFAULT_SOURCE
 #endif
+#ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
+#endif
 
 #include <errno.h>
 #include <limits.h>
@@ -292,13 +294,16 @@ pocl_create_event (cl_event *event,
 
   /* user events have a NULL command queue, don't retain it */
   if (command_queue)
-    POname (clRetainCommandQueue) (command_queue);
+    PoCLRetainCommandQueue (command_queue);
   else
     POname (clRetainContext) (context);
 
   (*event)->command_type = command_type;
   (*event)->id = POCL_ATOMIC_INC (event_id_counter);
   (*event)->status = CL_QUEUED;
+  /* Events may be recycled from the mem-manager free list without a memset,
+     so explicitly clear this flag here. */
+  (*event)->failed_dependency = 0;
 
   if (command_type == CL_COMMAND_USER)
     POCL_ATOMIC_INC (uevent_c);
@@ -359,17 +364,36 @@ pocl_create_event_sync (cl_event notifier_event, cl_event waiting_event)
         }
     }
 
-  /* If the notifier event is already complete (or failed),
-     don't create an event sync. This is fine since if the wait
-     event has no notifier events and gets submitted, it can start
-     right away.
+  /* If the notifier event is already complete, don't create an event sync.
+     This is fine since if the wait event has no notifier events and gets
+     submitted, it can start right away.
    */
-  if (notifier_event->status < 0 || notifier_event->status == CL_COMPLETE)
+  if (notifier_event->status == CL_COMPLETE)
     {
       POCL_MSG_PRINT_EVENTS (
         "notifier event %" PRIu64
         " already complete, not creating sync with event %" PRIu64 "\n",
         notifier_event->id, waiting_event->id);
+      goto FINISH;
+    }
+
+  /* If the notifier event is already in a failed (negative) status, we must
+     NOT run the waiting command: per the OpenCL spec a command whose wait-list
+     event has a negative status must be terminated with the error cascade.
+     We do not create a sync edge (the notifier has already broadcast and won't
+     do so again, so the normal broadcast->notify failure path can't fire), and
+     we cannot fail the waiting event inline because we hold the command-queue
+     lock here (would deadlock in pocl_update_event_finished). Instead we record
+     the broken dependency on the waiting event; the device submit path checks
+     this flag and fails the command via the error cascade. */
+  if (notifier_event->status < 0)
+    {
+      POCL_MSG_PRINT_EVENTS (
+        "notifier event %" PRIu64
+        " already failed, marking waiting event %" PRIu64
+        " as having a broken dependency\n",
+        notifier_event->id, waiting_event->id);
+      waiting_event->failed_dependency = 1;
       goto FINISH;
     }
 
@@ -414,9 +438,9 @@ FINISH:
  * device.
  *
  * @return 0 If any of the allocations fails (can't run the command). */
-static int
-preallocate_buffers (cl_device_id dev,
-                     pocl_buffer_migration_info *migration_infos)
+int
+pocl_preallocate_buffers (cl_device_id dev,
+                          pocl_buffer_migration_info *migration_infos)
 {
   size_t i;
   int errcode;
@@ -531,8 +555,8 @@ pocl_create_command_full (_cl_command_node **cmd,
   int err = CL_SUCCESS;
   size_t i;
 
-  POCL_RETURN_ERROR_ON ((*dev->available == CL_FALSE), CL_INVALID_DEVICE,
-                        "device is not available\n");
+  POCL_RETURN_ERROR_ON ((POCL_ATOMIC_LOAD (dev->available) == CL_FALSE),
+                        CL_INVALID_DEVICE, "device is not available\n");
 
   if (buffer_usage != NULL)
     {
@@ -544,7 +568,7 @@ pocl_create_command_full (_cl_command_node **cmd,
           migr_info->buffer = POCL_MEM_BS (migr_info->buffer);
         }
 
-      if (!preallocate_buffers (dev, buffer_usage))
+      if (!pocl_preallocate_buffers (dev, buffer_usage))
         return CL_OUT_OF_RESOURCES;
     }
 
@@ -734,186 +758,6 @@ pocl_create_command (_cl_command_node **cmd,
 {
   return pocl_create_command_full (cmd, command_queue, command_type, event_p,
                                    num_events, wait_list, migration_infos, 0);
-}
-
-cl_int
-pocl_cmdbuf_validate_queue_list (cl_uint num_queues,
-                                 const cl_command_queue *queues)
-{
-  POCL_RETURN_ERROR_COND ((num_queues == 0), CL_INVALID_VALUE);
-  POCL_RETURN_ERROR_COND ((queues == NULL), CL_INVALID_VALUE);
-
-  /* All queues must have the same OpenCL context */
-  cl_context ref_ctx = queues[0]->context;
-
-  for (unsigned i = 0; i < num_queues; ++i)
-    {
-      /* All queues must be valid Command queue objects */
-      POCL_RETURN_ERROR_COND ((!IS_CL_OBJECT_VALID (queues[i])),
-                              CL_INVALID_COMMAND_QUEUE);
-
-      POCL_RETURN_ERROR_COND ((queues[i]->device == NULL),
-                              CL_INVALID_COMMAND_QUEUE);
-
-      POCL_RETURN_ERROR_COND ((queues[i]->context == NULL),
-                              CL_INVALID_COMMAND_QUEUE);
-
-      POCL_RETURN_ERROR_COND ((queues[i]->context != ref_ctx),
-                              CL_INVALID_COMMAND_QUEUE);
-    }
-
-  return CL_SUCCESS;
-}
-
-cl_int
-pocl_cmdbuf_choose_recording_queue (cl_command_buffer_khr command_buffer,
-                                    cl_command_queue *command_queue)
-{
-  assert (command_queue != NULL);
-  cl_command_queue q = *command_queue;
-
-  POCL_RETURN_ERROR_COND ((q == NULL && command_buffer->num_queues != 1),
-                          CL_INVALID_COMMAND_QUEUE);
-
-  if (q)
-    {
-      POCL_RETURN_ERROR_COND (
-          (command_buffer->queues[0]->context != q->context),
-          CL_INVALID_CONTEXT);
-      int queue_in_buffer = 0;
-      for (unsigned i = 0; i < command_buffer->num_queues; ++i)
-        {
-          if (q == command_buffer->queues[i])
-            queue_in_buffer = 1;
-        }
-      POCL_RETURN_ERROR_COND ((!queue_in_buffer), CL_INVALID_COMMAND_QUEUE);
-    }
-  else
-    q = command_buffer->queues[0];
-
-  *command_queue = q;
-  return CL_SUCCESS;
-}
-
-cl_command_buffer_properties_khr
-pocl_cmdbuf_get_property (cl_command_buffer_khr command_buffer,
-                          cl_command_buffer_properties_khr name)
-{
-  for (unsigned i = 0; i < command_buffer->num_properties; ++i)
-    {
-      if (command_buffer->properties[2 * i] == name)
-        return command_buffer->properties[2 * i + 1];
-    }
-  return 0;
-}
-
-/**
- * Create a command buffered command node.
- *
- * The node contains the minimum information to "clone" launchable
- * commands in clEnqueueCommandBufferKHR.c.
- */
-cl_int
-pocl_create_recorded_command (_cl_command_node **cmd,
-                              cl_command_buffer_khr command_buffer,
-                              cl_command_queue command_queue,
-                              cl_command_type command_type,
-                              cl_uint num_sync_points_in_wait_list,
-                              const cl_sync_point_khr *sync_point_wait_list,
-                              pocl_buffer_migration_info *buffer_usage)
-{
-  cl_int errcode = pocl_check_syncpoint_wait_list (
-    command_buffer, num_sync_points_in_wait_list, sync_point_wait_list);
-  if (errcode != CL_SUCCESS)
-    return errcode;
-
-  if (buffer_usage != NULL)
-    {
-      /* If the buffer is an image backed by buffer storage,
-         replace with actual storage. */
-      pocl_buffer_migration_info *migr_info = NULL;
-      LL_FOREACH (buffer_usage, migr_info)
-        if (migr_info->buffer->buffer)
-          migr_info->buffer = migr_info->buffer->buffer;
-
-      if (!preallocate_buffers (command_queue->device, buffer_usage))
-        return CL_OUT_OF_RESOURCES;
-    }
-
-  *cmd = pocl_mem_manager_new_command ();
-  POCL_RETURN_ERROR_COND ((*cmd == NULL), CL_OUT_OF_HOST_MEMORY);
-  (*cmd)->type = command_type;
-  (*cmd)->buffered = 1;
-
-  /* pocl_cmdbuf_choose_recording_queue should have been called to ensure we
-   * have a valid command queue, usually via CMDBUF_VALIDATE_COMMON_HANDLES
-   * but at that time *cmd was not allocated at that time, so find the queue
-   * index again here */
-  for (unsigned i = 0; i < command_buffer->num_queues; ++i)
-    {
-      if (command_buffer->queues[i] == command_queue)
-        (*cmd)->queue_idx = i;
-    }
-
-  (*cmd)->sync.syncpoint.num_sync_points_in_wait_list
-    = num_sync_points_in_wait_list;
-  if (num_sync_points_in_wait_list > 0)
-    {
-      cl_sync_point_khr *wait_list
-        = malloc (sizeof (cl_sync_point_khr) * num_sync_points_in_wait_list);
-      if (wait_list == NULL)
-        {
-          POCL_MEM_FREE (*cmd);
-          return CL_OUT_OF_HOST_MEMORY;
-        }
-      memcpy (wait_list, sync_point_wait_list,
-              sizeof (cl_sync_point_khr) * num_sync_points_in_wait_list);
-      (*cmd)->sync.syncpoint.sync_point_wait_list = wait_list;
-    }
-
-  (*cmd)->migr_infos = buffer_usage;
-  pocl_buffer_migration_info *migr_info = NULL;
-
-  /* We need to retain the buffers as we expect them to be executed
-     later. They are retained again for each executed instance in
-     pocl_create_migration_commands() and those references are freed
-     after the executed instance is freed.  This one is freed at
-     command buffer free time. */
-  LL_FOREACH (buffer_usage, migr_info)
-    POname (clRetainMemObject) (migr_info->buffer);
-
-  return CL_SUCCESS;
-}
-
-cl_int
-pocl_command_record (cl_command_buffer_khr command_buffer,
-                     _cl_command_node *cmd, cl_sync_point_khr *sync_point)
-{
-  POCL_LOCK (command_buffer->mutex);
-  if (command_buffer->state != CL_COMMAND_BUFFER_STATE_RECORDING_KHR)
-    {
-      POCL_UNLOCK (command_buffer->mutex);
-      return CL_INVALID_OPERATION;
-    }
-  pocl_buffer_migration_info *mi;
-  LL_FOREACH (cmd->migr_infos, mi)
-    {
-      /* Note: mem object refcounts are NOT bumped here as deduplicating them
-       * to match the migration info list would introduce unnecessary
-       * complexity. The recorded commands themselves already hold counted
-       * references to their buffers and they are expected to live until the
-       * entire command buffer is destroyed. */
-      command_buffer->migr_infos = pocl_append_unique_migration_info (
-        command_buffer->migr_infos, mi->buffer, mi->read_only);
-    }
-  LL_APPEND (command_buffer->cmds, cmd);
-
-  if (sync_point != NULL)
-    *sync_point = command_buffer->num_syncpoints + 1;
-  command_buffer->num_syncpoints++;
-  cmd->cmd_buffer = command_buffer;
-  POCL_UNLOCK (command_buffer->mutex);
-  return CL_SUCCESS;
 }
 
 /* call with node->sync.event.event UNLOCKED */
@@ -1251,66 +1095,116 @@ check_copy_overlap(const size_t src_offset[3],
                    const size_t region[3],
                    const size_t row_pitch, const size_t slice_pitch)
 {
-  const size_t src_min[] = {src_offset[0], src_offset[1], src_offset[2]};
-  const size_t src_max[] = {src_offset[0] + region[0],
-                            src_offset[1] + region[1],
-                            src_offset[2] + region[2]};
-  const size_t dst_min[] = {dst_offset[0], dst_offset[1], dst_offset[2]};
-  const size_t dst_max[] = {dst_offset[0] + region[0],
-                            dst_offset[1] + region[1],
-                            dst_offset[2] + region[2]};
-  int overlap = 1;
-  unsigned i;
-  for (i=0; i != 3; ++i)
+  /* The algorithm of the current OpenCL specification's appendix, "Checking
+     for Memory Copy Overlap". The version previously here was the older
+     appendix code, which both reported overlap for disjoint regions (e.g.
+     OpenCL-CTS test_basic bufferreadwriterect) and missed some real
+     overlaps. The caller has already resolved zero pitches. */
+  const size_t slice_size = (region[1] - 1) * row_pitch + region[0];
+  const size_t block_size = (region[2] - 1) * slice_pitch + slice_size;
+  const size_t src_start
+      = src_offset[2] * slice_pitch + src_offset[1] * row_pitch + src_offset[0];
+  const size_t src_end = src_start + block_size;
+  const size_t dst_start
+      = dst_offset[2] * slice_pitch + dst_offset[1] * row_pitch + dst_offset[0];
+  const size_t dst_end = dst_start + block_size;
+
+  /* No overlap if dst ends before src starts or src ends before dst starts. */
+  if ((dst_end <= src_start) || (src_end <= dst_start))
+    return 0;
+
+  /* No overlap if region[0] for dst or src fits in the gap between
+     region[0] and row_pitch. */
   {
-    overlap = overlap && (src_min[i] < dst_max[i])
-                      && (src_max[i] > dst_min[i]);
+    const size_t src_dx = src_offset[0] % row_pitch;
+    const size_t dst_dx = dst_offset[0] % row_pitch;
+    if (((dst_dx >= src_dx + region[0])
+         && (dst_dx + region[0] <= src_dx + row_pitch))
+        || ((src_dx >= dst_dx + region[0])
+            && (src_dx + region[0] <= dst_dx + row_pitch)))
+      return 0;
   }
 
-  size_t dst_start =  dst_offset[2] * slice_pitch +
-                      dst_offset[1] * row_pitch + dst_offset[0];
-  size_t dst_end = dst_start + (region[2] * slice_pitch +
-                                region[1] * row_pitch + region[0]);
-  size_t src_start =  src_offset[2] * slice_pitch +
-                      src_offset[1] * row_pitch + src_offset[0];
-  size_t src_end = src_start + (region[2] * slice_pitch +
-                                region[1] * row_pitch + region[0]);
-
-  if (!overlap)
+  /* No overlap if region[1] for dst or src fits in the gap between
+     region[1] and slice_pitch. */
   {
-    size_t delta_src_x = (src_offset[0] + region[0] > row_pitch) ?
-                          src_offset[0] + region[0] - row_pitch : 0;
-    size_t delta_dst_x = (dst_offset[0] + region[0] > row_pitch) ?
-                          dst_offset[0] + region[0] - row_pitch : 0;
-    if ( (delta_src_x > 0 && delta_src_x > dst_offset[0]) ||
-          (delta_dst_x > 0 && delta_dst_x > src_offset[0]) )
-      {
-        if ( (src_start <= dst_start && dst_start < src_end) ||
-          (dst_start <= src_start && src_start < dst_end) )
-          overlap = 1;
-      }
+    const size_t src_dy
+        = (src_offset[1] * row_pitch + src_offset[0]) % slice_pitch;
+    const size_t dst_dy
+        = (dst_offset[1] * row_pitch + dst_offset[0]) % slice_pitch;
+    if (((dst_dy >= src_dy + slice_size)
+         && (dst_dy + slice_size <= src_dy + slice_pitch))
+        || ((src_dy >= dst_dy + slice_size)
+            && (src_dy + slice_size <= dst_dy + slice_pitch)))
+      return 0;
+  }
 
-    if (region[2] > 1)
+  /* Otherwise src and dst overlap. */
+  return 1;
+}
+
+/* Whether a rectangular copy between two different sub-buffers of the same
+   parent overlaps. Offsets are each sub-buffer's origin in the parent; the
+   caller has already resolved zero pitches. With equal pitches, the
+   sub-buffer offset folds into origin[0] and the appendix algorithm above is
+   exact. With different pitches it doesn't apply; each side is then
+   region[1] * region[2] rows of region[0] bytes, and the pitch rules make
+   each side's rows, in (z, y) order, increasing and disjoint, so one merge
+   over the two sorted row lists decides overlap exactly. */
+int
+pocl_check_subbuffer_copy_overlap (size_t src_base, const size_t src_origin[3],
+                                   size_t src_row_pitch,
+                                   size_t src_slice_pitch, size_t dst_base,
+                                   const size_t dst_origin[3],
+                                   size_t dst_row_pitch,
+                                   size_t dst_slice_pitch,
+                                   const size_t region[3])
+{
+  if (src_row_pitch == dst_row_pitch && src_slice_pitch == dst_slice_pitch)
     {
-      size_t src_height = slice_pitch / row_pitch;
-      size_t dst_height = slice_pitch / row_pitch;
-
-      size_t delta_src_y = (src_offset[1] + region[1] > src_height) ?
-                            src_offset[1] + region[1] - src_height : 0;
-      size_t delta_dst_y = (dst_offset[1] + region[1] > dst_height) ?
-                            dst_offset[1] + region[1] - dst_height : 0;
-
-      if ( (delta_src_y > 0 && delta_src_y > dst_offset[1]) ||
-            (delta_dst_y > 0 && delta_dst_y > src_offset[1]) )
-      {
-        if ( (src_start <= dst_start && dst_start < src_end) ||
-              (dst_start <= src_start && src_start < dst_end) )
-              overlap = 1;
-      }
+      const size_t s[3] = { src_origin[0] + src_base, src_origin[1], src_origin[2] };
+      const size_t d[3] = { dst_origin[0] + dst_base, dst_origin[1], dst_origin[2] };
+      return check_copy_overlap (s, d, region, src_row_pitch, src_slice_pitch);
     }
-  }
 
-  return overlap;
+  const size_t w = region[0];
+  const size_t s0 = src_base + src_origin[2] * src_slice_pitch
+                    + src_origin[1] * src_row_pitch + src_origin[0];
+  const size_t d0 = dst_base + dst_origin[2] * dst_slice_pitch
+                    + dst_origin[1] * dst_row_pitch + dst_origin[0];
+  const size_t s_end = s0 + (region[2] - 1) * src_slice_pitch
+                       + (region[1] - 1) * src_row_pitch + w;
+  const size_t d_end = d0 + (region[2] - 1) * dst_slice_pitch
+                       + (region[1] - 1) * dst_row_pitch + w;
+  if (d_end <= s0 || s_end <= d0)
+    return 0;
+
+  size_t sy = 0, sz = 0, dy = 0, dz = 0;
+  for (;;)
+    {
+      size_t a = s0 + sz * src_slice_pitch + sy * src_row_pitch;
+      size_t b = d0 + dz * dst_slice_pitch + dy * dst_row_pitch;
+      if (a + w <= b)
+        {
+          if (++sy == region[1])
+            {
+              sy = 0;
+              if (++sz == region[2])
+                return 0;
+            }
+        }
+      else if (b + w <= a)
+        {
+          if (++dy == region[1])
+            {
+              dy = 0;
+              if (++dz == region[2])
+                return 0;
+            }
+        }
+      else
+        return 1;
+    }
 }
 
 /* For a subdevice parameter, return the actual device it belongs to. */
@@ -1486,6 +1380,7 @@ pocl_setup_context (cl_context context)
         props |= CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE;
       context->default_queues[i]
         = POname (clCreateCommandQueue) (context, dev, props, &err);
+      context->default_queues[i]->user_refcount = 0;
 
       if (err == CL_DEVICE_NOT_AVAILABLE)
         return CL_DEVICE_NOT_AVAILABLE;
@@ -1892,6 +1787,37 @@ pocl_update_event_finished (cl_int status, const char *func, unsigned line,
   cl_command_queue cq = event->queue;
   POCL_LOCK_OBJ (cq);
   POCL_LOCK_OBJ (event);
+  /* Idempotency guard: an event can be driven to a terminal state twice,
+   * concurrently, from two different pocl_broadcast threads. This affects ANY
+   * command with more than one wait-list dependency, not just markers/barriers.
+   * Two interleavings produce it on a failing chain:
+   *
+   *   - Two dependencies finish in ERROR concurrently. Each pocl_broadcast
+   *     calls notify(), which takes the finished->status < CL_COMPLETE branch
+   *     and fails the waiter via pocl_update_event_finished -- twice.
+   *   - One dependency FAILS (failing the waiter) while another dependency's
+   *     COMPLETION drives the waiter terminal too (for a marker/barrier that is
+   *     completion-as-termination; for a regular command it can additionally
+   *     race the submit/execute path).
+   *
+   * These transitions are not mutually exclusive because pocl_broadcast tests
+   * the waiter's "still pending" gate (status == CL_QUEUED/SUBMITTED) BEFORE
+   * calling notify, and notify drops the event lock (a lock-order dance with
+   * the command queue) before the new status is written -- so a second
+   * broadcast can read the stale pre-terminal status and call in here on an
+   * event the first finisher is already terminating.
+   *
+   * OpenCL event state is monotonic: once terminal (CL_COMPLETE or a negative
+   * error) it never changes again, so a second finish is a no-op. The check is
+   * taken under the event lock, so exactly one caller finishes the event and
+   * the other returns cleanly. Bail under the locks we already hold
+   * (reverse-order unlock). */
+  if (event->status <= CL_COMPLETE)
+    {
+      POCL_UNLOCK_OBJ (event);
+      POCL_UNLOCK_OBJ (cq);
+      return;
+    }
   assert (event->status > CL_COMPLETE);
   if ((cq->properties & CL_QUEUE_PROFILING_ENABLE)
       && (cq->device->has_own_timer == 0))
@@ -1956,16 +1882,11 @@ pocl_update_event_finished (cl_int status, const char *func, unsigned line,
   }
 
   /* NOTE this must be called before we call broadcast, see above */
-  if (event->reset_command_buffer)
-  {
-    assert (command_buffer);
-    POCL_LOCK (command_buffer->mutex);
-    command_buffer->pending -= 1;
-    if (command_buffer->pending == 0)
-        command_buffer->state = CL_COMMAND_BUFFER_STATE_EXECUTABLE_KHR;
-    POCL_UNLOCK (command_buffer->mutex);
-    POname (clReleaseCommandBufferKHR) (command_buffer);
-  }
+  if (event->release_command_buffer)
+    {
+      assert (command_buffer);
+      POname (clReleaseCommandBufferKHR) (command_buffer);
+    }
 
   ops->broadcast (event);
 
@@ -2397,25 +2318,18 @@ pocl_free_kernel_metadata (cl_program program, unsigned kernel_i)
       POCL_MEM_FREE (meta->arg_info[j].name);
       POCL_MEM_FREE (meta->arg_info[j].type_name);
     }
-  POCL_MEM_FREE (meta->max_subgroups);
-  POCL_MEM_FREE (meta->compile_subgroups);
-  POCL_MEM_FREE (meta->max_workgroup_size);
-  POCL_MEM_FREE (meta->preferred_wg_multiple);
-  POCL_MEM_FREE (meta->local_mem_size);
-  POCL_MEM_FREE (meta->private_mem_size);
-  POCL_MEM_FREE (meta->spill_mem_size);
   POCL_MEM_FREE (meta->arg_info);
-  if (meta->data != NULL)
-    for (j = 0; j < program->num_devices; ++j)
-      if (meta->data[j] != NULL)
-        {
-          POCL_MSG_WARN ("kernel metadata not freed\n");
-          meta->data[j] = NULL; // TODO free data in driver callback
-        }
-  POCL_MEM_FREE (meta->data);
   if (program->builtin_kernel_names == NULL)
     POCL_MEM_FREE (meta->local_sizes);
   POCL_MEM_FREE (meta->build_hash);
+  for (j = 0; j < program->associated_num_devices; ++j)
+    {
+      if (program->kernel_meta[kernel_i].devices[j].driver_data)
+        POCL_MSG_WARN ("Driver-specific kernel metadata not freed in "
+                       "program=%lu for device=%u!\n",
+                       program->id, j);
+    }
+  POCL_MEM_FREE (program->kernel_meta[kernel_i].devices);
 }
 
 int

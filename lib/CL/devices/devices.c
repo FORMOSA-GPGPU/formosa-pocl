@@ -85,11 +85,9 @@
 #ifdef BUILD_CUDA
 #include "cuda/pocl-cuda.h"
 #endif
-
 #ifdef BUILD_FORMOSA
 #include "formosa/pocl-formosa.h"
 #endif
-
 #ifdef BUILD_SIMTSIM
 #include "simtsim/pocl-simtsim.h"
 #endif
@@ -164,43 +162,43 @@ typedef void (*init_device_ops)(struct pocl_device_ops*);
 /* All init function for device operations available to pocl */
 static init_device_ops pocl_devices_init_ops[] = {
 #ifdef BUILD_BASIC
-    INIT_DEV(basic),
+  INIT_DEV (basic),
 #endif
 #ifdef BUILD_PTHREAD
-    INIT_DEV(pthread),
+  INIT_DEV (pthread),
 #endif
 #ifdef TCE_AVAILABLE
-    INIT_DEV(ttasim),
+  INIT_DEV (ttasim),
 #endif
 #ifdef BUILD_TBB
-    INIT_DEV(tbb),
+  INIT_DEV (tbb),
 #endif
 #ifdef BUILD_HSA
-    INIT_DEV(hsa),
+  INIT_DEV (hsa),
 #endif
 #ifdef BUILD_CUDA
-    INIT_DEV(cuda),
+  INIT_DEV (cuda),
 #endif
 #ifdef BUILD_FORMOSA
-    INIT_DEV(formosa),
+  INIT_DEV (formosa),
 #endif
 #ifdef BUILD_SIMTSIM
-    INIT_DEV(simtsim),
+  INIT_DEV (simtsim),
 #endif
 #ifdef BUILD_ALMAIF
-    INIT_DEV(almaif),
+  INIT_DEV (almaif),
 #endif
 #ifdef BUILD_PROXY
-    INIT_DEV(proxy),
+  INIT_DEV (proxy),
 #endif
 #ifdef BUILD_VULKAN
-    INIT_DEV(vulkan),
+  INIT_DEV (vulkan),
 #endif
 #ifdef BUILD_LEVEL0
-    INIT_DEV(level0),
+  INIT_DEV (level0),
 #endif
 #ifdef BUILD_REMOTE_CLIENT
-    INIT_DEV(remote),
+  INIT_DEV (remote),
 #endif
 };
 
@@ -208,43 +206,43 @@ static init_device_ops pocl_devices_init_ops[] = {
 
 char pocl_device_types[POCL_NUM_DEVICE_TYPES][33] = {
 #ifdef BUILD_BASIC
-    "basic",
+  "basic",
 #endif
 #ifdef BUILD_PTHREAD
-    "pthread",
+  "pthread",
 #endif
 #ifdef BUILD_TBB
-    "tbb",
+  "tbb",
 #endif
 #ifdef TCE_AVAILABLE
-    "ttasim",
+  "ttasim",
 #endif
 #ifdef BUILD_HSA
-    "hsa",
+  "hsa",
 #endif
 #ifdef BUILD_CUDA
-    "cuda",
+  "cuda",
 #endif
 #ifdef BUILD_FORMOSA
-    "formosa",
+  "formosa",
 #endif
 #ifdef BUILD_SIMTSIM
-    "simtsim",
+  "simtsim",
 #endif
 #ifdef BUILD_ALMAIF
-    "almaif",
+  "almaif",
 #endif
 #ifdef BUILD_PROXY
-    "proxy",
+  "proxy",
 #endif
 #ifdef BUILD_VULKAN
-    "vulkan",
+  "vulkan",
 #endif
 #ifdef BUILD_LEVEL0
-    "level0",
+  "level0",
 #endif
 #ifdef BUILD_REMOTE_CLIENT
-    "remote",
+  "remote",
 #endif
 };
 
@@ -373,7 +371,8 @@ pocl_get_devices (cl_device_type device_type, cl_device_id *devices,
 
   LL_FOREACH_ATOMIC (pocl_devices, device)
   {
-    if (!pocl_offline_compile && (*device->available == CL_FALSE))
+    if (!pocl_offline_compile
+        && (POCL_ATOMIC_LOAD_PTR (device->available) == CL_FALSE))
       continue;
 
     if (device_type == CL_DEVICE_TYPE_DEFAULT)
@@ -417,7 +416,8 @@ pocl_get_device_type_count(cl_device_type device_type)
 
   LL_FOREACH_ATOMIC (pocl_devices, device)
   {
-    if (!pocl_offline_compile && (*device->available == CL_FALSE))
+    if (!pocl_offline_compile
+        && (POCL_ATOMIC_LOAD_PTR (device->available) == CL_FALSE))
       continue;
 
     if (device->type & device_type)
@@ -476,10 +476,6 @@ pocl_uninit_devices ()
     }
 
 FINISH:
-#ifdef ENABLE_SIGFPE_HANDLER
-  pocl_destroy_sigfpe_handler ();
-#endif
-
   devices_active = 0;
   POCL_UNLOCK (pocl_init_lock);
 
@@ -699,9 +695,6 @@ pocl_init_devices (cl_platform_id platform)
     sleep (delay);
 #endif
 
-#ifdef ENABLE_SIGFPE_HANDLER
-  pocl_install_sigfpe_handler ();
-#endif
 #ifdef ENABLE_SIGUSR2_HANDLER
   if (pocl_get_bool_option ("POCL_SIGUSR2_HANDLER", 0))
     {

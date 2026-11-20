@@ -41,6 +41,7 @@ ctz.cl
 convert_type.cl
 copysign.cl
 cross.cl
+degrees.cl
 distance.cl
 dot.cl
 fast_distance.cl
@@ -120,6 +121,7 @@ pocl_run_all_wgs.c
 popcount.cl
 prefetch.cl
 printf.c
+radians.cl
 read_image.cl
 rhadd.cl
 rotate.cl
@@ -165,8 +167,6 @@ libclc-pocl/acosh.cl
 libclc-pocl/asinh.cl
 libclc-pocl/atanh.cl
 libclc-pocl/ep_log.cl
-libclc-pocl/radians.cl
-libclc-pocl/degrees.cl
 libclc-pocl/log2.cl
 libclc-pocl/logb.cl
 # currently unused
@@ -252,113 +252,69 @@ list(APPEND SOURCES_WITH_SLEEF "host/addrspace_operators.ll" "host/addrspace_ope
 # if ENABLE_HOST_CPU_VECTORIZE_BUILTINS is enabled, use Clang/LLVM builtins
 # this makes vectorization of (some) OpenCL builtins possible,
 # while also making FP16 versions available (if FP16 is available)
-if(ENABLE_HOST_CPU_VECTORIZE_BUILTINS)
+if(ENABLE_HOST_CPU_VECTORIZE_BUILTINS) # implies CONFORMANCE=OFF
   list(REMOVE_ITEM SOURCES_WITH_SLEEF
     libclc-pocl/cos.cl
-    libclc-pocl/sin.cl
+    libclc-pocl/cosh.cl
+    libclc-pocl/frexp.cl
+    libclc-pocl/isinf.cl
+    libclc-pocl/isnan.cl
+    libclc-pocl/isfinite.cl
+    libclc-pocl/isnormal.cl
     libclc-pocl/log2.cl
     libclc-pocl/pow.cl
+    libclc-pocl/pown.cl
     libclc-pocl/fmod.cl
+    libclc-pocl/rint.cl
+    libclc-pocl/sin.cl
+    libclc-pocl/sinh.cl
+    libclc-pocl/tan.cl
+    libclc-pocl/tanh.cl
 
+    sleef-pocl/acos.cl
+    sleef-pocl/asin.cl
+    sleef-pocl/atan.cl
+    sleef-pocl/ceil.cl
     sleef-pocl/exp.cl
+    sleef-pocl/exp10.cl
     sleef-pocl/exp2.cl
     sleef-pocl/fabs.cl
+    sleef-pocl/fdim.cl
+    sleef-pocl/floor.cl
     sleef-pocl/fma.cl
-
     sleef-pocl/fmax.cl
     sleef-pocl/fmin.cl
     sleef-pocl/log10.cl
-
     sleef-pocl/log.cl
     sleef-pocl/ldexp.cl
     sleef-pocl/rint.cl
     sleef-pocl/round.cl
     sleef-pocl/sqrt.cl
+    sleef-pocl/trunc.cl
 
+    libclc-pocl/pocl_fma.cl
     sleef-pocl/scalars.cl
     )
 
   list(APPEND SOURCES_WITH_SLEEF
-    cos.cl
-    sin.cl
-    log2.cl
-    pow.cl
-    fmod.cl
-
-    exp.cl
-    exp2.cl
-    fabs.cl
-    fma.cl
-
-    fmax.cl
-    fmin.cl
-    log10.cl
-
-    log.cl
-    ldexp.cl
-    rint.cl
-    round.cl
-    sqrt.cl
-  )
-
-  if(LLVM_VERSION VERSION_GREATER_EQUAL 19.0)
-    list(REMOVE_ITEM SOURCES_WITH_SLEEF
-      libclc-pocl/cosh.cl
-      libclc-pocl/sinh.cl
-      libclc-pocl/pown.cl
-      libclc-pocl/tan.cl
-      libclc-pocl/tanh.cl
-      libclc-pocl/isinf.cl
-      libclc-pocl/isnan.cl
-      libclc-pocl/isfinite.cl
-      libclc-pocl/isnormal.cl
-      libclc-pocl/frexp.cl
-
-      # only available on Apple OS X
-      # libclc-pocl/sinpi.cl
-      # libclc-pocl/cospi.cl
-      # libclc-pocl/tanpi.cl
-
-      # these are available as Clang builtins (__builtin_XYZ), but not as LLVM
-      # intrinsics (llvm.XYZ.f32), only library calls.
-      #libclc-pocl/acosh.cl
-      #libclc-pocl/asinh.cl
-      #libclc-pocl/atanh.cl
-      #libclc-pocl/logb.cl
-      #sleef-pocl/log1p.cl
-      #sleef-pocl/expm1.cl
-      #sleef-pocl/modf.cl
-      #sleef-pocl/ilogb.cl
-      #sleef-pocl/hypot.cl
-      #sleef-pocl/atan2.cl
-      #sleef-pocl/erf.cl
-      #sleef-pocl/erfc.cl
-      #sleef-pocl/fdim.cl
-      #sleef-pocl/nextafter.cl
-      #libclc-pocl/remainder.cl
-      #libclc-pocl/remquo.cl
-
-      sleef-pocl/trunc.cl
-      sleef-pocl/ceil.cl
-      sleef-pocl/exp10.cl
-      sleef-pocl/floor.cl
-      sleef-pocl/acos.cl
-      sleef-pocl/asin.cl
-      sleef-pocl/atan.cl
-    )
-  list(APPEND SOURCES_WITH_SLEEF
-    cosh.cl
-    sinh.cl
-    tanh.cl
-    ceil.cl
-
-    pown.cl
-    tan.cl
     acos.cl
     asin.cl
     atan.cl
 
+    ceil.cl
+    cos.cl
+    cosh.cl
+
+    exp.cl
+    exp2.cl
     exp10.cl
+
+    fabs.cl
+    fmod.cl
+    fdim.cl
+    fma.cl
+    fmax.cl
+    fmin.cl
     floor.cl
     frexp.cl
 
@@ -367,17 +323,69 @@ if(ENABLE_HOST_CPU_VECTORIZE_BUILTINS)
     isnan.cl
     isnormal.cl
 
+    ldexp.cl
+    log.cl
+    log10.cl
+    log2.cl
+
+    pow.cl
+    pown.cl
+
+    rint.cl
+    round.cl
+
+    sin.cl
+    sinh.cl
+    sqrt.cl
+
+    tan.cl
+    tanh.cl
+
     trunc.cl
     )
+endif()  # ENABLE_HOST_CPU_VECTORIZE_BUILTINS
+
+# add conformant versions of FP16 builtins from CORE-Math library
+if(HOST_CPU_ENABLE_CL_KHR_FP16)
+  # if VECTORIZE_BUILTINS=ON, add only those FP16 functions for which we don't have LLVM builtins
+  # (= not present in the list above)
+  if(ENABLE_HOST_CPU_VECTORIZE_BUILTINS) # implies CONFORMANCE=OFF
+    foreach(FILE IN ITEMS
+        acospif16.cl  hypotf16.cl    log2p1f16.cl    acoshf16.cl     exp10m1f16.cl
+        atanhf16.cl   cospif16.cl    exp2m1f16.cl    log10p1f16.cl   asinhf16.cl
+        atanpif16.cl  log1pf16.cl     sincosf16.cl    asinpif16.cl   rsqrtf16.cl
+        expm1f16.cl     tanpif16.cl     sinpif16.cl
+        # FP16 ops with no native FP16 builtin and no SLEEF FP16 path: not
+        # covered by the vectorized generic builtins above, so needed here too.
+        promotedf16.cl)
+      list(APPEND SOURCES_WITH_SLEEF "core-math/${FILE}")
+    endforeach()
+  else()
+    # VECTORIZE_BUILTINS=OFF, add all available CORE-math functions
+    foreach(FILE IN ITEMS
+        acosf16.cl    exp10f16.cl     hypotf16.cl    log2p1f16.cl   sinhf16.cl
+        acoshf16.cl   cosf16.cl       exp10m1f16.cl  logf16.cl      sinpif16.cl
+        acospif16.cl  atanf16.cl     coshf16.cl      exp2f16.cl     log10f16.cl    rsqrtf16.cl
+        asinf16.cl    atanhf16.cl    cospif16.cl     exp2m1f16.cl   log10p1f16.cl  tanf16.cl
+        asinhf16.cl   atanpif16.cl   expf16.cl      log1pf16.cl    sincosf16.cl  tanhf16.cl
+        asinpif16.cl  expm1f16.cl    log2f16.cl     sinf16.cl     tanpif16.cl
+        additionalf16.cl  promotedf16.cl)
+      list(APPEND SOURCES_WITH_SLEEF "core-math/${FILE}")
+    endforeach()
   endif()
-
 endif()
-
 
 if(HOST_DEVICE_EXTENSIONS MATCHES "cl_khr_subgroup")
   list(APPEND SOURCES_WITH_SLEEF subgroups.cl)
 endif()
 
+if(HOST_DEVICE_EXTENSIONS MATCHES "cl_khr_extended_bit_ops")
+  list(APPEND SOURCES_WITH_SLEEF extended_bitops.cl)
+endif()
+
+if(HOST_DEVICE_EXTENSIONS MATCHES "cl_khr_integer_dot_product")
+  list(APPEND SOURCES_WITH_SLEEF integer_dot_product.cl)
+endif()
 
 if(HOST_DEVICE_EXTENSIONS MATCHES "cl_khr_kernel_clock")
   list(APPEND SOURCES_WITH_SLEEF kernel_clock.cl)
@@ -427,6 +435,11 @@ else()
 endif()
 endif()
 
+# limit OpenCL C version to 3.0 when using LLVM < 23
+if((LLVM_VERSION_MAJOR LESS 23) AND (HOST_DEVICE_CL_VERSION_MAJOR EQUAL 3))
+ set(HOST_DEVICE_CL_VERSION_MINOR 0)
+endif()
+
 set(HOST_DEVICE_CL_VERSION_3DIGIT "${HOST_DEVICE_CL_VERSION_MAJOR}${HOST_DEVICE_CL_VERSION_MINOR}0")
 set(HOST_DEVICE_CL_VERSION_STD  "${HOST_DEVICE_CL_VERSION_MAJOR}.${HOST_DEVICE_CL_VERSION_MINOR}")
 
@@ -437,6 +450,12 @@ set(KERNEL_CL_FLAGS
       "-DENABLE_CONFORMANCE=$<BOOL:${ENABLE_CONFORMANCE}>"
       "-DENABLE_SLEEF=1"
       ${KERNEL_CL_FLAGS})
+
+# this is necessary to avoid thousands of warnings printed
+# when compiling CORE-math library without doubles
+if(NOT HOST_CPU_ENABLE_CL_KHR_FP64)
+  list(APPEND KERNEL_CL_FLAGS "-cl-single-precision-constant")
+endif()
 
 # https://bugzilla.mozilla.org/show_bug.cgi?id=1657502
 # this *likely* shouldn't be a problem for PoCL, but needs testing
@@ -587,7 +606,7 @@ function(compile_sleef VARIANT SLEEF_CONFIG SLEEF_CONFIG_NEW SLEEF_BC)
   foreach(VECSIZE "512" "256" "128")
 
     set(EXTRA_FLAGS "-DDORENAME;-DVEC${VECSIZE}")
-    custom_try_compile_any(1 "${CLANG}" "c" "${TEST_SRC}" RES
+    custom_try_compile_any(1 "${HOST_CLANG}" "c" "${TEST_SRC}" RES
       ${CLANG_FLAGS} ${EXTRA_FLAGS} "-c")
 
     if(${RES} EQUAL "0")
@@ -602,7 +621,7 @@ function(compile_sleef VARIANT SLEEF_CONFIG SLEEF_CONFIG_NEW SLEEF_BC)
       set(STR "#define SLEEF_VEC_${VECSIZE}_AVAILABLE\n")
       file(APPEND "${SLEEF_CONFIG_NEW}" "${STR}")
 
-      if(ENABLE_SPIRV AND NOT SPIR_WRAPPER_FILE)
+      if(HOST_CPU_ENABLE_SPIRV AND NOT SPIR_WRAPPER_FILE)
         if (ARM)
           generate_cpu_spir_wrapper(cpu_arm ${VARIANT} ${VECSIZE} SPIR_WRAPPER_FILE)
         endif()
@@ -615,7 +634,7 @@ function(compile_sleef VARIANT SLEEF_CONFIG SLEEF_CONFIG_NEW SLEEF_BC)
       message(STATUS "${VARIANT} SLEEF: ${VECSIZE}bit vectors NOT available.")
     endif()
 
-    custom_try_compile_any(1 "${CLANG}" "c" "${FMA_TEST_SRC}" RES
+    custom_try_compile_any(1 "${HOST_CLANG}" "c" "${FMA_TEST_SRC}" RES
       ${CLANG_FLAGS} ${EXTRA_FLAGS} "-c")
     if(${RES} EQUAL "0")
       unset(STR)
@@ -627,7 +646,7 @@ function(compile_sleef VARIANT SLEEF_CONFIG SLEEF_CONFIG_NEW SLEEF_BC)
 
   endforeach()
 
-  if(ENABLE_SPIRV)
+  if(HOST_CPU_ENABLE_SPIRV)
     compile_ll_to_bc("${SPIR_WRAPPER_FILE}" "${VARIANT}" BC_FILE_LIST)
   endif()
 
@@ -638,7 +657,7 @@ function(compile_sleef VARIANT SLEEF_CONFIG SLEEF_CONFIG_NEW SLEEF_BC)
   message(STATUS "${VARIANT} SLEEF bc list: ${BC_FILE_LIST}")
   message(STATUS "${VARIANT} SLEEF bc: ${SLEEF_BC}")
 
-  set(LINK_OPT_COMMAND COMMAND "${LLVM_LINK}" "--suppress-warnings" "-o" "${SLEEF_BC}" ${BC_FILE_LIST})
+  set(LINK_OPT_COMMAND COMMAND "${HOST_LLVM_LINK}" "--suppress-warnings" "-o" "${SLEEF_BC}" ${BC_FILE_LIST})
 
   add_custom_command( OUTPUT "${SLEEF_BC}"
     DEPENDS ${BC_FILE_LIST}
@@ -661,7 +680,7 @@ endif()
 if(X86)
   x86_distro_variant_to_flags("${VARIANT}" LLC_CPUFLAGS CLANG_CPUFLAGS)
 elseif(RISCV)
-  set(CLANG_CPUFLAGS "-mcpu=${VARIANT} -mabi=${HOST_CPU_TARGET_ABI}")
+  set(CLANG_CPUFLAGS "${CLANG_MARCH_FLAG}${VARIANT} -mabi=${HOST_CPU_TARGET_ABI}")
 
   if(LLVM_MARCH)
     set(CLANG_CPUFLAGS "${CLANG_CPUFLAGS} -march=${LLVM_MARCH}")
@@ -741,19 +760,20 @@ install(FILES "${KERNEL_BC}"
 endforeach()
 
 
-if(CPU_USE_LLD_LINK_WIN32)
+# the runtime-free MSVC kernel link needs the bundled helper objects
+if(CPU_USE_LLD_LINK AND MSVC)
   set(LIBCHKSTK_OBJ "${CMAKE_CURRENT_BINARY_DIR}/libchkstk.obj")
   set(LIBCHKSTK_SRC "${CMAKE_CURRENT_SOURCE_DIR}/libchkstk.S")
   add_custom_command( OUTPUT "${LIBCHKSTK_OBJ}"
       DEPENDS ${LIBCHKSTK_SRC}
-      COMMAND ${CLANG} -DCHKSTK -o ${LIBCHKSTK_OBJ} -c ${LIBCHKSTK_SRC}
+      COMMAND ${HOST_CLANG} -DCHKSTK -o ${LIBCHKSTK_OBJ} -c ${LIBCHKSTK_SRC}
       COMMENT "Compiling CHKSTK" VERBATIM)
 
   set(LIBMEMORY_OBJ "${CMAKE_CURRENT_BINARY_DIR}/libmemory.obj")
   set(LIBMEMORY_SRC "${CMAKE_CURRENT_SOURCE_DIR}/libmemory.c")
   add_custom_command( OUTPUT "${LIBMEMORY_OBJ}"
       DEPENDS ${LIBMEMORY_SRC}
-      COMMAND ${CLANG} -DMEMSET -DMEMCPY -DMEMMOVE -DMEMCMP -DSTRLEN -Os -fno-builtin --target=${LLVM_HOST_TARGET} -o ${LIBMEMORY_OBJ} -c ${LIBMEMORY_SRC}
+      COMMAND ${HOST_CLANG} -DMEMSET -DMEMCPY -DMEMMOVE -DMEMCMP -DSTRLEN -Os -fno-builtin --target=${LLVM_HOST_TARGET} -o ${LIBMEMORY_OBJ} -c ${LIBMEMORY_SRC}
       COMMENT "Linking STRING library" VERBATIM)
 
   add_custom_target("kernel_host_freestanding" DEPENDS ${LIBCHKSTK_OBJ} ${LIBMEMORY_OBJ})

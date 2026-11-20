@@ -29,8 +29,6 @@ set(TS_BASEDIR "${TESTSUITE_BASEDIR}/${TS_NAME}")
 set(TS_BUILDDIR "${TS_BASEDIR}/src/${TS_NAME}-build")
 set(TS_SRCDIR "${TS_BASEDIR}/src/${TS_NAME}")
 
-get_property(is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
-
 if(NOT HAVE_GIT)
   message(STATUS "Disabling testsuite ${TS_NAME}, requires git to checkout sources")
   return()
@@ -87,7 +85,7 @@ if(CUSTOM_CTS_GIT_TAG)
   set(CTS_GIT_TAG "${CUSTOM_CTS_GIT_TAG}")
 else()
   # Use PoCL's fork which has pending fixes.
-  set(CTS_GIT_TAG "v2025.07.11")
+  set(CTS_GIT_TAG "v2026.11.08")
 endif()
 
 set(TS_BUILDDIR "${TS_BUILDDIR}/test_conformance")
@@ -96,20 +94,17 @@ set(TS_SRCDIR "${TS_SRCDIR}/test_conformance")
 if(ENABLE_SPIRV AND HAVE_SPIRV_TOOLS)
   message(STATUS "OpenCL-CTS: SPIR-V tests enabled")
 else()
-  message(WARNING "llvm-spirv or spirv-tools not found - disabling SPIRV tests in CTS")
+  message(WARNING "SPIRV disabled/not found, or spirv-tools not found - disabling SPIRV tests in CTS")
 endif()
 
-unset(UPSTREAM_CMAKE_ARGS)
-if(NOT is_multi_config AND CMAKE_BUILD_TYPE)
-  set(UPSTREAM_CMAKE_ARGS "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}")
+# UPSTREAM_CMAKE_ARGS selects PoCL's compiler, so passing the same
+# sanitizer flags makes the CTS link the same sanitizer runtime as PoCL.
+if(SANITIZER_OPTIONS)
+  set(CTS_SANITIZER_ARGS
+    "-DCMAKE_C_FLAGS=${SANITIZER_FLAGS_STR}"
+    "-DCMAKE_CXX_FLAGS=${SANITIZER_FLAGS_STR}"
+    "-DCMAKE_EXE_LINKER_FLAGS=${SANITIZER_FLAGS_STR}")
 endif()
-if(CMAKE_C_COMPILER_LAUNCHER)
-  list(APPEND UPSTREAM_CMAKE_ARGS "-DCMAKE_C_COMPILER_LAUNCHER=${CMAKE_C_COMPILER_LAUNCHER}")
-endif()
-if(CMAKE_CXX_COMPILER_LAUNCHER)
-  list(APPEND UPSTREAM_CMAKE_ARGS "-DCMAKE_CXX_COMPILER_LAUNCHER=${CMAKE_CXX_COMPILER_LAUNCHER}")
-endif()
-
 
 ExternalProject_Add(
   ${TS_NAME}
@@ -122,10 +117,10 @@ ExternalProject_Add(
     -DD3D10_IS_SUPPORTED=0 -DD3D11_IS_SUPPORTED=0
     -DGL_IS_SUPPORTED=0 -DGLES_IS_SUPPORTED=0
     -DCL_INCLUDE_DIR=${CMAKE_SOURCE_DIR}/include
+    -DSPIRV_INCLUDE_DIR=/usr
     ${CTS_OPENCL_LIBDIR}
     ${CTS_OPENCL_LIBRARY}
-    -DENABLE_ASAN=${ENABLE_ASAN}
-    -DENABLE_TSAN=${ENABLE_TSAN}
+    ${CTS_SANITIZER_ARGS}
     "${TS_BASEDIR}/src/${TS_NAME}"
   INSTALL_COMMAND ""
 )
@@ -152,6 +147,13 @@ set(MATH_FUNC_LIST acos acosh acospi asin asinh asinpi atan atanh atanpi atan2 a
 # these will not have level0 label assigned
 
 set(CTS_LEVEL0_BLACKLIST
+  # disabled. Fails since CTS @ 2025.11.27
+  # there is a new test, null_required_work_group_size,
+  # this unfortunately fails, possibly could be fixed by editing
+  # the SPIRV input to ZeModuleCreate.
+  conformance_main_api
+  conformance_spirv_api
+
   # disabled. Fails since CTS 2024.10.09; this CTS added
   # testcase printf("%s", "") which causes crash in L0
   conformance_main_printf
@@ -210,13 +212,13 @@ add_test(NAME "${TS_NAME}${TS_SUFFIX}_allocations"
          COMMAND "${TS_BUILDDIR}/allocations/test_allocations" ${EXTRA_ARGS})
 
 set(TEST_THREADS ${HOST_CPU_CORECOUNT})
-if(HOST_CPU_CORECOUNT LESS 4)
+if(HOST_CPU_CORECOUNT LESS 2)
+  set(TEST_THREADS 2)
+endif()
+if(HOST_CPU_CORECOUNT GREATER 4)
   set(TEST_THREADS 4)
 endif()
-if(HOST_CPU_CORECOUNT GREATER 8)
-  set(TEST_THREADS 8)
-endif()
-set(PAR_ARG "--num-worker-threads" ${TEST_THREADS})
+set(PAR_ARG "--num-threadpool-threads" ${TEST_THREADS})
 
 if(TS_SUFFIX STREQUAL "_spirv")
   # min_max_parameter_size...
@@ -234,6 +236,12 @@ else()
            COMMAND "${TS_BUILDDIR}/api/test_api" ${EXTRA_ARGS})
 endif()
 
+if(ENABLE_LEVEL0)
+  # same as main test minus null_required_work_group_size
+  add_test(NAME "${TS_NAME}${TS_SUFFIX}_level0_api"
+           COMMAND "${TS_BUILDDIR}/api/test_api" ${EXTRA_ARGS} "^null_required_work_group_size")
+endif()
+
 add_test(NAME "${TS_NAME}${TS_SUFFIX}_atomics"
          COMMAND "${TS_BUILDDIR}/atomics/test_atomics" ${EXTRA_ARGS})
 
@@ -248,7 +256,7 @@ add_test(NAME "${TS_NAME}${TS_SUFFIX}_commonfns"
 
 add_test(NAME "${TS_NAME}${TS_SUFFIX}_compiler"
          COMMAND "${TS_BUILDDIR}/compiler/test_compiler" ${EXTRA_ARGS}
-         WORKING_DIRECTORY "${TS_BASEDIR}/src/${TS_NAME}/test_conformance/compiler")
+         WORKING_DIRECTORY "${TS_BUILDDIR}/compiler")
 
 add_test(NAME "${TS_NAME}${TS_SUFFIX}_c11_atomics"
          COMMAND "${TS_BUILDDIR}/c11_atomics/test_c11_atomics" ${PAR_ARG} ${EXTRA_ARGS})
@@ -349,7 +357,7 @@ unset(CTS_MATH_TESTS_FULL)
 foreach(MATH_FUNC ${MATH_FUNC_LIST})
   list(APPEND CTS_MATH_TESTS_FULL "${TS_NAME}${TS_SUFFIX}_math_full_${MATH_FUNC}")
   add_test(NAME "${TS_NAME}${TS_SUFFIX}_math_full_${MATH_FUNC}"
-           COMMAND "${TS_BUILDDIR}/math_brute_force/test_bruteforce" ${EXTRA_ARGS} --num-worker-threads 1 ${MATH_FUNC})
+           COMMAND "${TS_BUILDDIR}/math_brute_force/test_bruteforce" ${EXTRA_ARGS} ${PAR_ARG} ${MATH_FUNC})
 endforeach()
 
 #***************************************************************************
@@ -380,15 +388,6 @@ add_test(NAME "${TS_NAME}${TS_SUFFIX}_select"
 
 
 if(ENABLE_SPIRV AND HAVE_SPIRV_TOOLS)
-
-# this test requires a fix in llvm-spirv
-# https://github.com/KhronosGroup/SPIRV-LLVM-Translator/pull/1630
-option(LLVM_SPIRV_SPEC_CONST "llvm-spirv has working --spec-const option" OFF)
-unset(SPIRV_OCL_30_EXTRA_TEST)
-if(LLVM_SPIRV_SPEC_CONST OR (LLVM_VERSION VERSION_GREATER_EQUAL 16.0))
-  set(SPIRV_OCL_30_EXTRA_TEST op_spec_constant_double_simple)
-endif()
-
 add_test(NAME "${TS_NAME}${TS_SUFFIX}_spirv_new"
          COMMAND "${TS_BUILDDIR}/spirv_new/test_spirv_new" ${EXTRA_ARGS}
          WORKING_DIRECTORY "${TS_BUILDDIR}/spirv_new")
@@ -421,6 +420,12 @@ add_test(NAME "${TS_NAME}${TS_SUFFIX}_cl_khr_command_buffer_mutable"
 add_test(NAME "${TS_NAME}${TS_SUFFIX}_cl_khr_semaphore"
          COMMAND "${TS_BUILDDIR}/extensions/cl_khr_semaphore/test_cl_khr_semaphore" ${EXTRA_ARGS})
 
+add_test(NAME "${TS_NAME}${TS_SUFFIX}_cl_ext_buffer_device_address"
+         COMMAND "${TS_BUILDDIR}/extensions/cl_ext_buffer_device_address/test_cl_ext_buffer_device_address" ${EXTRA_ARGS})
+
+add_test(NAME "${TS_NAME}${TS_SUFFIX}_cl_khr_kernel_clock"
+         COMMAND "${TS_BUILDDIR}/extensions/cl_khr_kernel_clock/test_cl_khr_kernel_clock" ${EXTRA_ARGS})
+
 set(OCL_30_TESTS_FULL
     "${TS_NAME}${TS_SUFFIX}_api"
     "${TS_NAME}${TS_SUFFIX}_basic"
@@ -445,6 +450,11 @@ set(OCL_30_TESTS_FULL
 if(ENABLE_SPIRV AND HAVE_SPIRV_TOOLS)
   list(APPEND OCL_30_TESTS_FULL
     "${TS_NAME}${TS_SUFFIX}_spirv_new")
+endif()
+
+if(ENABLE_LEVEL0)
+  list(APPEND OCL_30_TESTS_FULL
+    "${TS_NAME}${TS_SUFFIX}_level0_api")
 endif()
 
 set(CTS_FULL_LIST
@@ -715,7 +725,8 @@ function(add_cts_micro_tests CTS_LABEL TS_SUFFIX)
 set(EXTRA_ARGS ${ARGN})
 
 add_test(NAME "${TS_NAME}${TS_SUFFIX}_api_micro_ocl_30"
-         COMMAND "${TS_BUILDDIR}/api/test_api" ${EXTRA_ARGS} buffer_properties_queries   clone_kernel
+         COMMAND "${TS_BUILDDIR}/api/test_api" ${EXTRA_ARGS} buffer_properties_queries clone_kernel_with_different_args
+         clone_kernel_with_buf_image_kernels clone_kernel_with_exec_info clone_kernel_with_no_args clone_kernel_with_svm_ptrs
          consistency_2d_image_from_buffer   consistency_3d_image_writes   consistency_depth_images
          consistency_device_and_host_timer   consistency_device_enqueue   consistency_il_programs
          consistency_memory_model   consistency_non_uniform_work_group   consistency_pipes
@@ -784,10 +795,7 @@ add_test(NAME "${TS_NAME}${TS_SUFFIX}_integer_ops_micro_ocl_30"
 # compare_pointers
 # builtin_functions
 add_test(NAME "${TS_NAME}${TS_SUFFIX}_generic_AS_micro"
-         COMMAND "${TS_BUILDDIR}/generic_address_space/test_generic_address_space" ${EXTRA_ARGS}
-         function_get_fence function_to_address_space variable_get_fence variable_to_address_space casting conditional_casting chain_casting ternary_operator_casting
-         language_struct language_union multiple_calls_same_function library_function generic_variable_volatile generic_variable_const
-         generic_variable_gentype generic_advanced_casting generic_ptr_to_host_mem generic_ptr_to_host_mem_svm max_number_of_params)
+         COMMAND "${TS_BUILDDIR}/generic_address_space/test_generic_address_space" ${EXTRA_ARGS} "^compare_pointers" "^builtin_functions")
 
 add_test(NAME "${TS_NAME}${TS_SUFFIX}_basic_micro_math"
          COMMAND "${TS_BUILDDIR}/basic/test_basic" ${EXTRA_ARGS} explicit_s2v fpmath fp2int int2fp intmath_int intmath_int2 intmath_int4 intmath_long intmath_long2 intmath_long4)
@@ -838,7 +846,7 @@ add_test(NAME "${TS_NAME}${TS_SUFFIX}_spirv_new_micro_1"
          WORKING_DIRECTORY "${TS_BUILDDIR}/spirv_new")
 
 add_test(NAME "${TS_NAME}${TS_SUFFIX}_spirv_new_micro_2"
-         COMMAND "${TS_BUILDDIR}/spirv_new/test_spirv_new" ${EXTRA_ARGS} function_none  function_inline  function_noinline op_lifetime_simple  op_loop_merge_branch_none op_neg_float  op_neg_double op_not_int4  op_type_opaque_simple  op_phi_2_blocks op_selection_merge_if_none  op_selection_merge_if_flatten op_spec_constant_uchar_simple  op_spec_constant_ushort_simple ${SPIRV_OCL_30_EXTRA_TEST}  op_spec_constant_true_simple op_undef_true_simple op_undef_uint_simple  op_undef_char_simple op_undef_float_simple  op_undef_double_simple op_vector_int4_extract  op_vector_float4_extract op_vector_double2_extract  op_vector_char16_extract  op_vector_int4_insert op_vector_times_scalar_double
+         COMMAND "${TS_BUILDDIR}/spirv_new/test_spirv_new" ${EXTRA_ARGS} function_none  function_inline  function_noinline op_lifetime_simple  op_loop_merge_branch_none op_neg_float  op_neg_double op_not_int4  op_type_opaque_simple  op_phi_2_blocks op_selection_merge_if_none  op_selection_merge_if_flatten op_spec_constant_uchar_simple  op_spec_constant_ushort_simple op_spec_constant_double_simple  op_spec_constant_true_simple op_undef_true_simple op_undef_uint_simple  op_undef_char_simple op_undef_float_simple  op_undef_double_simple op_vector_int4_extract  op_vector_float4_extract op_vector_double2_extract  op_vector_char16_extract  op_vector_int4_insert op_vector_times_scalar_double
          WORKING_DIRECTORY "${TS_BUILDDIR}/spirv_new")
 
 add_test(NAME "${TS_NAME}${TS_SUFFIX}_spirv_new_micro_3"
@@ -890,7 +898,7 @@ add_test(NAME "${TS_NAME}${TS_SUFFIX}_thread_dimensions_micro"
 
 add_test(NAME "${TS_NAME}${TS_SUFFIX}_compiler_micro"
          COMMAND "${TS_BUILDDIR}/compiler/test_compiler" ${EXTRA_ARGS} load_program_source  load_multistring_source  load_two_kernel_source  load_null_terminated_source  load_null_terminated_multi_line_source  load_null_terminated_partial_multi_line_source  load_discreet_length_source  get_program_source  get_program_build_info  get_program_info   async_build  options_build_optimizations  options_build_macro  options_build_macro_existence  options_include_directory  options_denorm_cache  preprocessor_define_udef  preprocessor_include  preprocessor_line_error  preprocessor_pragma  image_macro  simple_compile_only  simple_static_compile_only  simple_extern_compile_only  simple_compile_with_callback  simple_embedded_header_compile  simple_link_only  two_file_regular_variable_access  two_file_regular_struct_access  two_file_regular_function_access  simple_link_with_callback  simple_embedded_header_link  execute_after_simple_compile_and_link  execute_after_simple_compile_and_link_no_device_info  execute_after_simple_compile_and_link_with_defines  execute_after_simple_compile_and_link_with_callbacks  execute_after_simple_library_with_link  execute_after_two_file_link  execute_after_embedded_header_link  execute_after_included_header_link  execute_after_serialize_reload_object  execute_after_serialize_reload_library  simple_library_only  simple_library_with_callback  simple_library_with_link  two_file_link     multiple_files_multiple_libraries  program_binary_type  compile_and_link_status_options_log  features_macro
-         WORKING_DIRECTORY "${TS_BASEDIR}/src/${TS_NAME}/test_conformance/compiler")
+         WORKING_DIRECTORY "${TS_BUILDDIR}/compiler")
 
 # with wimpy mode
 add_test(NAME "${TS_NAME}${TS_SUFFIX}_select_micro_char_char"
@@ -943,7 +951,7 @@ unset(CTS_MATH_TESTS_MICRO)
 foreach(MATH_FUNC ${MATH_FUNC_LIST})
   list(APPEND CTS_MATH_TESTS_MICRO "${TS_NAME}${TS_SUFFIX}_math_micro_${MATH_FUNC}")
   add_test(NAME "${TS_NAME}${TS_SUFFIX}_math_micro_${MATH_FUNC}"
-           COMMAND "${TS_BUILDDIR}/math_brute_force/test_bruteforce" ${EXTRA_ARGS} --num-worker-threads 4 -4 -w ${MATH_FUNC})
+           COMMAND "${TS_BUILDDIR}/math_brute_force/test_bruteforce" ${EXTRA_ARGS} ${PAR_ARG} -4 -w ${MATH_FUNC}) # width 4, wimpy on
 endforeach()
 
 add_test(NAME "${TS_NAME}${TS_SUFFIX}_events_micro"
@@ -983,6 +991,10 @@ if(ENABLE_SPIRV AND HAVE_SPIRV_TOOLS)
     "${TS_NAME}${TS_SUFFIX}_spirv_new_micro_3")
 endif()
 
+if(ENABLE_LEVEL0)
+  list(APPEND OCL_30_TESTS_MICRO
+    "${TS_NAME}${TS_SUFFIX}_level0_api")
+endif()
 
 set(CTS_MICRO_LIST
     "${TS_NAME}${TS_SUFFIX}_allocations_micro_buffer"
@@ -1193,6 +1205,7 @@ ${TS_BUILDDIR}/thread_dimensions
 ${TS_BUILDDIR}/vectors
 ${TS_BUILDDIR}/vulkan
 ${TS_BUILDDIR}/workgroups
+${TS_BUILDDIR}/extensions/cl_ext_buffer_device_address
 ${TS_BUILDDIR}/extensions/cl_ext_cxx_for_opencl
 ${TS_BUILDDIR}/extensions/cl_khr_command_buffer
 ${TS_BUILDDIR}/extensions/cl_khr_command_buffer/cl_khr_command_buffer_mutable_dispatch
@@ -1211,7 +1224,8 @@ ${TS_BUILDDIR}/images/kernel_image_methods
 ${TS_BUILDDIR}/images/kernel_read_write
 ${TS_BUILDDIR}/images/samplerlessReads)
 
-add_custom_target(create_cts_links ALL DEPENDS ${TS_NAME})
+add_custom_target(create_cts_links)
+add_dependencies(${TS_NAME} create_cts_links)
 
 foreach(CTS_DIR IN LISTS OPENCL_CTS_DIR_LIST)
   #message(STATUS "Adding symlink in DIR: ${CTS_DIR}")

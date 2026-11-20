@@ -23,6 +23,7 @@
 */
 
 #include "pocl_cl.h"
+#include "pocl_cmdbuf.h"
 #include "pocl_local_size.h"
 #include "pocl_mem_management.h"
 #include "pocl_shared.h"
@@ -107,10 +108,9 @@ pocl_kernel_calc_wg_size (cl_device_id dev, cl_kernel kernel,
   max_local_z
       = work_dim > 2 ? dev->max_work_item_sizes[2] : 1;
   max_group_size = dev->max_work_group_size;
-  if (kernel->meta->max_workgroup_size
-      && kernel->meta->max_workgroup_size[device_i])
+  if (kernel->meta->devices[device_i].max_workgroup_size > 0)
     {
-      max_group_size = kernel->meta->max_workgroup_size[device_i];
+      max_group_size = kernel->meta->devices[device_i].max_workgroup_size;
     }
 
   if (local_work_size != NULL)
@@ -169,17 +169,34 @@ pocl_kernel_calc_wg_size (cl_device_id dev, cl_kernel kernel,
     }
 
   /* If the kernel has the reqd_work_group_size attribute, then the local
-   * work size _must_ be specified, and it _must_ match the attribute
+   * work size can be specified, and if it is, it _must_ match the attribute
    * specification
    */
   if (kernel->meta->reqd_wg_size[0] > 0 && kernel->meta->reqd_wg_size[1] > 0
       && kernel->meta->reqd_wg_size[2] > 0)
     {
-      POCL_RETURN_ERROR_COND ((local_work_size == NULL
-                               || local_x != kernel->meta->reqd_wg_size[0]
-                               || local_y != kernel->meta->reqd_wg_size[1]
-                               || local_z != kernel->meta->reqd_wg_size[2]),
-                              CL_INVALID_WORK_GROUP_SIZE);
+      int failed_check = (local_x != kernel->meta->reqd_wg_size[0]);
+      if (work_dim > 1)
+        failed_check
+          = failed_check || local_y != kernel->meta->reqd_wg_size[1];
+      if (work_dim > 2)
+        failed_check
+          = failed_check || local_z != kernel->meta->reqd_wg_size[2];
+      POCL_RETURN_ERROR_ON ((local_work_size != NULL && failed_check),
+                            CL_INVALID_WORK_GROUP_SIZE,
+                            "Local WG size doesn't match required WG size.");
+      if (local_work_size == NULL)
+        {
+          local_x = kernel->meta->reqd_wg_size[0];
+          if (work_dim > 1)
+            local_y = kernel->meta->reqd_wg_size[1];
+          else
+            local_y = 1;
+          if (work_dim > 2)
+            local_z = kernel->meta->reqd_wg_size[2];
+          else
+            local_z = 1;
+        }
     }
   /* Otherwise, if the local work size was not specified find the optimal one.
    * Note that at some point we also checked for local > global. This doesn't
@@ -514,7 +531,7 @@ pocl_record_ndrange_kernel (cl_command_buffer_khr command_buffer,
         POname (clRetainSampler) (cmd->command.run.arguments[i].value);
     }
 
-  errcode = pocl_command_record (command_buffer, cmd, sync_point_p);
+  errcode = pocl_cmdbuf_record_command (command_buffer, cmd, sync_point_p);
   if (errcode != CL_SUCCESS)
     goto ERROR;
 
@@ -548,8 +565,6 @@ pocl_ndrange_kernel_common (cl_command_buffer_khr command_buffer,
   size_t local[3] = { 0, 0, 0 };
 
   int errcode = 0;
-
-  size_t raw_ptr_count = 0;
 
   /* A linked list of memobjects implicit migration data. */
   pocl_buffer_migration_info *buf_migrations = NULL;
@@ -610,7 +625,7 @@ pocl_ndrange_kernel_common (cl_command_buffer_khr command_buffer,
     }
   else
     {
-      errcode = pocl_create_recorded_command (
+      errcode = pocl_cmdbuf_create_command (
         cmd_ptr, command_buffer, command_queue, CL_COMMAND_NDRANGE_KERNEL,
         num_items_in_wait_list, sync_point_wait_list, buf_migrations);
     }

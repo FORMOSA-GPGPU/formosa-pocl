@@ -29656,10 +29656,25 @@ ulong16 convert_ulong16_sat(ulong16 x)
 
 #if defined(cl_khr_fp16)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char convert_char_sat(half x)
+{
+  x = select(x, (half)(0), (short)isnan(x));
+  char y = convert_char(x);
+  y = select(y, (char)CHAR_MIN, convert_char(x < (half)CHAR_MIN));
+  y = select(y, (char)CHAR_MAX, convert_char(x >= (half)CHAR_MAX));
+  return y;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 char2 convert_char2_sat(half2 x)
 {
-  x = clamp(x, (half)CHAR_MIN, (half)CHAR_MAX);
-  return convert_char2(x);
+  x = select(x, (half2)(0), (short2)isnan(x));
+  char2 y = convert_char2(x);
+  y = select(y, (char2)CHAR_MIN, convert_char2(x < (half2)CHAR_MIN));
+  y = select(y, (char2)CHAR_MAX, convert_char2(x >= (half2)CHAR_MAX));
+  return y;
 }
 #endif
 
@@ -29667,8 +29682,11 @@ char2 convert_char2_sat(half2 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 char3 convert_char3_sat(half3 x)
 {
-  x = clamp(x, (half)CHAR_MIN, (half)CHAR_MAX);
-  return convert_char3(x);
+  x = select(x, (half3)(0), (short3)isnan(x));
+  char3 y = convert_char3(x);
+  y = select(y, (char3)CHAR_MIN, convert_char3(x < (half3)CHAR_MIN));
+  y = select(y, (char3)CHAR_MAX, convert_char3(x >= (half3)CHAR_MAX));
+  return y;
 }
 #endif
 
@@ -29676,8 +29694,11 @@ char3 convert_char3_sat(half3 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 char4 convert_char4_sat(half4 x)
 {
-  x = clamp(x, (half)CHAR_MIN, (half)CHAR_MAX);
-  return convert_char4(x);
+  x = select(x, (half4)(0), (short4)isnan(x));
+  char4 y = convert_char4(x);
+  y = select(y, (char4)CHAR_MIN, convert_char4(x < (half4)CHAR_MIN));
+  y = select(y, (char4)CHAR_MAX, convert_char4(x >= (half4)CHAR_MAX));
+  return y;
 }
 #endif
 
@@ -29685,8 +29706,11 @@ char4 convert_char4_sat(half4 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 char8 convert_char8_sat(half8 x)
 {
-  x = clamp(x, (half)CHAR_MIN, (half)CHAR_MAX);
-  return convert_char8(x);
+  x = select(x, (half8)(0), (short8)isnan(x));
+  char8 y = convert_char8(x);
+  y = select(y, (char8)CHAR_MIN, convert_char8(x < (half8)CHAR_MIN));
+  y = select(y, (char8)CHAR_MAX, convert_char8(x >= (half8)CHAR_MAX));
+  return y;
 }
 #endif
 
@@ -29694,8 +29718,23 @@ char8 convert_char8_sat(half8 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 char16 convert_char16_sat(half16 x)
 {
-  x = clamp(x, (half)CHAR_MIN, (half)CHAR_MAX);
-  return convert_char16(x);
+  x = select(x, (half16)(0), (short16)isnan(x));
+  char16 y = convert_char16(x);
+  y = select(y, (char16)CHAR_MIN, convert_char16(x < (half16)CHAR_MIN));
+  y = select(y, (char16)CHAR_MAX, convert_char16(x >= (half16)CHAR_MAX));
+  return y;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar convert_uchar_sat(half x)
+{
+  x = select(x, (half)(0), (short)isnan(x));
+  uchar y = convert_uchar(x);
+  y = select(y, (uchar)0, as_uchar(convert_char(x < (half)0)));
+  y = select(y, (uchar)UCHAR_MAX, as_uchar(convert_char(x >= (half)UCHAR_MAX)));
+  return y;
 }
 #endif
 
@@ -29703,8 +29742,11 @@ char16 convert_char16_sat(half16 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 uchar2 convert_uchar2_sat(half2 x)
 {
-  x = clamp(x, (half)0, (half)UCHAR_MAX);
-  return convert_uchar2(x);
+  x = select(x, (half2)(0), (short2)isnan(x));
+  uchar2 y = convert_uchar2(x);
+  y = select(y, (uchar2)0, as_uchar2(convert_char2(x < (half2)0)));
+  y = select(y, (uchar2)UCHAR_MAX, as_uchar2(convert_char2(x >= (half2)UCHAR_MAX)));
+  return y;
 }
 #endif
 
@@ -29712,8 +29754,11 @@ uchar2 convert_uchar2_sat(half2 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 uchar3 convert_uchar3_sat(half3 x)
 {
-  x = clamp(x, (half)0, (half)UCHAR_MAX);
-  return convert_uchar3(x);
+  x = select(x, (half3)(0), (short3)isnan(x));
+  uchar3 y = convert_uchar3(x);
+  y = select(y, (uchar3)0, as_uchar3(convert_char3(x < (half3)0)));
+  y = select(y, (uchar3)UCHAR_MAX, as_uchar3(convert_char3(x >= (half3)UCHAR_MAX)));
+  return y;
 }
 #endif
 
@@ -29721,8 +29766,11 @@ uchar3 convert_uchar3_sat(half3 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 uchar4 convert_uchar4_sat(half4 x)
 {
-  x = clamp(x, (half)0, (half)UCHAR_MAX);
-  return convert_uchar4(x);
+  x = select(x, (half4)(0), (short4)isnan(x));
+  uchar4 y = convert_uchar4(x);
+  y = select(y, (uchar4)0, as_uchar4(convert_char4(x < (half4)0)));
+  y = select(y, (uchar4)UCHAR_MAX, as_uchar4(convert_char4(x >= (half4)UCHAR_MAX)));
+  return y;
 }
 #endif
 
@@ -29730,8 +29778,11 @@ uchar4 convert_uchar4_sat(half4 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 uchar8 convert_uchar8_sat(half8 x)
 {
-  x = clamp(x, (half)0, (half)UCHAR_MAX);
-  return convert_uchar8(x);
+  x = select(x, (half8)(0), (short8)isnan(x));
+  uchar8 y = convert_uchar8(x);
+  y = select(y, (uchar8)0, as_uchar8(convert_char8(x < (half8)0)));
+  y = select(y, (uchar8)UCHAR_MAX, as_uchar8(convert_char8(x >= (half8)UCHAR_MAX)));
+  return y;
 }
 #endif
 
@@ -29739,8 +29790,23 @@ uchar8 convert_uchar8_sat(half8 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 uchar16 convert_uchar16_sat(half16 x)
 {
-  x = clamp(x, (half)0, (half)UCHAR_MAX);
-  return convert_uchar16(x);
+  x = select(x, (half16)(0), (short16)isnan(x));
+  uchar16 y = convert_uchar16(x);
+  y = select(y, (uchar16)0, as_uchar16(convert_char16(x < (half16)0)));
+  y = select(y, (uchar16)UCHAR_MAX, as_uchar16(convert_char16(x >= (half16)UCHAR_MAX)));
+  return y;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short convert_short_sat(half x)
+{
+  x = select(x, (half)(0), (short)isnan(x));
+  short y = convert_short(x);
+  y = select(y, (short)SHRT_MIN, convert_short(x < (half)SHRT_MIN));
+  y = select(y, (short)SHRT_MAX, convert_short(x >= (half)SHRT_MAX));
+  return y;
 }
 #endif
 
@@ -29748,8 +29814,11 @@ uchar16 convert_uchar16_sat(half16 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 short2 convert_short2_sat(half2 x)
 {
-  x = max(x, (half)0);
-  return convert_short2(x);
+  x = select(x, (half2)(0), (short2)isnan(x));
+  short2 y = convert_short2(x);
+  y = select(y, (short2)SHRT_MIN, convert_short2(x < (half2)SHRT_MIN));
+  y = select(y, (short2)SHRT_MAX, convert_short2(x >= (half2)SHRT_MAX));
+  return y;
 }
 #endif
 
@@ -29757,8 +29826,11 @@ short2 convert_short2_sat(half2 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 short3 convert_short3_sat(half3 x)
 {
-  x = max(x, (half)0);
-  return convert_short3(x);
+  x = select(x, (half3)(0), (short3)isnan(x));
+  short3 y = convert_short3(x);
+  y = select(y, (short3)SHRT_MIN, convert_short3(x < (half3)SHRT_MIN));
+  y = select(y, (short3)SHRT_MAX, convert_short3(x >= (half3)SHRT_MAX));
+  return y;
 }
 #endif
 
@@ -29766,8 +29838,11 @@ short3 convert_short3_sat(half3 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 short4 convert_short4_sat(half4 x)
 {
-  x = max(x, (half)0);
-  return convert_short4(x);
+  x = select(x, (half4)(0), (short4)isnan(x));
+  short4 y = convert_short4(x);
+  y = select(y, (short4)SHRT_MIN, convert_short4(x < (half4)SHRT_MIN));
+  y = select(y, (short4)SHRT_MAX, convert_short4(x >= (half4)SHRT_MAX));
+  return y;
 }
 #endif
 
@@ -29775,8 +29850,11 @@ short4 convert_short4_sat(half4 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 short8 convert_short8_sat(half8 x)
 {
-  x = max(x, (half)0);
-  return convert_short8(x);
+  x = select(x, (half8)(0), (short8)isnan(x));
+  short8 y = convert_short8(x);
+  y = select(y, (short8)SHRT_MIN, convert_short8(x < (half8)SHRT_MIN));
+  y = select(y, (short8)SHRT_MAX, convert_short8(x >= (half8)SHRT_MAX));
+  return y;
 }
 #endif
 
@@ -29784,8 +29862,23 @@ short8 convert_short8_sat(half8 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 short16 convert_short16_sat(half16 x)
 {
-  x = max(x, (half)0);
-  return convert_short16(x);
+  x = select(x, (half16)(0), (short16)isnan(x));
+  short16 y = convert_short16(x);
+  y = select(y, (short16)SHRT_MIN, convert_short16(x < (half16)SHRT_MIN));
+  y = select(y, (short16)SHRT_MAX, convert_short16(x >= (half16)SHRT_MAX));
+  return y;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort convert_ushort_sat(half x)
+{
+  x = select(x, (half)(0), (short)isnan(x));
+  ushort y = convert_ushort(x);
+  y = select(y, (ushort)0, as_ushort(convert_short(x < (half)0)));
+  y = select(y, (ushort)USHRT_MAX, as_ushort(convert_short(x >= (half)USHRT_MAX)));
+  return y;
 }
 #endif
 
@@ -29793,8 +29886,11 @@ short16 convert_short16_sat(half16 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 ushort2 convert_ushort2_sat(half2 x)
 {
-  x = max(x, (half)0);
-  return convert_ushort2(x);
+  x = select(x, (half2)(0), (short2)isnan(x));
+  ushort2 y = convert_ushort2(x);
+  y = select(y, (ushort2)0, as_ushort2(convert_short2(x < (half2)0)));
+  y = select(y, (ushort2)USHRT_MAX, as_ushort2(convert_short2(x >= (half2)USHRT_MAX)));
+  return y;
 }
 #endif
 
@@ -29802,8 +29898,11 @@ ushort2 convert_ushort2_sat(half2 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 ushort3 convert_ushort3_sat(half3 x)
 {
-  x = max(x, (half)0);
-  return convert_ushort3(x);
+  x = select(x, (half3)(0), (short3)isnan(x));
+  ushort3 y = convert_ushort3(x);
+  y = select(y, (ushort3)0, as_ushort3(convert_short3(x < (half3)0)));
+  y = select(y, (ushort3)USHRT_MAX, as_ushort3(convert_short3(x >= (half3)USHRT_MAX)));
+  return y;
 }
 #endif
 
@@ -29811,8 +29910,11 @@ ushort3 convert_ushort3_sat(half3 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 ushort4 convert_ushort4_sat(half4 x)
 {
-  x = max(x, (half)0);
-  return convert_ushort4(x);
+  x = select(x, (half4)(0), (short4)isnan(x));
+  ushort4 y = convert_ushort4(x);
+  y = select(y, (ushort4)0, as_ushort4(convert_short4(x < (half4)0)));
+  y = select(y, (ushort4)USHRT_MAX, as_ushort4(convert_short4(x >= (half4)USHRT_MAX)));
+  return y;
 }
 #endif
 
@@ -29820,8 +29922,11 @@ ushort4 convert_ushort4_sat(half4 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 ushort8 convert_ushort8_sat(half8 x)
 {
-  x = max(x, (half)0);
-  return convert_ushort8(x);
+  x = select(x, (half8)(0), (short8)isnan(x));
+  ushort8 y = convert_ushort8(x);
+  y = select(y, (ushort8)0, as_ushort8(convert_short8(x < (half8)0)));
+  y = select(y, (ushort8)USHRT_MAX, as_ushort8(convert_short8(x >= (half8)USHRT_MAX)));
+  return y;
 }
 #endif
 
@@ -29829,8 +29934,23 @@ ushort8 convert_ushort8_sat(half8 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 ushort16 convert_ushort16_sat(half16 x)
 {
-  x = max(x, (half)0);
-  return convert_ushort16(x);
+  x = select(x, (half16)(0), (short16)isnan(x));
+  ushort16 y = convert_ushort16(x);
+  y = select(y, (ushort16)0, as_ushort16(convert_short16(x < (half16)0)));
+  y = select(y, (ushort16)USHRT_MAX, as_ushort16(convert_short16(x >= (half16)USHRT_MAX)));
+  return y;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int convert_int_sat(half x)
+{
+  x = select(x, (half)(0), (short)isnan(x));
+  int y = convert_int(x);
+  y = select(y, (int)INT_MIN, convert_int(x < (half)INT_MIN));
+  y = select(y, (int)INT_MAX, convert_int(x >= (half)INT_MAX));
+  return y;
 }
 #endif
 
@@ -29838,7 +29958,11 @@ ushort16 convert_ushort16_sat(half16 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 int2 convert_int2_sat(half2 x)
 {
-  return convert_int2(x);
+  x = select(x, (half2)(0), (short2)isnan(x));
+  int2 y = convert_int2(x);
+  y = select(y, (int2)INT_MIN, convert_int2(x < (half2)INT_MIN));
+  y = select(y, (int2)INT_MAX, convert_int2(x >= (half2)INT_MAX));
+  return y;
 }
 #endif
 
@@ -29846,7 +29970,11 @@ int2 convert_int2_sat(half2 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 int3 convert_int3_sat(half3 x)
 {
-  return convert_int3(x);
+  x = select(x, (half3)(0), (short3)isnan(x));
+  int3 y = convert_int3(x);
+  y = select(y, (int3)INT_MIN, convert_int3(x < (half3)INT_MIN));
+  y = select(y, (int3)INT_MAX, convert_int3(x >= (half3)INT_MAX));
+  return y;
 }
 #endif
 
@@ -29854,7 +29982,11 @@ int3 convert_int3_sat(half3 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 int4 convert_int4_sat(half4 x)
 {
-  return convert_int4(x);
+  x = select(x, (half4)(0), (short4)isnan(x));
+  int4 y = convert_int4(x);
+  y = select(y, (int4)INT_MIN, convert_int4(x < (half4)INT_MIN));
+  y = select(y, (int4)INT_MAX, convert_int4(x >= (half4)INT_MAX));
+  return y;
 }
 #endif
 
@@ -29862,7 +29994,11 @@ int4 convert_int4_sat(half4 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 int8 convert_int8_sat(half8 x)
 {
-  return convert_int8(x);
+  x = select(x, (half8)(0), (short8)isnan(x));
+  int8 y = convert_int8(x);
+  y = select(y, (int8)INT_MIN, convert_int8(x < (half8)INT_MIN));
+  y = select(y, (int8)INT_MAX, convert_int8(x >= (half8)INT_MAX));
+  return y;
 }
 #endif
 
@@ -29870,7 +30006,23 @@ int8 convert_int8_sat(half8 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 int16 convert_int16_sat(half16 x)
 {
-  return convert_int16(x);
+  x = select(x, (half16)(0), (short16)isnan(x));
+  int16 y = convert_int16(x);
+  y = select(y, (int16)INT_MIN, convert_int16(x < (half16)INT_MIN));
+  y = select(y, (int16)INT_MAX, convert_int16(x >= (half16)INT_MAX));
+  return y;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint convert_uint_sat(half x)
+{
+  x = select(x, (half)(0), (short)isnan(x));
+  uint y = convert_uint(x);
+  y = select(y, (uint)0, as_uint(convert_int(x < (half)0)));
+  y = select(y, (uint)UINT_MAX, as_uint(convert_int(x >= (half)UINT_MAX)));
+  return y;
 }
 #endif
 
@@ -29878,8 +30030,11 @@ int16 convert_int16_sat(half16 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 uint2 convert_uint2_sat(half2 x)
 {
-  x = max(x, (half)0);
-  return convert_uint2(x);
+  x = select(x, (half2)(0), (short2)isnan(x));
+  uint2 y = convert_uint2(x);
+  y = select(y, (uint2)0, as_uint2(convert_int2(x < (half2)0)));
+  y = select(y, (uint2)UINT_MAX, as_uint2(convert_int2(x >= (half2)UINT_MAX)));
+  return y;
 }
 #endif
 
@@ -29887,8 +30042,11 @@ uint2 convert_uint2_sat(half2 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 uint3 convert_uint3_sat(half3 x)
 {
-  x = max(x, (half)0);
-  return convert_uint3(x);
+  x = select(x, (half3)(0), (short3)isnan(x));
+  uint3 y = convert_uint3(x);
+  y = select(y, (uint3)0, as_uint3(convert_int3(x < (half3)0)));
+  y = select(y, (uint3)UINT_MAX, as_uint3(convert_int3(x >= (half3)UINT_MAX)));
+  return y;
 }
 #endif
 
@@ -29896,8 +30054,11 @@ uint3 convert_uint3_sat(half3 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 uint4 convert_uint4_sat(half4 x)
 {
-  x = max(x, (half)0);
-  return convert_uint4(x);
+  x = select(x, (half4)(0), (short4)isnan(x));
+  uint4 y = convert_uint4(x);
+  y = select(y, (uint4)0, as_uint4(convert_int4(x < (half4)0)));
+  y = select(y, (uint4)UINT_MAX, as_uint4(convert_int4(x >= (half4)UINT_MAX)));
+  return y;
 }
 #endif
 
@@ -29905,8 +30066,11 @@ uint4 convert_uint4_sat(half4 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 uint8 convert_uint8_sat(half8 x)
 {
-  x = max(x, (half)0);
-  return convert_uint8(x);
+  x = select(x, (half8)(0), (short8)isnan(x));
+  uint8 y = convert_uint8(x);
+  y = select(y, (uint8)0, as_uint8(convert_int8(x < (half8)0)));
+  y = select(y, (uint8)UINT_MAX, as_uint8(convert_int8(x >= (half8)UINT_MAX)));
+  return y;
 }
 #endif
 
@@ -29914,8 +30078,23 @@ uint8 convert_uint8_sat(half8 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 uint16 convert_uint16_sat(half16 x)
 {
-  x = max(x, (half)0);
-  return convert_uint16(x);
+  x = select(x, (half16)(0), (short16)isnan(x));
+  uint16 y = convert_uint16(x);
+  y = select(y, (uint16)0, as_uint16(convert_int16(x < (half16)0)));
+  y = select(y, (uint16)UINT_MAX, as_uint16(convert_int16(x >= (half16)UINT_MAX)));
+  return y;
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long convert_long_sat(half x)
+{
+  x = select(x, (half)(0), (short)isnan(x));
+  long y = convert_long(x);
+  y = select(y, (long)LONG_MIN, convert_long(x < (half)LONG_MIN));
+  y = select(y, (long)LONG_MAX, convert_long(x >= (half)LONG_MAX));
+  return y;
 }
 #endif
 
@@ -29923,7 +30102,11 @@ uint16 convert_uint16_sat(half16 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 long2 convert_long2_sat(half2 x)
 {
-  return convert_long2(x);
+  x = select(x, (half2)(0), (short2)isnan(x));
+  long2 y = convert_long2(x);
+  y = select(y, (long2)LONG_MIN, convert_long2(x < (half2)LONG_MIN));
+  y = select(y, (long2)LONG_MAX, convert_long2(x >= (half2)LONG_MAX));
+  return y;
 }
 #endif
 
@@ -29931,7 +30114,11 @@ long2 convert_long2_sat(half2 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 long3 convert_long3_sat(half3 x)
 {
-  return convert_long3(x);
+  x = select(x, (half3)(0), (short3)isnan(x));
+  long3 y = convert_long3(x);
+  y = select(y, (long3)LONG_MIN, convert_long3(x < (half3)LONG_MIN));
+  y = select(y, (long3)LONG_MAX, convert_long3(x >= (half3)LONG_MAX));
+  return y;
 }
 #endif
 
@@ -29939,7 +30126,11 @@ long3 convert_long3_sat(half3 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 long4 convert_long4_sat(half4 x)
 {
-  return convert_long4(x);
+  x = select(x, (half4)(0), (short4)isnan(x));
+  long4 y = convert_long4(x);
+  y = select(y, (long4)LONG_MIN, convert_long4(x < (half4)LONG_MIN));
+  y = select(y, (long4)LONG_MAX, convert_long4(x >= (half4)LONG_MAX));
+  return y;
 }
 #endif
 
@@ -29947,7 +30138,11 @@ long4 convert_long4_sat(half4 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 long8 convert_long8_sat(half8 x)
 {
-  return convert_long8(x);
+  x = select(x, (half8)(0), (short8)isnan(x));
+  long8 y = convert_long8(x);
+  y = select(y, (long8)LONG_MIN, convert_long8(x < (half8)LONG_MIN));
+  y = select(y, (long8)LONG_MAX, convert_long8(x >= (half8)LONG_MAX));
+  return y;
 }
 #endif
 
@@ -29955,7 +30150,23 @@ long8 convert_long8_sat(half8 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 long16 convert_long16_sat(half16 x)
 {
-  return convert_long16(x);
+  x = select(x, (half16)(0), (short16)isnan(x));
+  long16 y = convert_long16(x);
+  y = select(y, (long16)LONG_MIN, convert_long16(x < (half16)LONG_MIN));
+  y = select(y, (long16)LONG_MAX, convert_long16(x >= (half16)LONG_MAX));
+  return y;
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong convert_ulong_sat(half x)
+{
+  x = select(x, (half)(0), (short)isnan(x));
+  ulong y = convert_ulong(x);
+  y = select(y, (ulong)0, as_ulong(convert_long(x < (half)0)));
+  y = select(y, (ulong)ULONG_MAX, as_ulong(convert_long(x >= (half)ULONG_MAX)));
+  return y;
 }
 #endif
 
@@ -29963,8 +30174,11 @@ long16 convert_long16_sat(half16 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 ulong2 convert_ulong2_sat(half2 x)
 {
-  x = max(x, (half)0);
-  return convert_ulong2(x);
+  x = select(x, (half2)(0), (short2)isnan(x));
+  ulong2 y = convert_ulong2(x);
+  y = select(y, (ulong2)0, as_ulong2(convert_long2(x < (half2)0)));
+  y = select(y, (ulong2)ULONG_MAX, as_ulong2(convert_long2(x >= (half2)ULONG_MAX)));
+  return y;
 }
 #endif
 
@@ -29972,8 +30186,11 @@ ulong2 convert_ulong2_sat(half2 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 ulong3 convert_ulong3_sat(half3 x)
 {
-  x = max(x, (half)0);
-  return convert_ulong3(x);
+  x = select(x, (half3)(0), (short3)isnan(x));
+  ulong3 y = convert_ulong3(x);
+  y = select(y, (ulong3)0, as_ulong3(convert_long3(x < (half3)0)));
+  y = select(y, (ulong3)ULONG_MAX, as_ulong3(convert_long3(x >= (half3)ULONG_MAX)));
+  return y;
 }
 #endif
 
@@ -29981,8 +30198,11 @@ ulong3 convert_ulong3_sat(half3 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 ulong4 convert_ulong4_sat(half4 x)
 {
-  x = max(x, (half)0);
-  return convert_ulong4(x);
+  x = select(x, (half4)(0), (short4)isnan(x));
+  ulong4 y = convert_ulong4(x);
+  y = select(y, (ulong4)0, as_ulong4(convert_long4(x < (half4)0)));
+  y = select(y, (ulong4)ULONG_MAX, as_ulong4(convert_long4(x >= (half4)ULONG_MAX)));
+  return y;
 }
 #endif
 
@@ -29990,8 +30210,11 @@ ulong4 convert_ulong4_sat(half4 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 ulong8 convert_ulong8_sat(half8 x)
 {
-  x = max(x, (half)0);
-  return convert_ulong8(x);
+  x = select(x, (half8)(0), (short8)isnan(x));
+  ulong8 y = convert_ulong8(x);
+  y = select(y, (ulong8)0, as_ulong8(convert_long8(x < (half8)0)));
+  y = select(y, (ulong8)ULONG_MAX, as_ulong8(convert_long8(x >= (half8)ULONG_MAX)));
+  return y;
 }
 #endif
 
@@ -29999,8 +30222,11 @@ ulong8 convert_ulong8_sat(half8 x)
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
 ulong16 convert_ulong16_sat(half16 x)
 {
-  x = max(x, (half)0);
-  return convert_ulong16(x);
+  x = select(x, (half16)(0), (short16)isnan(x));
+  ulong16 y = convert_ulong16(x);
+  y = select(y, (ulong16)0, as_ulong16(convert_long16(x < (half16)0)));
+  y = select(y, (ulong16)ULONG_MAX, as_ulong16(convert_long16(x >= (half16)ULONG_MAX)));
+  return y;
 }
 #endif
 
@@ -30009,8 +30235,8 @@ char convert_char_sat(float x)
 {
   x = select(x, (float)(0), (int)isnan(x));
   char y = convert_char(x);
-  y = select(y, (char)CHAR_MIN, convert_char(x < (float)(-0x1p+7f)));
-  y = select(y, (char)CHAR_MAX, convert_char(x >= (float)(0x1p+7f)));
+  y = select(y, (char)CHAR_MIN, convert_char(x < (float)CHAR_MIN));
+  y = select(y, (char)CHAR_MAX, convert_char(x >= (float)CHAR_MAX));
   return y;
 }
 
@@ -30019,8 +30245,8 @@ char2 convert_char2_sat(float2 x)
 {
   x = select(x, (float2)(0), (int2)isnan(x));
   char2 y = convert_char2(x);
-  y = select(y, (char2)CHAR_MIN, convert_char2(x < (float2)(-0x1p+7f)));
-  y = select(y, (char2)CHAR_MAX, convert_char2(x >= (float2)(0x1p+7f)));
+  y = select(y, (char2)CHAR_MIN, convert_char2(x < (float2)CHAR_MIN));
+  y = select(y, (char2)CHAR_MAX, convert_char2(x >= (float2)CHAR_MAX));
   return y;
 }
 
@@ -30029,8 +30255,8 @@ char3 convert_char3_sat(float3 x)
 {
   x = select(x, (float3)(0), (int3)isnan(x));
   char3 y = convert_char3(x);
-  y = select(y, (char3)CHAR_MIN, convert_char3(x < (float3)(-0x1p+7f)));
-  y = select(y, (char3)CHAR_MAX, convert_char3(x >= (float3)(0x1p+7f)));
+  y = select(y, (char3)CHAR_MIN, convert_char3(x < (float3)CHAR_MIN));
+  y = select(y, (char3)CHAR_MAX, convert_char3(x >= (float3)CHAR_MAX));
   return y;
 }
 
@@ -30039,8 +30265,8 @@ char4 convert_char4_sat(float4 x)
 {
   x = select(x, (float4)(0), (int4)isnan(x));
   char4 y = convert_char4(x);
-  y = select(y, (char4)CHAR_MIN, convert_char4(x < (float4)(-0x1p+7f)));
-  y = select(y, (char4)CHAR_MAX, convert_char4(x >= (float4)(0x1p+7f)));
+  y = select(y, (char4)CHAR_MIN, convert_char4(x < (float4)CHAR_MIN));
+  y = select(y, (char4)CHAR_MAX, convert_char4(x >= (float4)CHAR_MAX));
   return y;
 }
 
@@ -30049,8 +30275,8 @@ char8 convert_char8_sat(float8 x)
 {
   x = select(x, (float8)(0), (int8)isnan(x));
   char8 y = convert_char8(x);
-  y = select(y, (char8)CHAR_MIN, convert_char8(x < (float8)(-0x1p+7f)));
-  y = select(y, (char8)CHAR_MAX, convert_char8(x >= (float8)(0x1p+7f)));
+  y = select(y, (char8)CHAR_MIN, convert_char8(x < (float8)CHAR_MIN));
+  y = select(y, (char8)CHAR_MAX, convert_char8(x >= (float8)CHAR_MAX));
   return y;
 }
 
@@ -30059,8 +30285,8 @@ char16 convert_char16_sat(float16 x)
 {
   x = select(x, (float16)(0), (int16)isnan(x));
   char16 y = convert_char16(x);
-  y = select(y, (char16)CHAR_MIN, convert_char16(x < (float16)(-0x1p+7f)));
-  y = select(y, (char16)CHAR_MAX, convert_char16(x >= (float16)(0x1p+7f)));
+  y = select(y, (char16)CHAR_MIN, convert_char16(x < (float16)CHAR_MIN));
+  y = select(y, (char16)CHAR_MAX, convert_char16(x >= (float16)CHAR_MAX));
   return y;
 }
 
@@ -30069,8 +30295,8 @@ uchar convert_uchar_sat(float x)
 {
   x = select(x, (float)(0), (int)isnan(x));
   uchar y = convert_uchar(x);
-  y = select(y, (uchar)0, as_uchar(convert_char(x < (float)0.0f)));
-  y = select(y, (uchar)UCHAR_MAX, as_uchar(convert_char(x >= (float)(0x1p+8f))));
+  y = select(y, (uchar)0, as_uchar(convert_char(x < (float)0)));
+  y = select(y, (uchar)UCHAR_MAX, as_uchar(convert_char(x >= (float)UCHAR_MAX)));
   return y;
 }
 
@@ -30079,8 +30305,8 @@ uchar2 convert_uchar2_sat(float2 x)
 {
   x = select(x, (float2)(0), (int2)isnan(x));
   uchar2 y = convert_uchar2(x);
-  y = select(y, (uchar2)0, as_uchar2(convert_char2(x < (float2)0.0f)));
-  y = select(y, (uchar2)UCHAR_MAX, as_uchar2(convert_char2(x >= (float2)(0x1p+8f))));
+  y = select(y, (uchar2)0, as_uchar2(convert_char2(x < (float2)0)));
+  y = select(y, (uchar2)UCHAR_MAX, as_uchar2(convert_char2(x >= (float2)UCHAR_MAX)));
   return y;
 }
 
@@ -30089,8 +30315,8 @@ uchar3 convert_uchar3_sat(float3 x)
 {
   x = select(x, (float3)(0), (int3)isnan(x));
   uchar3 y = convert_uchar3(x);
-  y = select(y, (uchar3)0, as_uchar3(convert_char3(x < (float3)0.0f)));
-  y = select(y, (uchar3)UCHAR_MAX, as_uchar3(convert_char3(x >= (float3)(0x1p+8f))));
+  y = select(y, (uchar3)0, as_uchar3(convert_char3(x < (float3)0)));
+  y = select(y, (uchar3)UCHAR_MAX, as_uchar3(convert_char3(x >= (float3)UCHAR_MAX)));
   return y;
 }
 
@@ -30099,8 +30325,8 @@ uchar4 convert_uchar4_sat(float4 x)
 {
   x = select(x, (float4)(0), (int4)isnan(x));
   uchar4 y = convert_uchar4(x);
-  y = select(y, (uchar4)0, as_uchar4(convert_char4(x < (float4)0.0f)));
-  y = select(y, (uchar4)UCHAR_MAX, as_uchar4(convert_char4(x >= (float4)(0x1p+8f))));
+  y = select(y, (uchar4)0, as_uchar4(convert_char4(x < (float4)0)));
+  y = select(y, (uchar4)UCHAR_MAX, as_uchar4(convert_char4(x >= (float4)UCHAR_MAX)));
   return y;
 }
 
@@ -30109,8 +30335,8 @@ uchar8 convert_uchar8_sat(float8 x)
 {
   x = select(x, (float8)(0), (int8)isnan(x));
   uchar8 y = convert_uchar8(x);
-  y = select(y, (uchar8)0, as_uchar8(convert_char8(x < (float8)0.0f)));
-  y = select(y, (uchar8)UCHAR_MAX, as_uchar8(convert_char8(x >= (float8)(0x1p+8f))));
+  y = select(y, (uchar8)0, as_uchar8(convert_char8(x < (float8)0)));
+  y = select(y, (uchar8)UCHAR_MAX, as_uchar8(convert_char8(x >= (float8)UCHAR_MAX)));
   return y;
 }
 
@@ -30119,8 +30345,8 @@ uchar16 convert_uchar16_sat(float16 x)
 {
   x = select(x, (float16)(0), (int16)isnan(x));
   uchar16 y = convert_uchar16(x);
-  y = select(y, (uchar16)0, as_uchar16(convert_char16(x < (float16)0.0f)));
-  y = select(y, (uchar16)UCHAR_MAX, as_uchar16(convert_char16(x >= (float16)(0x1p+8f))));
+  y = select(y, (uchar16)0, as_uchar16(convert_char16(x < (float16)0)));
+  y = select(y, (uchar16)UCHAR_MAX, as_uchar16(convert_char16(x >= (float16)UCHAR_MAX)));
   return y;
 }
 
@@ -30129,8 +30355,8 @@ short convert_short_sat(float x)
 {
   x = select(x, (float)(0), (int)isnan(x));
   short y = convert_short(x);
-  y = select(y, (short)SHRT_MIN, convert_short(x < (float)(-0x1p+15f)));
-  y = select(y, (short)SHRT_MAX, convert_short(x >= (float)(0x1p+15f)));
+  y = select(y, (short)SHRT_MIN, convert_short(x < (float)SHRT_MIN));
+  y = select(y, (short)SHRT_MAX, convert_short(x >= (float)SHRT_MAX));
   return y;
 }
 
@@ -30139,8 +30365,8 @@ short2 convert_short2_sat(float2 x)
 {
   x = select(x, (float2)(0), (int2)isnan(x));
   short2 y = convert_short2(x);
-  y = select(y, (short2)SHRT_MIN, convert_short2(x < (float2)(-0x1p+15f)));
-  y = select(y, (short2)SHRT_MAX, convert_short2(x >= (float2)(0x1p+15f)));
+  y = select(y, (short2)SHRT_MIN, convert_short2(x < (float2)SHRT_MIN));
+  y = select(y, (short2)SHRT_MAX, convert_short2(x >= (float2)SHRT_MAX));
   return y;
 }
 
@@ -30149,8 +30375,8 @@ short3 convert_short3_sat(float3 x)
 {
   x = select(x, (float3)(0), (int3)isnan(x));
   short3 y = convert_short3(x);
-  y = select(y, (short3)SHRT_MIN, convert_short3(x < (float3)(-0x1p+15f)));
-  y = select(y, (short3)SHRT_MAX, convert_short3(x >= (float3)(0x1p+15f)));
+  y = select(y, (short3)SHRT_MIN, convert_short3(x < (float3)SHRT_MIN));
+  y = select(y, (short3)SHRT_MAX, convert_short3(x >= (float3)SHRT_MAX));
   return y;
 }
 
@@ -30159,8 +30385,8 @@ short4 convert_short4_sat(float4 x)
 {
   x = select(x, (float4)(0), (int4)isnan(x));
   short4 y = convert_short4(x);
-  y = select(y, (short4)SHRT_MIN, convert_short4(x < (float4)(-0x1p+15f)));
-  y = select(y, (short4)SHRT_MAX, convert_short4(x >= (float4)(0x1p+15f)));
+  y = select(y, (short4)SHRT_MIN, convert_short4(x < (float4)SHRT_MIN));
+  y = select(y, (short4)SHRT_MAX, convert_short4(x >= (float4)SHRT_MAX));
   return y;
 }
 
@@ -30169,8 +30395,8 @@ short8 convert_short8_sat(float8 x)
 {
   x = select(x, (float8)(0), (int8)isnan(x));
   short8 y = convert_short8(x);
-  y = select(y, (short8)SHRT_MIN, convert_short8(x < (float8)(-0x1p+15f)));
-  y = select(y, (short8)SHRT_MAX, convert_short8(x >= (float8)(0x1p+15f)));
+  y = select(y, (short8)SHRT_MIN, convert_short8(x < (float8)SHRT_MIN));
+  y = select(y, (short8)SHRT_MAX, convert_short8(x >= (float8)SHRT_MAX));
   return y;
 }
 
@@ -30179,8 +30405,8 @@ short16 convert_short16_sat(float16 x)
 {
   x = select(x, (float16)(0), (int16)isnan(x));
   short16 y = convert_short16(x);
-  y = select(y, (short16)SHRT_MIN, convert_short16(x < (float16)(-0x1p+15f)));
-  y = select(y, (short16)SHRT_MAX, convert_short16(x >= (float16)(0x1p+15f)));
+  y = select(y, (short16)SHRT_MIN, convert_short16(x < (float16)SHRT_MIN));
+  y = select(y, (short16)SHRT_MAX, convert_short16(x >= (float16)SHRT_MAX));
   return y;
 }
 
@@ -30189,8 +30415,8 @@ ushort convert_ushort_sat(float x)
 {
   x = select(x, (float)(0), (int)isnan(x));
   ushort y = convert_ushort(x);
-  y = select(y, (ushort)0, as_ushort(convert_short(x < (float)0.0f)));
-  y = select(y, (ushort)USHRT_MAX, as_ushort(convert_short(x >= (float)(0x1p+16f))));
+  y = select(y, (ushort)0, as_ushort(convert_short(x < (float)0)));
+  y = select(y, (ushort)USHRT_MAX, as_ushort(convert_short(x >= (float)USHRT_MAX)));
   return y;
 }
 
@@ -30199,8 +30425,8 @@ ushort2 convert_ushort2_sat(float2 x)
 {
   x = select(x, (float2)(0), (int2)isnan(x));
   ushort2 y = convert_ushort2(x);
-  y = select(y, (ushort2)0, as_ushort2(convert_short2(x < (float2)0.0f)));
-  y = select(y, (ushort2)USHRT_MAX, as_ushort2(convert_short2(x >= (float2)(0x1p+16f))));
+  y = select(y, (ushort2)0, as_ushort2(convert_short2(x < (float2)0)));
+  y = select(y, (ushort2)USHRT_MAX, as_ushort2(convert_short2(x >= (float2)USHRT_MAX)));
   return y;
 }
 
@@ -30209,8 +30435,8 @@ ushort3 convert_ushort3_sat(float3 x)
 {
   x = select(x, (float3)(0), (int3)isnan(x));
   ushort3 y = convert_ushort3(x);
-  y = select(y, (ushort3)0, as_ushort3(convert_short3(x < (float3)0.0f)));
-  y = select(y, (ushort3)USHRT_MAX, as_ushort3(convert_short3(x >= (float3)(0x1p+16f))));
+  y = select(y, (ushort3)0, as_ushort3(convert_short3(x < (float3)0)));
+  y = select(y, (ushort3)USHRT_MAX, as_ushort3(convert_short3(x >= (float3)USHRT_MAX)));
   return y;
 }
 
@@ -30219,8 +30445,8 @@ ushort4 convert_ushort4_sat(float4 x)
 {
   x = select(x, (float4)(0), (int4)isnan(x));
   ushort4 y = convert_ushort4(x);
-  y = select(y, (ushort4)0, as_ushort4(convert_short4(x < (float4)0.0f)));
-  y = select(y, (ushort4)USHRT_MAX, as_ushort4(convert_short4(x >= (float4)(0x1p+16f))));
+  y = select(y, (ushort4)0, as_ushort4(convert_short4(x < (float4)0)));
+  y = select(y, (ushort4)USHRT_MAX, as_ushort4(convert_short4(x >= (float4)USHRT_MAX)));
   return y;
 }
 
@@ -30229,8 +30455,8 @@ ushort8 convert_ushort8_sat(float8 x)
 {
   x = select(x, (float8)(0), (int8)isnan(x));
   ushort8 y = convert_ushort8(x);
-  y = select(y, (ushort8)0, as_ushort8(convert_short8(x < (float8)0.0f)));
-  y = select(y, (ushort8)USHRT_MAX, as_ushort8(convert_short8(x >= (float8)(0x1p+16f))));
+  y = select(y, (ushort8)0, as_ushort8(convert_short8(x < (float8)0)));
+  y = select(y, (ushort8)USHRT_MAX, as_ushort8(convert_short8(x >= (float8)USHRT_MAX)));
   return y;
 }
 
@@ -30239,8 +30465,8 @@ ushort16 convert_ushort16_sat(float16 x)
 {
   x = select(x, (float16)(0), (int16)isnan(x));
   ushort16 y = convert_ushort16(x);
-  y = select(y, (ushort16)0, as_ushort16(convert_short16(x < (float16)0.0f)));
-  y = select(y, (ushort16)USHRT_MAX, as_ushort16(convert_short16(x >= (float16)(0x1p+16f))));
+  y = select(y, (ushort16)0, as_ushort16(convert_short16(x < (float16)0)));
+  y = select(y, (ushort16)USHRT_MAX, as_ushort16(convert_short16(x >= (float16)USHRT_MAX)));
   return y;
 }
 
@@ -30249,8 +30475,8 @@ int convert_int_sat(float x)
 {
   x = select(x, (float)(0), (int)isnan(x));
   int y = convert_int(x);
-  y = select(y, (int)INT_MIN, convert_int(x < (float)(-0x1p+31f)));
-  y = select(y, (int)INT_MAX, convert_int(x >= (float)(0x1p+31f)));
+  y = select(y, (int)INT_MIN, convert_int(x < (float)INT_MIN));
+  y = select(y, (int)INT_MAX, convert_int(x >= (float)INT_MAX));
   return y;
 }
 
@@ -30259,8 +30485,8 @@ int2 convert_int2_sat(float2 x)
 {
   x = select(x, (float2)(0), (int2)isnan(x));
   int2 y = convert_int2(x);
-  y = select(y, (int2)INT_MIN, convert_int2(x < (float2)(-0x1p+31f)));
-  y = select(y, (int2)INT_MAX, convert_int2(x >= (float2)(0x1p+31f)));
+  y = select(y, (int2)INT_MIN, convert_int2(x < (float2)INT_MIN));
+  y = select(y, (int2)INT_MAX, convert_int2(x >= (float2)INT_MAX));
   return y;
 }
 
@@ -30269,8 +30495,8 @@ int3 convert_int3_sat(float3 x)
 {
   x = select(x, (float3)(0), (int3)isnan(x));
   int3 y = convert_int3(x);
-  y = select(y, (int3)INT_MIN, convert_int3(x < (float3)(-0x1p+31f)));
-  y = select(y, (int3)INT_MAX, convert_int3(x >= (float3)(0x1p+31f)));
+  y = select(y, (int3)INT_MIN, convert_int3(x < (float3)INT_MIN));
+  y = select(y, (int3)INT_MAX, convert_int3(x >= (float3)INT_MAX));
   return y;
 }
 
@@ -30279,8 +30505,8 @@ int4 convert_int4_sat(float4 x)
 {
   x = select(x, (float4)(0), (int4)isnan(x));
   int4 y = convert_int4(x);
-  y = select(y, (int4)INT_MIN, convert_int4(x < (float4)(-0x1p+31f)));
-  y = select(y, (int4)INT_MAX, convert_int4(x >= (float4)(0x1p+31f)));
+  y = select(y, (int4)INT_MIN, convert_int4(x < (float4)INT_MIN));
+  y = select(y, (int4)INT_MAX, convert_int4(x >= (float4)INT_MAX));
   return y;
 }
 
@@ -30289,8 +30515,8 @@ int8 convert_int8_sat(float8 x)
 {
   x = select(x, (float8)(0), (int8)isnan(x));
   int8 y = convert_int8(x);
-  y = select(y, (int8)INT_MIN, convert_int8(x < (float8)(-0x1p+31f)));
-  y = select(y, (int8)INT_MAX, convert_int8(x >= (float8)(0x1p+31f)));
+  y = select(y, (int8)INT_MIN, convert_int8(x < (float8)INT_MIN));
+  y = select(y, (int8)INT_MAX, convert_int8(x >= (float8)INT_MAX));
   return y;
 }
 
@@ -30299,8 +30525,8 @@ int16 convert_int16_sat(float16 x)
 {
   x = select(x, (float16)(0), (int16)isnan(x));
   int16 y = convert_int16(x);
-  y = select(y, (int16)INT_MIN, convert_int16(x < (float16)(-0x1p+31f)));
-  y = select(y, (int16)INT_MAX, convert_int16(x >= (float16)(0x1p+31f)));
+  y = select(y, (int16)INT_MIN, convert_int16(x < (float16)INT_MIN));
+  y = select(y, (int16)INT_MAX, convert_int16(x >= (float16)INT_MAX));
   return y;
 }
 
@@ -30309,8 +30535,8 @@ uint convert_uint_sat(float x)
 {
   x = select(x, (float)(0), (int)isnan(x));
   uint y = convert_uint(x);
-  y = select(y, (uint)0, as_uint(convert_int(x < (float)0.0f)));
-  y = select(y, (uint)UINT_MAX, as_uint(convert_int(x >= (float)(0x1p+32f))));
+  y = select(y, (uint)0, as_uint(convert_int(x < (float)0)));
+  y = select(y, (uint)UINT_MAX, as_uint(convert_int(x >= (float)UINT_MAX)));
   return y;
 }
 
@@ -30319,8 +30545,8 @@ uint2 convert_uint2_sat(float2 x)
 {
   x = select(x, (float2)(0), (int2)isnan(x));
   uint2 y = convert_uint2(x);
-  y = select(y, (uint2)0, as_uint2(convert_int2(x < (float2)0.0f)));
-  y = select(y, (uint2)UINT_MAX, as_uint2(convert_int2(x >= (float2)(0x1p+32f))));
+  y = select(y, (uint2)0, as_uint2(convert_int2(x < (float2)0)));
+  y = select(y, (uint2)UINT_MAX, as_uint2(convert_int2(x >= (float2)UINT_MAX)));
   return y;
 }
 
@@ -30329,8 +30555,8 @@ uint3 convert_uint3_sat(float3 x)
 {
   x = select(x, (float3)(0), (int3)isnan(x));
   uint3 y = convert_uint3(x);
-  y = select(y, (uint3)0, as_uint3(convert_int3(x < (float3)0.0f)));
-  y = select(y, (uint3)UINT_MAX, as_uint3(convert_int3(x >= (float3)(0x1p+32f))));
+  y = select(y, (uint3)0, as_uint3(convert_int3(x < (float3)0)));
+  y = select(y, (uint3)UINT_MAX, as_uint3(convert_int3(x >= (float3)UINT_MAX)));
   return y;
 }
 
@@ -30339,8 +30565,8 @@ uint4 convert_uint4_sat(float4 x)
 {
   x = select(x, (float4)(0), (int4)isnan(x));
   uint4 y = convert_uint4(x);
-  y = select(y, (uint4)0, as_uint4(convert_int4(x < (float4)0.0f)));
-  y = select(y, (uint4)UINT_MAX, as_uint4(convert_int4(x >= (float4)(0x1p+32f))));
+  y = select(y, (uint4)0, as_uint4(convert_int4(x < (float4)0)));
+  y = select(y, (uint4)UINT_MAX, as_uint4(convert_int4(x >= (float4)UINT_MAX)));
   return y;
 }
 
@@ -30349,8 +30575,8 @@ uint8 convert_uint8_sat(float8 x)
 {
   x = select(x, (float8)(0), (int8)isnan(x));
   uint8 y = convert_uint8(x);
-  y = select(y, (uint8)0, as_uint8(convert_int8(x < (float8)0.0f)));
-  y = select(y, (uint8)UINT_MAX, as_uint8(convert_int8(x >= (float8)(0x1p+32f))));
+  y = select(y, (uint8)0, as_uint8(convert_int8(x < (float8)0)));
+  y = select(y, (uint8)UINT_MAX, as_uint8(convert_int8(x >= (float8)UINT_MAX)));
   return y;
 }
 
@@ -30359,8 +30585,8 @@ uint16 convert_uint16_sat(float16 x)
 {
   x = select(x, (float16)(0), (int16)isnan(x));
   uint16 y = convert_uint16(x);
-  y = select(y, (uint16)0, as_uint16(convert_int16(x < (float16)0.0f)));
-  y = select(y, (uint16)UINT_MAX, as_uint16(convert_int16(x >= (float16)(0x1p+32f))));
+  y = select(y, (uint16)0, as_uint16(convert_int16(x < (float16)0)));
+  y = select(y, (uint16)UINT_MAX, as_uint16(convert_int16(x >= (float16)UINT_MAX)));
   return y;
 }
 
@@ -30370,8 +30596,8 @@ long convert_long_sat(float x)
 {
   x = select(x, (float)(0), (int)isnan(x));
   long y = convert_long(x);
-  y = select(y, (long)LONG_MIN, convert_long(x < (float)(-0x1p+63f)));
-  y = select(y, (long)LONG_MAX, convert_long(x >= (float)(0x1p+63f)));
+  y = select(y, (long)LONG_MIN, convert_long(x < (float)LONG_MIN));
+  y = select(y, (long)LONG_MAX, convert_long(x >= (float)LONG_MAX));
   return y;
 }
 #endif
@@ -30382,8 +30608,8 @@ long2 convert_long2_sat(float2 x)
 {
   x = select(x, (float2)(0), (int2)isnan(x));
   long2 y = convert_long2(x);
-  y = select(y, (long2)LONG_MIN, convert_long2(x < (float2)(-0x1p+63f)));
-  y = select(y, (long2)LONG_MAX, convert_long2(x >= (float2)(0x1p+63f)));
+  y = select(y, (long2)LONG_MIN, convert_long2(x < (float2)LONG_MIN));
+  y = select(y, (long2)LONG_MAX, convert_long2(x >= (float2)LONG_MAX));
   return y;
 }
 #endif
@@ -30394,8 +30620,8 @@ long3 convert_long3_sat(float3 x)
 {
   x = select(x, (float3)(0), (int3)isnan(x));
   long3 y = convert_long3(x);
-  y = select(y, (long3)LONG_MIN, convert_long3(x < (float3)(-0x1p+63f)));
-  y = select(y, (long3)LONG_MAX, convert_long3(x >= (float3)(0x1p+63f)));
+  y = select(y, (long3)LONG_MIN, convert_long3(x < (float3)LONG_MIN));
+  y = select(y, (long3)LONG_MAX, convert_long3(x >= (float3)LONG_MAX));
   return y;
 }
 #endif
@@ -30406,8 +30632,8 @@ long4 convert_long4_sat(float4 x)
 {
   x = select(x, (float4)(0), (int4)isnan(x));
   long4 y = convert_long4(x);
-  y = select(y, (long4)LONG_MIN, convert_long4(x < (float4)(-0x1p+63f)));
-  y = select(y, (long4)LONG_MAX, convert_long4(x >= (float4)(0x1p+63f)));
+  y = select(y, (long4)LONG_MIN, convert_long4(x < (float4)LONG_MIN));
+  y = select(y, (long4)LONG_MAX, convert_long4(x >= (float4)LONG_MAX));
   return y;
 }
 #endif
@@ -30418,8 +30644,8 @@ long8 convert_long8_sat(float8 x)
 {
   x = select(x, (float8)(0), (int8)isnan(x));
   long8 y = convert_long8(x);
-  y = select(y, (long8)LONG_MIN, convert_long8(x < (float8)(-0x1p+63f)));
-  y = select(y, (long8)LONG_MAX, convert_long8(x >= (float8)(0x1p+63f)));
+  y = select(y, (long8)LONG_MIN, convert_long8(x < (float8)LONG_MIN));
+  y = select(y, (long8)LONG_MAX, convert_long8(x >= (float8)LONG_MAX));
   return y;
 }
 #endif
@@ -30430,8 +30656,8 @@ long16 convert_long16_sat(float16 x)
 {
   x = select(x, (float16)(0), (int16)isnan(x));
   long16 y = convert_long16(x);
-  y = select(y, (long16)LONG_MIN, convert_long16(x < (float16)(-0x1p+63f)));
-  y = select(y, (long16)LONG_MAX, convert_long16(x >= (float16)(0x1p+63f)));
+  y = select(y, (long16)LONG_MIN, convert_long16(x < (float16)LONG_MIN));
+  y = select(y, (long16)LONG_MAX, convert_long16(x >= (float16)LONG_MAX));
   return y;
 }
 #endif
@@ -30442,8 +30668,8 @@ ulong convert_ulong_sat(float x)
 {
   x = select(x, (float)(0), (int)isnan(x));
   ulong y = convert_ulong(x);
-  y = select(y, (ulong)0, as_ulong(convert_long(x < (float)0.0f)));
-  y = select(y, (ulong)ULONG_MAX, as_ulong(convert_long(x >= (float)(0x1p+64f))));
+  y = select(y, (ulong)0, as_ulong(convert_long(x < (float)0)));
+  y = select(y, (ulong)ULONG_MAX, as_ulong(convert_long(x >= (float)ULONG_MAX)));
   return y;
 }
 #endif
@@ -30454,8 +30680,8 @@ ulong2 convert_ulong2_sat(float2 x)
 {
   x = select(x, (float2)(0), (int2)isnan(x));
   ulong2 y = convert_ulong2(x);
-  y = select(y, (ulong2)0, as_ulong2(convert_long2(x < (float2)0.0f)));
-  y = select(y, (ulong2)ULONG_MAX, as_ulong2(convert_long2(x >= (float2)(0x1p+64f))));
+  y = select(y, (ulong2)0, as_ulong2(convert_long2(x < (float2)0)));
+  y = select(y, (ulong2)ULONG_MAX, as_ulong2(convert_long2(x >= (float2)ULONG_MAX)));
   return y;
 }
 #endif
@@ -30466,8 +30692,8 @@ ulong3 convert_ulong3_sat(float3 x)
 {
   x = select(x, (float3)(0), (int3)isnan(x));
   ulong3 y = convert_ulong3(x);
-  y = select(y, (ulong3)0, as_ulong3(convert_long3(x < (float3)0.0f)));
-  y = select(y, (ulong3)ULONG_MAX, as_ulong3(convert_long3(x >= (float3)(0x1p+64f))));
+  y = select(y, (ulong3)0, as_ulong3(convert_long3(x < (float3)0)));
+  y = select(y, (ulong3)ULONG_MAX, as_ulong3(convert_long3(x >= (float3)ULONG_MAX)));
   return y;
 }
 #endif
@@ -30478,8 +30704,8 @@ ulong4 convert_ulong4_sat(float4 x)
 {
   x = select(x, (float4)(0), (int4)isnan(x));
   ulong4 y = convert_ulong4(x);
-  y = select(y, (ulong4)0, as_ulong4(convert_long4(x < (float4)0.0f)));
-  y = select(y, (ulong4)ULONG_MAX, as_ulong4(convert_long4(x >= (float4)(0x1p+64f))));
+  y = select(y, (ulong4)0, as_ulong4(convert_long4(x < (float4)0)));
+  y = select(y, (ulong4)ULONG_MAX, as_ulong4(convert_long4(x >= (float4)ULONG_MAX)));
   return y;
 }
 #endif
@@ -30490,8 +30716,8 @@ ulong8 convert_ulong8_sat(float8 x)
 {
   x = select(x, (float8)(0), (int8)isnan(x));
   ulong8 y = convert_ulong8(x);
-  y = select(y, (ulong8)0, as_ulong8(convert_long8(x < (float8)0.0f)));
-  y = select(y, (ulong8)ULONG_MAX, as_ulong8(convert_long8(x >= (float8)(0x1p+64f))));
+  y = select(y, (ulong8)0, as_ulong8(convert_long8(x < (float8)0)));
+  y = select(y, (ulong8)ULONG_MAX, as_ulong8(convert_long8(x >= (float8)ULONG_MAX)));
   return y;
 }
 #endif
@@ -30502,8 +30728,8 @@ ulong16 convert_ulong16_sat(float16 x)
 {
   x = select(x, (float16)(0), (int16)isnan(x));
   ulong16 y = convert_ulong16(x);
-  y = select(y, (ulong16)0, as_ulong16(convert_long16(x < (float16)0.0f)));
-  y = select(y, (ulong16)ULONG_MAX, as_ulong16(convert_long16(x >= (float16)(0x1p+64f))));
+  y = select(y, (ulong16)0, as_ulong16(convert_long16(x < (float16)0)));
+  y = select(y, (ulong16)ULONG_MAX, as_ulong16(convert_long16(x >= (float16)ULONG_MAX)));
   return y;
 }
 #endif
@@ -30514,8 +30740,8 @@ char convert_char_sat(double x)
 {
   x = select(x, (double)(0), (long)isnan(x));
   char y = convert_char(x);
-  y = select(y, (char)CHAR_MIN, convert_char(x < (double)(-0x1p+7f)));
-  y = select(y, (char)CHAR_MAX, convert_char(x >= (double)(0x1p+7f)));
+  y = select(y, (char)CHAR_MIN, convert_char(x < (double)CHAR_MIN));
+  y = select(y, (char)CHAR_MAX, convert_char(x >= (double)CHAR_MAX));
   return y;
 }
 #endif
@@ -30526,8 +30752,8 @@ char2 convert_char2_sat(double2 x)
 {
   x = select(x, (double2)(0), (long2)isnan(x));
   char2 y = convert_char2(x);
-  y = select(y, (char2)CHAR_MIN, convert_char2(x < (double2)(-0x1p+7f)));
-  y = select(y, (char2)CHAR_MAX, convert_char2(x >= (double2)(0x1p+7f)));
+  y = select(y, (char2)CHAR_MIN, convert_char2(x < (double2)CHAR_MIN));
+  y = select(y, (char2)CHAR_MAX, convert_char2(x >= (double2)CHAR_MAX));
   return y;
 }
 #endif
@@ -30538,8 +30764,8 @@ char3 convert_char3_sat(double3 x)
 {
   x = select(x, (double3)(0), (long3)isnan(x));
   char3 y = convert_char3(x);
-  y = select(y, (char3)CHAR_MIN, convert_char3(x < (double3)(-0x1p+7f)));
-  y = select(y, (char3)CHAR_MAX, convert_char3(x >= (double3)(0x1p+7f)));
+  y = select(y, (char3)CHAR_MIN, convert_char3(x < (double3)CHAR_MIN));
+  y = select(y, (char3)CHAR_MAX, convert_char3(x >= (double3)CHAR_MAX));
   return y;
 }
 #endif
@@ -30550,8 +30776,8 @@ char4 convert_char4_sat(double4 x)
 {
   x = select(x, (double4)(0), (long4)isnan(x));
   char4 y = convert_char4(x);
-  y = select(y, (char4)CHAR_MIN, convert_char4(x < (double4)(-0x1p+7f)));
-  y = select(y, (char4)CHAR_MAX, convert_char4(x >= (double4)(0x1p+7f)));
+  y = select(y, (char4)CHAR_MIN, convert_char4(x < (double4)CHAR_MIN));
+  y = select(y, (char4)CHAR_MAX, convert_char4(x >= (double4)CHAR_MAX));
   return y;
 }
 #endif
@@ -30562,8 +30788,8 @@ char8 convert_char8_sat(double8 x)
 {
   x = select(x, (double8)(0), (long8)isnan(x));
   char8 y = convert_char8(x);
-  y = select(y, (char8)CHAR_MIN, convert_char8(x < (double8)(-0x1p+7f)));
-  y = select(y, (char8)CHAR_MAX, convert_char8(x >= (double8)(0x1p+7f)));
+  y = select(y, (char8)CHAR_MIN, convert_char8(x < (double8)CHAR_MIN));
+  y = select(y, (char8)CHAR_MAX, convert_char8(x >= (double8)CHAR_MAX));
   return y;
 }
 #endif
@@ -30574,8 +30800,8 @@ char16 convert_char16_sat(double16 x)
 {
   x = select(x, (double16)(0), (long16)isnan(x));
   char16 y = convert_char16(x);
-  y = select(y, (char16)CHAR_MIN, convert_char16(x < (double16)(-0x1p+7f)));
-  y = select(y, (char16)CHAR_MAX, convert_char16(x >= (double16)(0x1p+7f)));
+  y = select(y, (char16)CHAR_MIN, convert_char16(x < (double16)CHAR_MIN));
+  y = select(y, (char16)CHAR_MAX, convert_char16(x >= (double16)CHAR_MAX));
   return y;
 }
 #endif
@@ -30586,8 +30812,8 @@ uchar convert_uchar_sat(double x)
 {
   x = select(x, (double)(0), (long)isnan(x));
   uchar y = convert_uchar(x);
-  y = select(y, (uchar)0, as_uchar(convert_char(x < (double)0.0f)));
-  y = select(y, (uchar)UCHAR_MAX, as_uchar(convert_char(x >= (double)(0x1p+8f))));
+  y = select(y, (uchar)0, as_uchar(convert_char(x < (double)0)));
+  y = select(y, (uchar)UCHAR_MAX, as_uchar(convert_char(x >= (double)UCHAR_MAX)));
   return y;
 }
 #endif
@@ -30598,8 +30824,8 @@ uchar2 convert_uchar2_sat(double2 x)
 {
   x = select(x, (double2)(0), (long2)isnan(x));
   uchar2 y = convert_uchar2(x);
-  y = select(y, (uchar2)0, as_uchar2(convert_char2(x < (double2)0.0f)));
-  y = select(y, (uchar2)UCHAR_MAX, as_uchar2(convert_char2(x >= (double2)(0x1p+8f))));
+  y = select(y, (uchar2)0, as_uchar2(convert_char2(x < (double2)0)));
+  y = select(y, (uchar2)UCHAR_MAX, as_uchar2(convert_char2(x >= (double2)UCHAR_MAX)));
   return y;
 }
 #endif
@@ -30610,8 +30836,8 @@ uchar3 convert_uchar3_sat(double3 x)
 {
   x = select(x, (double3)(0), (long3)isnan(x));
   uchar3 y = convert_uchar3(x);
-  y = select(y, (uchar3)0, as_uchar3(convert_char3(x < (double3)0.0f)));
-  y = select(y, (uchar3)UCHAR_MAX, as_uchar3(convert_char3(x >= (double3)(0x1p+8f))));
+  y = select(y, (uchar3)0, as_uchar3(convert_char3(x < (double3)0)));
+  y = select(y, (uchar3)UCHAR_MAX, as_uchar3(convert_char3(x >= (double3)UCHAR_MAX)));
   return y;
 }
 #endif
@@ -30622,8 +30848,8 @@ uchar4 convert_uchar4_sat(double4 x)
 {
   x = select(x, (double4)(0), (long4)isnan(x));
   uchar4 y = convert_uchar4(x);
-  y = select(y, (uchar4)0, as_uchar4(convert_char4(x < (double4)0.0f)));
-  y = select(y, (uchar4)UCHAR_MAX, as_uchar4(convert_char4(x >= (double4)(0x1p+8f))));
+  y = select(y, (uchar4)0, as_uchar4(convert_char4(x < (double4)0)));
+  y = select(y, (uchar4)UCHAR_MAX, as_uchar4(convert_char4(x >= (double4)UCHAR_MAX)));
   return y;
 }
 #endif
@@ -30634,8 +30860,8 @@ uchar8 convert_uchar8_sat(double8 x)
 {
   x = select(x, (double8)(0), (long8)isnan(x));
   uchar8 y = convert_uchar8(x);
-  y = select(y, (uchar8)0, as_uchar8(convert_char8(x < (double8)0.0f)));
-  y = select(y, (uchar8)UCHAR_MAX, as_uchar8(convert_char8(x >= (double8)(0x1p+8f))));
+  y = select(y, (uchar8)0, as_uchar8(convert_char8(x < (double8)0)));
+  y = select(y, (uchar8)UCHAR_MAX, as_uchar8(convert_char8(x >= (double8)UCHAR_MAX)));
   return y;
 }
 #endif
@@ -30646,8 +30872,8 @@ uchar16 convert_uchar16_sat(double16 x)
 {
   x = select(x, (double16)(0), (long16)isnan(x));
   uchar16 y = convert_uchar16(x);
-  y = select(y, (uchar16)0, as_uchar16(convert_char16(x < (double16)0.0f)));
-  y = select(y, (uchar16)UCHAR_MAX, as_uchar16(convert_char16(x >= (double16)(0x1p+8f))));
+  y = select(y, (uchar16)0, as_uchar16(convert_char16(x < (double16)0)));
+  y = select(y, (uchar16)UCHAR_MAX, as_uchar16(convert_char16(x >= (double16)UCHAR_MAX)));
   return y;
 }
 #endif
@@ -30658,8 +30884,8 @@ short convert_short_sat(double x)
 {
   x = select(x, (double)(0), (long)isnan(x));
   short y = convert_short(x);
-  y = select(y, (short)SHRT_MIN, convert_short(x < (double)(-0x1p+15f)));
-  y = select(y, (short)SHRT_MAX, convert_short(x >= (double)(0x1p+15f)));
+  y = select(y, (short)SHRT_MIN, convert_short(x < (double)SHRT_MIN));
+  y = select(y, (short)SHRT_MAX, convert_short(x >= (double)SHRT_MAX));
   return y;
 }
 #endif
@@ -30670,8 +30896,8 @@ short2 convert_short2_sat(double2 x)
 {
   x = select(x, (double2)(0), (long2)isnan(x));
   short2 y = convert_short2(x);
-  y = select(y, (short2)SHRT_MIN, convert_short2(x < (double2)(-0x1p+15f)));
-  y = select(y, (short2)SHRT_MAX, convert_short2(x >= (double2)(0x1p+15f)));
+  y = select(y, (short2)SHRT_MIN, convert_short2(x < (double2)SHRT_MIN));
+  y = select(y, (short2)SHRT_MAX, convert_short2(x >= (double2)SHRT_MAX));
   return y;
 }
 #endif
@@ -30682,8 +30908,8 @@ short3 convert_short3_sat(double3 x)
 {
   x = select(x, (double3)(0), (long3)isnan(x));
   short3 y = convert_short3(x);
-  y = select(y, (short3)SHRT_MIN, convert_short3(x < (double3)(-0x1p+15f)));
-  y = select(y, (short3)SHRT_MAX, convert_short3(x >= (double3)(0x1p+15f)));
+  y = select(y, (short3)SHRT_MIN, convert_short3(x < (double3)SHRT_MIN));
+  y = select(y, (short3)SHRT_MAX, convert_short3(x >= (double3)SHRT_MAX));
   return y;
 }
 #endif
@@ -30694,8 +30920,8 @@ short4 convert_short4_sat(double4 x)
 {
   x = select(x, (double4)(0), (long4)isnan(x));
   short4 y = convert_short4(x);
-  y = select(y, (short4)SHRT_MIN, convert_short4(x < (double4)(-0x1p+15f)));
-  y = select(y, (short4)SHRT_MAX, convert_short4(x >= (double4)(0x1p+15f)));
+  y = select(y, (short4)SHRT_MIN, convert_short4(x < (double4)SHRT_MIN));
+  y = select(y, (short4)SHRT_MAX, convert_short4(x >= (double4)SHRT_MAX));
   return y;
 }
 #endif
@@ -30706,8 +30932,8 @@ short8 convert_short8_sat(double8 x)
 {
   x = select(x, (double8)(0), (long8)isnan(x));
   short8 y = convert_short8(x);
-  y = select(y, (short8)SHRT_MIN, convert_short8(x < (double8)(-0x1p+15f)));
-  y = select(y, (short8)SHRT_MAX, convert_short8(x >= (double8)(0x1p+15f)));
+  y = select(y, (short8)SHRT_MIN, convert_short8(x < (double8)SHRT_MIN));
+  y = select(y, (short8)SHRT_MAX, convert_short8(x >= (double8)SHRT_MAX));
   return y;
 }
 #endif
@@ -30718,8 +30944,8 @@ short16 convert_short16_sat(double16 x)
 {
   x = select(x, (double16)(0), (long16)isnan(x));
   short16 y = convert_short16(x);
-  y = select(y, (short16)SHRT_MIN, convert_short16(x < (double16)(-0x1p+15f)));
-  y = select(y, (short16)SHRT_MAX, convert_short16(x >= (double16)(0x1p+15f)));
+  y = select(y, (short16)SHRT_MIN, convert_short16(x < (double16)SHRT_MIN));
+  y = select(y, (short16)SHRT_MAX, convert_short16(x >= (double16)SHRT_MAX));
   return y;
 }
 #endif
@@ -30730,8 +30956,8 @@ ushort convert_ushort_sat(double x)
 {
   x = select(x, (double)(0), (long)isnan(x));
   ushort y = convert_ushort(x);
-  y = select(y, (ushort)0, as_ushort(convert_short(x < (double)0.0f)));
-  y = select(y, (ushort)USHRT_MAX, as_ushort(convert_short(x >= (double)(0x1p+16f))));
+  y = select(y, (ushort)0, as_ushort(convert_short(x < (double)0)));
+  y = select(y, (ushort)USHRT_MAX, as_ushort(convert_short(x >= (double)USHRT_MAX)));
   return y;
 }
 #endif
@@ -30742,8 +30968,8 @@ ushort2 convert_ushort2_sat(double2 x)
 {
   x = select(x, (double2)(0), (long2)isnan(x));
   ushort2 y = convert_ushort2(x);
-  y = select(y, (ushort2)0, as_ushort2(convert_short2(x < (double2)0.0f)));
-  y = select(y, (ushort2)USHRT_MAX, as_ushort2(convert_short2(x >= (double2)(0x1p+16f))));
+  y = select(y, (ushort2)0, as_ushort2(convert_short2(x < (double2)0)));
+  y = select(y, (ushort2)USHRT_MAX, as_ushort2(convert_short2(x >= (double2)USHRT_MAX)));
   return y;
 }
 #endif
@@ -30754,8 +30980,8 @@ ushort3 convert_ushort3_sat(double3 x)
 {
   x = select(x, (double3)(0), (long3)isnan(x));
   ushort3 y = convert_ushort3(x);
-  y = select(y, (ushort3)0, as_ushort3(convert_short3(x < (double3)0.0f)));
-  y = select(y, (ushort3)USHRT_MAX, as_ushort3(convert_short3(x >= (double3)(0x1p+16f))));
+  y = select(y, (ushort3)0, as_ushort3(convert_short3(x < (double3)0)));
+  y = select(y, (ushort3)USHRT_MAX, as_ushort3(convert_short3(x >= (double3)USHRT_MAX)));
   return y;
 }
 #endif
@@ -30766,8 +30992,8 @@ ushort4 convert_ushort4_sat(double4 x)
 {
   x = select(x, (double4)(0), (long4)isnan(x));
   ushort4 y = convert_ushort4(x);
-  y = select(y, (ushort4)0, as_ushort4(convert_short4(x < (double4)0.0f)));
-  y = select(y, (ushort4)USHRT_MAX, as_ushort4(convert_short4(x >= (double4)(0x1p+16f))));
+  y = select(y, (ushort4)0, as_ushort4(convert_short4(x < (double4)0)));
+  y = select(y, (ushort4)USHRT_MAX, as_ushort4(convert_short4(x >= (double4)USHRT_MAX)));
   return y;
 }
 #endif
@@ -30778,8 +31004,8 @@ ushort8 convert_ushort8_sat(double8 x)
 {
   x = select(x, (double8)(0), (long8)isnan(x));
   ushort8 y = convert_ushort8(x);
-  y = select(y, (ushort8)0, as_ushort8(convert_short8(x < (double8)0.0f)));
-  y = select(y, (ushort8)USHRT_MAX, as_ushort8(convert_short8(x >= (double8)(0x1p+16f))));
+  y = select(y, (ushort8)0, as_ushort8(convert_short8(x < (double8)0)));
+  y = select(y, (ushort8)USHRT_MAX, as_ushort8(convert_short8(x >= (double8)USHRT_MAX)));
   return y;
 }
 #endif
@@ -30790,8 +31016,8 @@ ushort16 convert_ushort16_sat(double16 x)
 {
   x = select(x, (double16)(0), (long16)isnan(x));
   ushort16 y = convert_ushort16(x);
-  y = select(y, (ushort16)0, as_ushort16(convert_short16(x < (double16)0.0f)));
-  y = select(y, (ushort16)USHRT_MAX, as_ushort16(convert_short16(x >= (double16)(0x1p+16f))));
+  y = select(y, (ushort16)0, as_ushort16(convert_short16(x < (double16)0)));
+  y = select(y, (ushort16)USHRT_MAX, as_ushort16(convert_short16(x >= (double16)USHRT_MAX)));
   return y;
 }
 #endif
@@ -30802,8 +31028,8 @@ int convert_int_sat(double x)
 {
   x = select(x, (double)(0), (long)isnan(x));
   int y = convert_int(x);
-  y = select(y, (int)INT_MIN, convert_int(x < (double)(-0x1p+31f)));
-  y = select(y, (int)INT_MAX, convert_int(x >= (double)(0x1p+31f)));
+  y = select(y, (int)INT_MIN, convert_int(x < (double)INT_MIN));
+  y = select(y, (int)INT_MAX, convert_int(x >= (double)INT_MAX));
   return y;
 }
 #endif
@@ -30814,8 +31040,8 @@ int2 convert_int2_sat(double2 x)
 {
   x = select(x, (double2)(0), (long2)isnan(x));
   int2 y = convert_int2(x);
-  y = select(y, (int2)INT_MIN, convert_int2(x < (double2)(-0x1p+31f)));
-  y = select(y, (int2)INT_MAX, convert_int2(x >= (double2)(0x1p+31f)));
+  y = select(y, (int2)INT_MIN, convert_int2(x < (double2)INT_MIN));
+  y = select(y, (int2)INT_MAX, convert_int2(x >= (double2)INT_MAX));
   return y;
 }
 #endif
@@ -30826,8 +31052,8 @@ int3 convert_int3_sat(double3 x)
 {
   x = select(x, (double3)(0), (long3)isnan(x));
   int3 y = convert_int3(x);
-  y = select(y, (int3)INT_MIN, convert_int3(x < (double3)(-0x1p+31f)));
-  y = select(y, (int3)INT_MAX, convert_int3(x >= (double3)(0x1p+31f)));
+  y = select(y, (int3)INT_MIN, convert_int3(x < (double3)INT_MIN));
+  y = select(y, (int3)INT_MAX, convert_int3(x >= (double3)INT_MAX));
   return y;
 }
 #endif
@@ -30838,8 +31064,8 @@ int4 convert_int4_sat(double4 x)
 {
   x = select(x, (double4)(0), (long4)isnan(x));
   int4 y = convert_int4(x);
-  y = select(y, (int4)INT_MIN, convert_int4(x < (double4)(-0x1p+31f)));
-  y = select(y, (int4)INT_MAX, convert_int4(x >= (double4)(0x1p+31f)));
+  y = select(y, (int4)INT_MIN, convert_int4(x < (double4)INT_MIN));
+  y = select(y, (int4)INT_MAX, convert_int4(x >= (double4)INT_MAX));
   return y;
 }
 #endif
@@ -30850,8 +31076,8 @@ int8 convert_int8_sat(double8 x)
 {
   x = select(x, (double8)(0), (long8)isnan(x));
   int8 y = convert_int8(x);
-  y = select(y, (int8)INT_MIN, convert_int8(x < (double8)(-0x1p+31f)));
-  y = select(y, (int8)INT_MAX, convert_int8(x >= (double8)(0x1p+31f)));
+  y = select(y, (int8)INT_MIN, convert_int8(x < (double8)INT_MIN));
+  y = select(y, (int8)INT_MAX, convert_int8(x >= (double8)INT_MAX));
   return y;
 }
 #endif
@@ -30862,8 +31088,8 @@ int16 convert_int16_sat(double16 x)
 {
   x = select(x, (double16)(0), (long16)isnan(x));
   int16 y = convert_int16(x);
-  y = select(y, (int16)INT_MIN, convert_int16(x < (double16)(-0x1p+31f)));
-  y = select(y, (int16)INT_MAX, convert_int16(x >= (double16)(0x1p+31f)));
+  y = select(y, (int16)INT_MIN, convert_int16(x < (double16)INT_MIN));
+  y = select(y, (int16)INT_MAX, convert_int16(x >= (double16)INT_MAX));
   return y;
 }
 #endif
@@ -30874,8 +31100,8 @@ uint convert_uint_sat(double x)
 {
   x = select(x, (double)(0), (long)isnan(x));
   uint y = convert_uint(x);
-  y = select(y, (uint)0, as_uint(convert_int(x < (double)0.0f)));
-  y = select(y, (uint)UINT_MAX, as_uint(convert_int(x >= (double)(0x1p+32f))));
+  y = select(y, (uint)0, as_uint(convert_int(x < (double)0)));
+  y = select(y, (uint)UINT_MAX, as_uint(convert_int(x >= (double)UINT_MAX)));
   return y;
 }
 #endif
@@ -30886,8 +31112,8 @@ uint2 convert_uint2_sat(double2 x)
 {
   x = select(x, (double2)(0), (long2)isnan(x));
   uint2 y = convert_uint2(x);
-  y = select(y, (uint2)0, as_uint2(convert_int2(x < (double2)0.0f)));
-  y = select(y, (uint2)UINT_MAX, as_uint2(convert_int2(x >= (double2)(0x1p+32f))));
+  y = select(y, (uint2)0, as_uint2(convert_int2(x < (double2)0)));
+  y = select(y, (uint2)UINT_MAX, as_uint2(convert_int2(x >= (double2)UINT_MAX)));
   return y;
 }
 #endif
@@ -30898,8 +31124,8 @@ uint3 convert_uint3_sat(double3 x)
 {
   x = select(x, (double3)(0), (long3)isnan(x));
   uint3 y = convert_uint3(x);
-  y = select(y, (uint3)0, as_uint3(convert_int3(x < (double3)0.0f)));
-  y = select(y, (uint3)UINT_MAX, as_uint3(convert_int3(x >= (double3)(0x1p+32f))));
+  y = select(y, (uint3)0, as_uint3(convert_int3(x < (double3)0)));
+  y = select(y, (uint3)UINT_MAX, as_uint3(convert_int3(x >= (double3)UINT_MAX)));
   return y;
 }
 #endif
@@ -30910,8 +31136,8 @@ uint4 convert_uint4_sat(double4 x)
 {
   x = select(x, (double4)(0), (long4)isnan(x));
   uint4 y = convert_uint4(x);
-  y = select(y, (uint4)0, as_uint4(convert_int4(x < (double4)0.0f)));
-  y = select(y, (uint4)UINT_MAX, as_uint4(convert_int4(x >= (double4)(0x1p+32f))));
+  y = select(y, (uint4)0, as_uint4(convert_int4(x < (double4)0)));
+  y = select(y, (uint4)UINT_MAX, as_uint4(convert_int4(x >= (double4)UINT_MAX)));
   return y;
 }
 #endif
@@ -30922,8 +31148,8 @@ uint8 convert_uint8_sat(double8 x)
 {
   x = select(x, (double8)(0), (long8)isnan(x));
   uint8 y = convert_uint8(x);
-  y = select(y, (uint8)0, as_uint8(convert_int8(x < (double8)0.0f)));
-  y = select(y, (uint8)UINT_MAX, as_uint8(convert_int8(x >= (double8)(0x1p+32f))));
+  y = select(y, (uint8)0, as_uint8(convert_int8(x < (double8)0)));
+  y = select(y, (uint8)UINT_MAX, as_uint8(convert_int8(x >= (double8)UINT_MAX)));
   return y;
 }
 #endif
@@ -30934,8 +31160,8 @@ uint16 convert_uint16_sat(double16 x)
 {
   x = select(x, (double16)(0), (long16)isnan(x));
   uint16 y = convert_uint16(x);
-  y = select(y, (uint16)0, as_uint16(convert_int16(x < (double16)0.0f)));
-  y = select(y, (uint16)UINT_MAX, as_uint16(convert_int16(x >= (double16)(0x1p+32f))));
+  y = select(y, (uint16)0, as_uint16(convert_int16(x < (double16)0)));
+  y = select(y, (uint16)UINT_MAX, as_uint16(convert_int16(x >= (double16)UINT_MAX)));
   return y;
 }
 #endif
@@ -30946,8 +31172,8 @@ long convert_long_sat(double x)
 {
   x = select(x, (double)(0), (long)isnan(x));
   long y = convert_long(x);
-  y = select(y, (long)LONG_MIN, convert_long(x < (double)(-0x1p+63f)));
-  y = select(y, (long)LONG_MAX, convert_long(x >= (double)(0x1p+63f)));
+  y = select(y, (long)LONG_MIN, convert_long(x < (double)LONG_MIN));
+  y = select(y, (long)LONG_MAX, convert_long(x >= (double)LONG_MAX));
   return y;
 }
 #endif
@@ -30958,8 +31184,8 @@ long2 convert_long2_sat(double2 x)
 {
   x = select(x, (double2)(0), (long2)isnan(x));
   long2 y = convert_long2(x);
-  y = select(y, (long2)LONG_MIN, convert_long2(x < (double2)(-0x1p+63f)));
-  y = select(y, (long2)LONG_MAX, convert_long2(x >= (double2)(0x1p+63f)));
+  y = select(y, (long2)LONG_MIN, convert_long2(x < (double2)LONG_MIN));
+  y = select(y, (long2)LONG_MAX, convert_long2(x >= (double2)LONG_MAX));
   return y;
 }
 #endif
@@ -30970,8 +31196,8 @@ long3 convert_long3_sat(double3 x)
 {
   x = select(x, (double3)(0), (long3)isnan(x));
   long3 y = convert_long3(x);
-  y = select(y, (long3)LONG_MIN, convert_long3(x < (double3)(-0x1p+63f)));
-  y = select(y, (long3)LONG_MAX, convert_long3(x >= (double3)(0x1p+63f)));
+  y = select(y, (long3)LONG_MIN, convert_long3(x < (double3)LONG_MIN));
+  y = select(y, (long3)LONG_MAX, convert_long3(x >= (double3)LONG_MAX));
   return y;
 }
 #endif
@@ -30982,8 +31208,8 @@ long4 convert_long4_sat(double4 x)
 {
   x = select(x, (double4)(0), (long4)isnan(x));
   long4 y = convert_long4(x);
-  y = select(y, (long4)LONG_MIN, convert_long4(x < (double4)(-0x1p+63f)));
-  y = select(y, (long4)LONG_MAX, convert_long4(x >= (double4)(0x1p+63f)));
+  y = select(y, (long4)LONG_MIN, convert_long4(x < (double4)LONG_MIN));
+  y = select(y, (long4)LONG_MAX, convert_long4(x >= (double4)LONG_MAX));
   return y;
 }
 #endif
@@ -30994,8 +31220,8 @@ long8 convert_long8_sat(double8 x)
 {
   x = select(x, (double8)(0), (long8)isnan(x));
   long8 y = convert_long8(x);
-  y = select(y, (long8)LONG_MIN, convert_long8(x < (double8)(-0x1p+63f)));
-  y = select(y, (long8)LONG_MAX, convert_long8(x >= (double8)(0x1p+63f)));
+  y = select(y, (long8)LONG_MIN, convert_long8(x < (double8)LONG_MIN));
+  y = select(y, (long8)LONG_MAX, convert_long8(x >= (double8)LONG_MAX));
   return y;
 }
 #endif
@@ -31006,8 +31232,8 @@ long16 convert_long16_sat(double16 x)
 {
   x = select(x, (double16)(0), (long16)isnan(x));
   long16 y = convert_long16(x);
-  y = select(y, (long16)LONG_MIN, convert_long16(x < (double16)(-0x1p+63f)));
-  y = select(y, (long16)LONG_MAX, convert_long16(x >= (double16)(0x1p+63f)));
+  y = select(y, (long16)LONG_MIN, convert_long16(x < (double16)LONG_MIN));
+  y = select(y, (long16)LONG_MAX, convert_long16(x >= (double16)LONG_MAX));
   return y;
 }
 #endif
@@ -31018,8 +31244,8 @@ ulong convert_ulong_sat(double x)
 {
   x = select(x, (double)(0), (long)isnan(x));
   ulong y = convert_ulong(x);
-  y = select(y, (ulong)0, as_ulong(convert_long(x < (double)0.0f)));
-  y = select(y, (ulong)ULONG_MAX, as_ulong(convert_long(x >= (double)(0x1p+64f))));
+  y = select(y, (ulong)0, as_ulong(convert_long(x < (double)0)));
+  y = select(y, (ulong)ULONG_MAX, as_ulong(convert_long(x >= (double)ULONG_MAX)));
   return y;
 }
 #endif
@@ -31030,8 +31256,8 @@ ulong2 convert_ulong2_sat(double2 x)
 {
   x = select(x, (double2)(0), (long2)isnan(x));
   ulong2 y = convert_ulong2(x);
-  y = select(y, (ulong2)0, as_ulong2(convert_long2(x < (double2)0.0f)));
-  y = select(y, (ulong2)ULONG_MAX, as_ulong2(convert_long2(x >= (double2)(0x1p+64f))));
+  y = select(y, (ulong2)0, as_ulong2(convert_long2(x < (double2)0)));
+  y = select(y, (ulong2)ULONG_MAX, as_ulong2(convert_long2(x >= (double2)ULONG_MAX)));
   return y;
 }
 #endif
@@ -31042,8 +31268,8 @@ ulong3 convert_ulong3_sat(double3 x)
 {
   x = select(x, (double3)(0), (long3)isnan(x));
   ulong3 y = convert_ulong3(x);
-  y = select(y, (ulong3)0, as_ulong3(convert_long3(x < (double3)0.0f)));
-  y = select(y, (ulong3)ULONG_MAX, as_ulong3(convert_long3(x >= (double3)(0x1p+64f))));
+  y = select(y, (ulong3)0, as_ulong3(convert_long3(x < (double3)0)));
+  y = select(y, (ulong3)ULONG_MAX, as_ulong3(convert_long3(x >= (double3)ULONG_MAX)));
   return y;
 }
 #endif
@@ -31054,8 +31280,8 @@ ulong4 convert_ulong4_sat(double4 x)
 {
   x = select(x, (double4)(0), (long4)isnan(x));
   ulong4 y = convert_ulong4(x);
-  y = select(y, (ulong4)0, as_ulong4(convert_long4(x < (double4)0.0f)));
-  y = select(y, (ulong4)ULONG_MAX, as_ulong4(convert_long4(x >= (double4)(0x1p+64f))));
+  y = select(y, (ulong4)0, as_ulong4(convert_long4(x < (double4)0)));
+  y = select(y, (ulong4)ULONG_MAX, as_ulong4(convert_long4(x >= (double4)ULONG_MAX)));
   return y;
 }
 #endif
@@ -31066,8 +31292,8 @@ ulong8 convert_ulong8_sat(double8 x)
 {
   x = select(x, (double8)(0), (long8)isnan(x));
   ulong8 y = convert_ulong8(x);
-  y = select(y, (ulong8)0, as_ulong8(convert_long8(x < (double8)0.0f)));
-  y = select(y, (ulong8)ULONG_MAX, as_ulong8(convert_long8(x >= (double8)(0x1p+64f))));
+  y = select(y, (ulong8)0, as_ulong8(convert_long8(x < (double8)0)));
+  y = select(y, (ulong8)ULONG_MAX, as_ulong8(convert_long8(x >= (double8)ULONG_MAX)));
   return y;
 }
 #endif
@@ -31078,8 +31304,8 @@ ulong16 convert_ulong16_sat(double16 x)
 {
   x = select(x, (double16)(0), (long16)isnan(x));
   ulong16 y = convert_ulong16(x);
-  y = select(y, (ulong16)0, as_ulong16(convert_long16(x < (double16)0.0f)));
-  y = select(y, (ulong16)ULONG_MAX, as_ulong16(convert_long16(x >= (double16)(0x1p+64f))));
+  y = select(y, (ulong16)0, as_ulong16(convert_long16(x < (double16)0)));
+  y = select(y, (ulong16)ULONG_MAX, as_ulong16(convert_long16(x >= (double16)ULONG_MAX)));
   return y;
 }
 #endif
@@ -50675,8 +50901,8 @@ float convert_float_rtz(int x)
   int y = convert_int_sat(r);
   uint abs_x = abs(x);
   uint abs_y = abs(y);
-  float res = select(r, nextafter(r, sign(r) * (float)-INFINITY), convert_int(abs_y > abs_x));
-  return select(res, (float)(0x1.fffffep+30f), convert_int(x >= 0x7ffffffc));
+  float res = select(r, nextafter(r, sign(r) * (float)-INFINITY), convert_int(convert_int(abs_y > abs_x) | convert_int(isinf(r))));
+  return select(res, (float)(0x1.fffffep+30f), convert_int(x >= (int)0x7ffffffc));
 }
 
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
@@ -50690,7 +50916,7 @@ float convert_float_rtp(int x)
 {
   float r = convert_float(x);
   int y = convert_int_sat(r);
-  float res = select(r, nextafter(r, (float)INFINITY), convert_int(y < x));
+  float res = select(r, nextafter(r, (float)INFINITY), convert_int(convert_int(y < x) | convert_int(r == (float)-INFINITY)));
   return res;
 }
 
@@ -50699,8 +50925,8 @@ float convert_float_rtn(int x)
 {
   float r = convert_float(x);
   int y = convert_int_sat(r);
-  float res = select(r, nextafter(r, (float)-INFINITY), convert_int(y > x));
-  return select(res, (float)(0x1.fffffep+30f), convert_int(x >= 0x7ffffffc));
+  float res = select(r, nextafter(r, (float)-INFINITY), convert_int(convert_int(y > x) | convert_int(r == (float)INFINITY)));
+  return select(res, (float)(0x1.fffffep+30f), convert_int(x >= (int)0x7ffffffc));
 }
 
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
@@ -50710,8 +50936,8 @@ float2 convert_float2_rtz(int2 x)
   int2 y = convert_int2_sat(r);
   uint2 abs_x = abs(x);
   uint2 abs_y = abs(y);
-  float2 res = select(r, nextafter(r, sign(r) * (float2)-INFINITY), convert_int2(abs_y > abs_x));
-  return select(res, (float2)(0x1.fffffep+30f), convert_int2(x >= 0x7ffffffc));
+  float2 res = select(r, nextafter(r, sign(r) * (float2)-INFINITY), convert_int2(convert_int2(abs_y > abs_x) | convert_int2(isinf(r))));
+  return select(res, (float2)(0x1.fffffep+30f), convert_int2(x >= (int)0x7ffffffc));
 }
 
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
@@ -50725,7 +50951,7 @@ float2 convert_float2_rtp(int2 x)
 {
   float2 r = convert_float2(x);
   int2 y = convert_int2_sat(r);
-  float2 res = select(r, nextafter(r, (float2)INFINITY), convert_int2(y < x));
+  float2 res = select(r, nextafter(r, (float2)INFINITY), convert_int2(convert_int2(y < x) | convert_int2(r == (float2)-INFINITY)));
   return res;
 }
 
@@ -50734,8 +50960,8 @@ float2 convert_float2_rtn(int2 x)
 {
   float2 r = convert_float2(x);
   int2 y = convert_int2_sat(r);
-  float2 res = select(r, nextafter(r, (float2)-INFINITY), convert_int2(y > x));
-  return select(res, (float2)(0x1.fffffep+30f), convert_int2(x >= 0x7ffffffc));
+  float2 res = select(r, nextafter(r, (float2)-INFINITY), convert_int2(convert_int2(y > x) | convert_int2(r == (float2)INFINITY)));
+  return select(res, (float2)(0x1.fffffep+30f), convert_int2(x >= (int)0x7ffffffc));
 }
 
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
@@ -50745,8 +50971,8 @@ float3 convert_float3_rtz(int3 x)
   int3 y = convert_int3_sat(r);
   uint3 abs_x = abs(x);
   uint3 abs_y = abs(y);
-  float3 res = select(r, nextafter(r, sign(r) * (float3)-INFINITY), convert_int3(abs_y > abs_x));
-  return select(res, (float3)(0x1.fffffep+30f), convert_int3(x >= 0x7ffffffc));
+  float3 res = select(r, nextafter(r, sign(r) * (float3)-INFINITY), convert_int3(convert_int3(abs_y > abs_x) | convert_int3(isinf(r))));
+  return select(res, (float3)(0x1.fffffep+30f), convert_int3(x >= (int)0x7ffffffc));
 }
 
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
@@ -50760,7 +50986,7 @@ float3 convert_float3_rtp(int3 x)
 {
   float3 r = convert_float3(x);
   int3 y = convert_int3_sat(r);
-  float3 res = select(r, nextafter(r, (float3)INFINITY), convert_int3(y < x));
+  float3 res = select(r, nextafter(r, (float3)INFINITY), convert_int3(convert_int3(y < x) | convert_int3(r == (float3)-INFINITY)));
   return res;
 }
 
@@ -50769,8 +50995,8 @@ float3 convert_float3_rtn(int3 x)
 {
   float3 r = convert_float3(x);
   int3 y = convert_int3_sat(r);
-  float3 res = select(r, nextafter(r, (float3)-INFINITY), convert_int3(y > x));
-  return select(res, (float3)(0x1.fffffep+30f), convert_int3(x >= 0x7ffffffc));
+  float3 res = select(r, nextafter(r, (float3)-INFINITY), convert_int3(convert_int3(y > x) | convert_int3(r == (float3)INFINITY)));
+  return select(res, (float3)(0x1.fffffep+30f), convert_int3(x >= (int)0x7ffffffc));
 }
 
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
@@ -50780,8 +51006,8 @@ float4 convert_float4_rtz(int4 x)
   int4 y = convert_int4_sat(r);
   uint4 abs_x = abs(x);
   uint4 abs_y = abs(y);
-  float4 res = select(r, nextafter(r, sign(r) * (float4)-INFINITY), convert_int4(abs_y > abs_x));
-  return select(res, (float4)(0x1.fffffep+30f), convert_int4(x >= 0x7ffffffc));
+  float4 res = select(r, nextafter(r, sign(r) * (float4)-INFINITY), convert_int4(convert_int4(abs_y > abs_x) | convert_int4(isinf(r))));
+  return select(res, (float4)(0x1.fffffep+30f), convert_int4(x >= (int)0x7ffffffc));
 }
 
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
@@ -50795,7 +51021,7 @@ float4 convert_float4_rtp(int4 x)
 {
   float4 r = convert_float4(x);
   int4 y = convert_int4_sat(r);
-  float4 res = select(r, nextafter(r, (float4)INFINITY), convert_int4(y < x));
+  float4 res = select(r, nextafter(r, (float4)INFINITY), convert_int4(convert_int4(y < x) | convert_int4(r == (float4)-INFINITY)));
   return res;
 }
 
@@ -50804,8 +51030,8 @@ float4 convert_float4_rtn(int4 x)
 {
   float4 r = convert_float4(x);
   int4 y = convert_int4_sat(r);
-  float4 res = select(r, nextafter(r, (float4)-INFINITY), convert_int4(y > x));
-  return select(res, (float4)(0x1.fffffep+30f), convert_int4(x >= 0x7ffffffc));
+  float4 res = select(r, nextafter(r, (float4)-INFINITY), convert_int4(convert_int4(y > x) | convert_int4(r == (float4)INFINITY)));
+  return select(res, (float4)(0x1.fffffep+30f), convert_int4(x >= (int)0x7ffffffc));
 }
 
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
@@ -50815,8 +51041,8 @@ float8 convert_float8_rtz(int8 x)
   int8 y = convert_int8_sat(r);
   uint8 abs_x = abs(x);
   uint8 abs_y = abs(y);
-  float8 res = select(r, nextafter(r, sign(r) * (float8)-INFINITY), convert_int8(abs_y > abs_x));
-  return select(res, (float8)(0x1.fffffep+30f), convert_int8(x >= 0x7ffffffc));
+  float8 res = select(r, nextafter(r, sign(r) * (float8)-INFINITY), convert_int8(convert_int8(abs_y > abs_x) | convert_int8(isinf(r))));
+  return select(res, (float8)(0x1.fffffep+30f), convert_int8(x >= (int)0x7ffffffc));
 }
 
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
@@ -50830,7 +51056,7 @@ float8 convert_float8_rtp(int8 x)
 {
   float8 r = convert_float8(x);
   int8 y = convert_int8_sat(r);
-  float8 res = select(r, nextafter(r, (float8)INFINITY), convert_int8(y < x));
+  float8 res = select(r, nextafter(r, (float8)INFINITY), convert_int8(convert_int8(y < x) | convert_int8(r == (float8)-INFINITY)));
   return res;
 }
 
@@ -50839,8 +51065,8 @@ float8 convert_float8_rtn(int8 x)
 {
   float8 r = convert_float8(x);
   int8 y = convert_int8_sat(r);
-  float8 res = select(r, nextafter(r, (float8)-INFINITY), convert_int8(y > x));
-  return select(res, (float8)(0x1.fffffep+30f), convert_int8(x >= 0x7ffffffc));
+  float8 res = select(r, nextafter(r, (float8)-INFINITY), convert_int8(convert_int8(y > x) | convert_int8(r == (float8)INFINITY)));
+  return select(res, (float8)(0x1.fffffep+30f), convert_int8(x >= (int)0x7ffffffc));
 }
 
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
@@ -50850,8 +51076,8 @@ float16 convert_float16_rtz(int16 x)
   int16 y = convert_int16_sat(r);
   uint16 abs_x = abs(x);
   uint16 abs_y = abs(y);
-  float16 res = select(r, nextafter(r, sign(r) * (float16)-INFINITY), convert_int16(abs_y > abs_x));
-  return select(res, (float16)(0x1.fffffep+30f), convert_int16(x >= 0x7ffffffc));
+  float16 res = select(r, nextafter(r, sign(r) * (float16)-INFINITY), convert_int16(convert_int16(abs_y > abs_x) | convert_int16(isinf(r))));
+  return select(res, (float16)(0x1.fffffep+30f), convert_int16(x >= (int)0x7ffffffc));
 }
 
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
@@ -50865,7 +51091,7 @@ float16 convert_float16_rtp(int16 x)
 {
   float16 r = convert_float16(x);
   int16 y = convert_int16_sat(r);
-  float16 res = select(r, nextafter(r, (float16)INFINITY), convert_int16(y < x));
+  float16 res = select(r, nextafter(r, (float16)INFINITY), convert_int16(convert_int16(y < x) | convert_int16(r == (float16)-INFINITY)));
   return res;
 }
 
@@ -50874,8 +51100,8 @@ float16 convert_float16_rtn(int16 x)
 {
   float16 r = convert_float16(x);
   int16 y = convert_int16_sat(r);
-  float16 res = select(r, nextafter(r, (float16)-INFINITY), convert_int16(y > x));
-  return select(res, (float16)(0x1.fffffep+30f), convert_int16(x >= 0x7ffffffc));
+  float16 res = select(r, nextafter(r, (float16)-INFINITY), convert_int16(convert_int16(y > x) | convert_int16(r == (float16)INFINITY)));
+  return select(res, (float16)(0x1.fffffep+30f), convert_int16(x >= (int)0x7ffffffc));
 }
 
 #if defined(cl_khr_fp64)
@@ -51077,8 +51303,8 @@ float convert_float_rtz(uint x)
   uint y = convert_uint_sat(r);
   uint abs_x = abs(x);
   uint abs_y = abs(y);
-  float res = select(r, nextafter(r, sign(r) * (float)-INFINITY), convert_int(abs_y > abs_x));
-  return select(res, (float)(0x1.fffffep+31f), convert_int(x >= 0xffffff80));
+  float res = select(r, nextafter(r, sign(r) * (float)-INFINITY), convert_int(convert_int(abs_y > abs_x) | convert_int(isinf(r))));
+  return select(res, (float)(0x1.fffffep+31f), convert_int(x >= (uint)0xffffff80U));
 }
 
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
@@ -51092,7 +51318,7 @@ float convert_float_rtp(uint x)
 {
   float r = convert_float(x);
   uint y = convert_uint_sat(r);
-  float res = select(r, nextafter(r, (float)INFINITY), convert_int(y < x));
+  float res = select(r, nextafter(r, (float)INFINITY), convert_int(convert_int(y < x) | convert_int(r == (float)-INFINITY)));
   return res;
 }
 
@@ -51101,8 +51327,8 @@ float convert_float_rtn(uint x)
 {
   float r = convert_float(x);
   uint y = convert_uint_sat(r);
-  float res = select(r, nextafter(r, (float)-INFINITY), convert_int(y > x));
-  return select(res, (float)(0x1.fffffep+31f), convert_int(x >= 0xffffff80));
+  float res = select(r, nextafter(r, (float)-INFINITY), convert_int(convert_int(y > x) | convert_int(r == (float)INFINITY)));
+  return select(res, (float)(0x1.fffffep+31f), convert_int(x >= (uint)0xffffff80U));
 }
 
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
@@ -51112,8 +51338,8 @@ float2 convert_float2_rtz(uint2 x)
   uint2 y = convert_uint2_sat(r);
   uint2 abs_x = abs(x);
   uint2 abs_y = abs(y);
-  float2 res = select(r, nextafter(r, sign(r) * (float2)-INFINITY), convert_int2(abs_y > abs_x));
-  return select(res, (float2)(0x1.fffffep+31f), convert_int2(x >= 0xffffff80));
+  float2 res = select(r, nextafter(r, sign(r) * (float2)-INFINITY), convert_int2(convert_int2(abs_y > abs_x) | convert_int2(isinf(r))));
+  return select(res, (float2)(0x1.fffffep+31f), convert_int2(x >= (uint)0xffffff80U));
 }
 
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
@@ -51127,7 +51353,7 @@ float2 convert_float2_rtp(uint2 x)
 {
   float2 r = convert_float2(x);
   uint2 y = convert_uint2_sat(r);
-  float2 res = select(r, nextafter(r, (float2)INFINITY), convert_int2(y < x));
+  float2 res = select(r, nextafter(r, (float2)INFINITY), convert_int2(convert_int2(y < x) | convert_int2(r == (float2)-INFINITY)));
   return res;
 }
 
@@ -51136,8 +51362,8 @@ float2 convert_float2_rtn(uint2 x)
 {
   float2 r = convert_float2(x);
   uint2 y = convert_uint2_sat(r);
-  float2 res = select(r, nextafter(r, (float2)-INFINITY), convert_int2(y > x));
-  return select(res, (float2)(0x1.fffffep+31f), convert_int2(x >= 0xffffff80));
+  float2 res = select(r, nextafter(r, (float2)-INFINITY), convert_int2(convert_int2(y > x) | convert_int2(r == (float2)INFINITY)));
+  return select(res, (float2)(0x1.fffffep+31f), convert_int2(x >= (uint)0xffffff80U));
 }
 
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
@@ -51147,8 +51373,8 @@ float3 convert_float3_rtz(uint3 x)
   uint3 y = convert_uint3_sat(r);
   uint3 abs_x = abs(x);
   uint3 abs_y = abs(y);
-  float3 res = select(r, nextafter(r, sign(r) * (float3)-INFINITY), convert_int3(abs_y > abs_x));
-  return select(res, (float3)(0x1.fffffep+31f), convert_int3(x >= 0xffffff80));
+  float3 res = select(r, nextafter(r, sign(r) * (float3)-INFINITY), convert_int3(convert_int3(abs_y > abs_x) | convert_int3(isinf(r))));
+  return select(res, (float3)(0x1.fffffep+31f), convert_int3(x >= (uint)0xffffff80U));
 }
 
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
@@ -51162,7 +51388,7 @@ float3 convert_float3_rtp(uint3 x)
 {
   float3 r = convert_float3(x);
   uint3 y = convert_uint3_sat(r);
-  float3 res = select(r, nextafter(r, (float3)INFINITY), convert_int3(y < x));
+  float3 res = select(r, nextafter(r, (float3)INFINITY), convert_int3(convert_int3(y < x) | convert_int3(r == (float3)-INFINITY)));
   return res;
 }
 
@@ -51171,8 +51397,8 @@ float3 convert_float3_rtn(uint3 x)
 {
   float3 r = convert_float3(x);
   uint3 y = convert_uint3_sat(r);
-  float3 res = select(r, nextafter(r, (float3)-INFINITY), convert_int3(y > x));
-  return select(res, (float3)(0x1.fffffep+31f), convert_int3(x >= 0xffffff80));
+  float3 res = select(r, nextafter(r, (float3)-INFINITY), convert_int3(convert_int3(y > x) | convert_int3(r == (float3)INFINITY)));
+  return select(res, (float3)(0x1.fffffep+31f), convert_int3(x >= (uint)0xffffff80U));
 }
 
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
@@ -51182,8 +51408,8 @@ float4 convert_float4_rtz(uint4 x)
   uint4 y = convert_uint4_sat(r);
   uint4 abs_x = abs(x);
   uint4 abs_y = abs(y);
-  float4 res = select(r, nextafter(r, sign(r) * (float4)-INFINITY), convert_int4(abs_y > abs_x));
-  return select(res, (float4)(0x1.fffffep+31f), convert_int4(x >= 0xffffff80));
+  float4 res = select(r, nextafter(r, sign(r) * (float4)-INFINITY), convert_int4(convert_int4(abs_y > abs_x) | convert_int4(isinf(r))));
+  return select(res, (float4)(0x1.fffffep+31f), convert_int4(x >= (uint)0xffffff80U));
 }
 
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
@@ -51197,7 +51423,7 @@ float4 convert_float4_rtp(uint4 x)
 {
   float4 r = convert_float4(x);
   uint4 y = convert_uint4_sat(r);
-  float4 res = select(r, nextafter(r, (float4)INFINITY), convert_int4(y < x));
+  float4 res = select(r, nextafter(r, (float4)INFINITY), convert_int4(convert_int4(y < x) | convert_int4(r == (float4)-INFINITY)));
   return res;
 }
 
@@ -51206,8 +51432,8 @@ float4 convert_float4_rtn(uint4 x)
 {
   float4 r = convert_float4(x);
   uint4 y = convert_uint4_sat(r);
-  float4 res = select(r, nextafter(r, (float4)-INFINITY), convert_int4(y > x));
-  return select(res, (float4)(0x1.fffffep+31f), convert_int4(x >= 0xffffff80));
+  float4 res = select(r, nextafter(r, (float4)-INFINITY), convert_int4(convert_int4(y > x) | convert_int4(r == (float4)INFINITY)));
+  return select(res, (float4)(0x1.fffffep+31f), convert_int4(x >= (uint)0xffffff80U));
 }
 
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
@@ -51217,8 +51443,8 @@ float8 convert_float8_rtz(uint8 x)
   uint8 y = convert_uint8_sat(r);
   uint8 abs_x = abs(x);
   uint8 abs_y = abs(y);
-  float8 res = select(r, nextafter(r, sign(r) * (float8)-INFINITY), convert_int8(abs_y > abs_x));
-  return select(res, (float8)(0x1.fffffep+31f), convert_int8(x >= 0xffffff80));
+  float8 res = select(r, nextafter(r, sign(r) * (float8)-INFINITY), convert_int8(convert_int8(abs_y > abs_x) | convert_int8(isinf(r))));
+  return select(res, (float8)(0x1.fffffep+31f), convert_int8(x >= (uint)0xffffff80U));
 }
 
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
@@ -51232,7 +51458,7 @@ float8 convert_float8_rtp(uint8 x)
 {
   float8 r = convert_float8(x);
   uint8 y = convert_uint8_sat(r);
-  float8 res = select(r, nextafter(r, (float8)INFINITY), convert_int8(y < x));
+  float8 res = select(r, nextafter(r, (float8)INFINITY), convert_int8(convert_int8(y < x) | convert_int8(r == (float8)-INFINITY)));
   return res;
 }
 
@@ -51241,8 +51467,8 @@ float8 convert_float8_rtn(uint8 x)
 {
   float8 r = convert_float8(x);
   uint8 y = convert_uint8_sat(r);
-  float8 res = select(r, nextafter(r, (float8)-INFINITY), convert_int8(y > x));
-  return select(res, (float8)(0x1.fffffep+31f), convert_int8(x >= 0xffffff80));
+  float8 res = select(r, nextafter(r, (float8)-INFINITY), convert_int8(convert_int8(y > x) | convert_int8(r == (float8)INFINITY)));
+  return select(res, (float8)(0x1.fffffep+31f), convert_int8(x >= (uint)0xffffff80U));
 }
 
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
@@ -51252,8 +51478,8 @@ float16 convert_float16_rtz(uint16 x)
   uint16 y = convert_uint16_sat(r);
   uint16 abs_x = abs(x);
   uint16 abs_y = abs(y);
-  float16 res = select(r, nextafter(r, sign(r) * (float16)-INFINITY), convert_int16(abs_y > abs_x));
-  return select(res, (float16)(0x1.fffffep+31f), convert_int16(x >= 0xffffff80));
+  float16 res = select(r, nextafter(r, sign(r) * (float16)-INFINITY), convert_int16(convert_int16(abs_y > abs_x) | convert_int16(isinf(r))));
+  return select(res, (float16)(0x1.fffffep+31f), convert_int16(x >= (uint)0xffffff80U));
 }
 
 _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
@@ -51267,7 +51493,7 @@ float16 convert_float16_rtp(uint16 x)
 {
   float16 r = convert_float16(x);
   uint16 y = convert_uint16_sat(r);
-  float16 res = select(r, nextafter(r, (float16)INFINITY), convert_int16(y < x));
+  float16 res = select(r, nextafter(r, (float16)INFINITY), convert_int16(convert_int16(y < x) | convert_int16(r == (float16)-INFINITY)));
   return res;
 }
 
@@ -51276,8 +51502,8 @@ float16 convert_float16_rtn(uint16 x)
 {
   float16 r = convert_float16(x);
   uint16 y = convert_uint16_sat(r);
-  float16 res = select(r, nextafter(r, (float16)-INFINITY), convert_int16(y > x));
-  return select(res, (float16)(0x1.fffffep+31f), convert_int16(x >= 0xffffff80));
+  float16 res = select(r, nextafter(r, (float16)-INFINITY), convert_int16(convert_int16(y > x) | convert_int16(r == (float16)INFINITY)));
+  return select(res, (float16)(0x1.fffffep+31f), convert_int16(x >= (uint)0xffffff80U));
 }
 
 #if defined(cl_khr_fp64)
@@ -51480,8 +51706,8 @@ float convert_float_rtz(long x)
   long y = convert_long_sat(r);
   ulong abs_x = abs(x);
   ulong abs_y = abs(y);
-  float res = select(r, nextafter(r, sign(r) * (float)-INFINITY), convert_int(abs_y > abs_x));
-  return select(res, (float)(0x1.fffffep+62f), convert_int(x >= 0x7fffffffffffffffL));
+  float res = select(r, nextafter(r, sign(r) * (float)-INFINITY), convert_int(convert_int(abs_y > abs_x) | convert_int(isinf(r))));
+  return select(res, (float)(0x1.fffffep+62f), convert_int(x >= (long)0x7fffffffffffffffL));
 }
 #endif
 
@@ -51499,7 +51725,7 @@ float convert_float_rtp(long x)
 {
   float r = convert_float(x);
   long y = convert_long_sat(r);
-  float res = select(r, nextafter(r, (float)INFINITY), convert_int(y < x));
+  float res = select(r, nextafter(r, (float)INFINITY), convert_int(convert_int(y < x) | convert_int(r == (float)-INFINITY)));
   return res;
 }
 #endif
@@ -51510,8 +51736,8 @@ float convert_float_rtn(long x)
 {
   float r = convert_float(x);
   long y = convert_long_sat(r);
-  float res = select(r, nextafter(r, (float)-INFINITY), convert_int(y > x));
-  return select(res, (float)(0x1.fffffep+62f), convert_int(x >= 0x7fffffffffffffffL));
+  float res = select(r, nextafter(r, (float)-INFINITY), convert_int(convert_int(y > x) | convert_int(r == (float)INFINITY)));
+  return select(res, (float)(0x1.fffffep+62f), convert_int(x >= (long)0x7fffffffffffffffL));
 }
 #endif
 
@@ -51523,8 +51749,8 @@ float2 convert_float2_rtz(long2 x)
   long2 y = convert_long2_sat(r);
   ulong2 abs_x = abs(x);
   ulong2 abs_y = abs(y);
-  float2 res = select(r, nextafter(r, sign(r) * (float2)-INFINITY), convert_int2(abs_y > abs_x));
-  return select(res, (float2)(0x1.fffffep+62f), convert_int2(x >= 0x7fffffffffffffffL));
+  float2 res = select(r, nextafter(r, sign(r) * (float2)-INFINITY), convert_int2(convert_int2(abs_y > abs_x) | convert_int2(isinf(r))));
+  return select(res, (float2)(0x1.fffffep+62f), convert_int2(x >= (long)0x7fffffffffffffffL));
 }
 #endif
 
@@ -51542,7 +51768,7 @@ float2 convert_float2_rtp(long2 x)
 {
   float2 r = convert_float2(x);
   long2 y = convert_long2_sat(r);
-  float2 res = select(r, nextafter(r, (float2)INFINITY), convert_int2(y < x));
+  float2 res = select(r, nextafter(r, (float2)INFINITY), convert_int2(convert_int2(y < x) | convert_int2(r == (float2)-INFINITY)));
   return res;
 }
 #endif
@@ -51553,8 +51779,8 @@ float2 convert_float2_rtn(long2 x)
 {
   float2 r = convert_float2(x);
   long2 y = convert_long2_sat(r);
-  float2 res = select(r, nextafter(r, (float2)-INFINITY), convert_int2(y > x));
-  return select(res, (float2)(0x1.fffffep+62f), convert_int2(x >= 0x7fffffffffffffffL));
+  float2 res = select(r, nextafter(r, (float2)-INFINITY), convert_int2(convert_int2(y > x) | convert_int2(r == (float2)INFINITY)));
+  return select(res, (float2)(0x1.fffffep+62f), convert_int2(x >= (long)0x7fffffffffffffffL));
 }
 #endif
 
@@ -51566,8 +51792,8 @@ float3 convert_float3_rtz(long3 x)
   long3 y = convert_long3_sat(r);
   ulong3 abs_x = abs(x);
   ulong3 abs_y = abs(y);
-  float3 res = select(r, nextafter(r, sign(r) * (float3)-INFINITY), convert_int3(abs_y > abs_x));
-  return select(res, (float3)(0x1.fffffep+62f), convert_int3(x >= 0x7fffffffffffffffL));
+  float3 res = select(r, nextafter(r, sign(r) * (float3)-INFINITY), convert_int3(convert_int3(abs_y > abs_x) | convert_int3(isinf(r))));
+  return select(res, (float3)(0x1.fffffep+62f), convert_int3(x >= (long)0x7fffffffffffffffL));
 }
 #endif
 
@@ -51585,7 +51811,7 @@ float3 convert_float3_rtp(long3 x)
 {
   float3 r = convert_float3(x);
   long3 y = convert_long3_sat(r);
-  float3 res = select(r, nextafter(r, (float3)INFINITY), convert_int3(y < x));
+  float3 res = select(r, nextafter(r, (float3)INFINITY), convert_int3(convert_int3(y < x) | convert_int3(r == (float3)-INFINITY)));
   return res;
 }
 #endif
@@ -51596,8 +51822,8 @@ float3 convert_float3_rtn(long3 x)
 {
   float3 r = convert_float3(x);
   long3 y = convert_long3_sat(r);
-  float3 res = select(r, nextafter(r, (float3)-INFINITY), convert_int3(y > x));
-  return select(res, (float3)(0x1.fffffep+62f), convert_int3(x >= 0x7fffffffffffffffL));
+  float3 res = select(r, nextafter(r, (float3)-INFINITY), convert_int3(convert_int3(y > x) | convert_int3(r == (float3)INFINITY)));
+  return select(res, (float3)(0x1.fffffep+62f), convert_int3(x >= (long)0x7fffffffffffffffL));
 }
 #endif
 
@@ -51609,8 +51835,8 @@ float4 convert_float4_rtz(long4 x)
   long4 y = convert_long4_sat(r);
   ulong4 abs_x = abs(x);
   ulong4 abs_y = abs(y);
-  float4 res = select(r, nextafter(r, sign(r) * (float4)-INFINITY), convert_int4(abs_y > abs_x));
-  return select(res, (float4)(0x1.fffffep+62f), convert_int4(x >= 0x7fffffffffffffffL));
+  float4 res = select(r, nextafter(r, sign(r) * (float4)-INFINITY), convert_int4(convert_int4(abs_y > abs_x) | convert_int4(isinf(r))));
+  return select(res, (float4)(0x1.fffffep+62f), convert_int4(x >= (long)0x7fffffffffffffffL));
 }
 #endif
 
@@ -51628,7 +51854,7 @@ float4 convert_float4_rtp(long4 x)
 {
   float4 r = convert_float4(x);
   long4 y = convert_long4_sat(r);
-  float4 res = select(r, nextafter(r, (float4)INFINITY), convert_int4(y < x));
+  float4 res = select(r, nextafter(r, (float4)INFINITY), convert_int4(convert_int4(y < x) | convert_int4(r == (float4)-INFINITY)));
   return res;
 }
 #endif
@@ -51639,8 +51865,8 @@ float4 convert_float4_rtn(long4 x)
 {
   float4 r = convert_float4(x);
   long4 y = convert_long4_sat(r);
-  float4 res = select(r, nextafter(r, (float4)-INFINITY), convert_int4(y > x));
-  return select(res, (float4)(0x1.fffffep+62f), convert_int4(x >= 0x7fffffffffffffffL));
+  float4 res = select(r, nextafter(r, (float4)-INFINITY), convert_int4(convert_int4(y > x) | convert_int4(r == (float4)INFINITY)));
+  return select(res, (float4)(0x1.fffffep+62f), convert_int4(x >= (long)0x7fffffffffffffffL));
 }
 #endif
 
@@ -51652,8 +51878,8 @@ float8 convert_float8_rtz(long8 x)
   long8 y = convert_long8_sat(r);
   ulong8 abs_x = abs(x);
   ulong8 abs_y = abs(y);
-  float8 res = select(r, nextafter(r, sign(r) * (float8)-INFINITY), convert_int8(abs_y > abs_x));
-  return select(res, (float8)(0x1.fffffep+62f), convert_int8(x >= 0x7fffffffffffffffL));
+  float8 res = select(r, nextafter(r, sign(r) * (float8)-INFINITY), convert_int8(convert_int8(abs_y > abs_x) | convert_int8(isinf(r))));
+  return select(res, (float8)(0x1.fffffep+62f), convert_int8(x >= (long)0x7fffffffffffffffL));
 }
 #endif
 
@@ -51671,7 +51897,7 @@ float8 convert_float8_rtp(long8 x)
 {
   float8 r = convert_float8(x);
   long8 y = convert_long8_sat(r);
-  float8 res = select(r, nextafter(r, (float8)INFINITY), convert_int8(y < x));
+  float8 res = select(r, nextafter(r, (float8)INFINITY), convert_int8(convert_int8(y < x) | convert_int8(r == (float8)-INFINITY)));
   return res;
 }
 #endif
@@ -51682,8 +51908,8 @@ float8 convert_float8_rtn(long8 x)
 {
   float8 r = convert_float8(x);
   long8 y = convert_long8_sat(r);
-  float8 res = select(r, nextafter(r, (float8)-INFINITY), convert_int8(y > x));
-  return select(res, (float8)(0x1.fffffep+62f), convert_int8(x >= 0x7fffffffffffffffL));
+  float8 res = select(r, nextafter(r, (float8)-INFINITY), convert_int8(convert_int8(y > x) | convert_int8(r == (float8)INFINITY)));
+  return select(res, (float8)(0x1.fffffep+62f), convert_int8(x >= (long)0x7fffffffffffffffL));
 }
 #endif
 
@@ -51695,8 +51921,8 @@ float16 convert_float16_rtz(long16 x)
   long16 y = convert_long16_sat(r);
   ulong16 abs_x = abs(x);
   ulong16 abs_y = abs(y);
-  float16 res = select(r, nextafter(r, sign(r) * (float16)-INFINITY), convert_int16(abs_y > abs_x));
-  return select(res, (float16)(0x1.fffffep+62f), convert_int16(x >= 0x7fffffffffffffffL));
+  float16 res = select(r, nextafter(r, sign(r) * (float16)-INFINITY), convert_int16(convert_int16(abs_y > abs_x) | convert_int16(isinf(r))));
+  return select(res, (float16)(0x1.fffffep+62f), convert_int16(x >= (long)0x7fffffffffffffffL));
 }
 #endif
 
@@ -51714,7 +51940,7 @@ float16 convert_float16_rtp(long16 x)
 {
   float16 r = convert_float16(x);
   long16 y = convert_long16_sat(r);
-  float16 res = select(r, nextafter(r, (float16)INFINITY), convert_int16(y < x));
+  float16 res = select(r, nextafter(r, (float16)INFINITY), convert_int16(convert_int16(y < x) | convert_int16(r == (float16)-INFINITY)));
   return res;
 }
 #endif
@@ -51725,8 +51951,8 @@ float16 convert_float16_rtn(long16 x)
 {
   float16 r = convert_float16(x);
   long16 y = convert_long16_sat(r);
-  float16 res = select(r, nextafter(r, (float16)-INFINITY), convert_int16(y > x));
-  return select(res, (float16)(0x1.fffffep+62f), convert_int16(x >= 0x7fffffffffffffffL));
+  float16 res = select(r, nextafter(r, (float16)-INFINITY), convert_int16(convert_int16(y > x) | convert_int16(r == (float16)INFINITY)));
+  return select(res, (float16)(0x1.fffffep+62f), convert_int16(x >= (long)0x7fffffffffffffffL));
 }
 #endif
 
@@ -51738,8 +51964,8 @@ double convert_double_rtz(long x)
   long y = convert_long_sat(r);
   ulong abs_x = abs(x);
   ulong abs_y = abs(y);
-  double res = select(r, nextafter(r, sign(r) * (double)-INFINITY), convert_long(abs_y > abs_x));
-  return select(res, (double)(0x1.fffffffffffffp+62), convert_long(x >= 0x7fffffffffffffffL));
+  double res = select(r, nextafter(r, sign(r) * (double)-INFINITY), convert_long(convert_long(abs_y > abs_x) | convert_long(isinf(r))));
+  return select(res, (double)(0x1.fffffffffffffp+62), convert_long(x >= (long)0x7fffffffffffffffL));
 }
 #endif
 
@@ -51757,7 +51983,7 @@ double convert_double_rtp(long x)
 {
   double r = convert_double(x);
   long y = convert_long_sat(r);
-  double res = select(r, nextafter(r, (double)INFINITY), convert_long(y < x));
+  double res = select(r, nextafter(r, (double)INFINITY), convert_long(convert_long(y < x) | convert_long(r == (double)-INFINITY)));
   return res;
 }
 #endif
@@ -51768,8 +51994,8 @@ double convert_double_rtn(long x)
 {
   double r = convert_double(x);
   long y = convert_long_sat(r);
-  double res = select(r, nextafter(r, (double)-INFINITY), convert_long(y > x));
-  return select(res, (double)(0x1.fffffffffffffp+62), convert_long(x >= 0x7fffffffffffffffL));
+  double res = select(r, nextafter(r, (double)-INFINITY), convert_long(convert_long(y > x) | convert_long(r == (double)INFINITY)));
+  return select(res, (double)(0x1.fffffffffffffp+62), convert_long(x >= (long)0x7fffffffffffffffL));
 }
 #endif
 
@@ -51781,8 +52007,8 @@ double2 convert_double2_rtz(long2 x)
   long2 y = convert_long2_sat(r);
   ulong2 abs_x = abs(x);
   ulong2 abs_y = abs(y);
-  double2 res = select(r, nextafter(r, sign(r) * (double2)-INFINITY), convert_long2(abs_y > abs_x));
-  return select(res, (double2)(0x1.fffffffffffffp+62), convert_long2(x >= 0x7fffffffffffffffL));
+  double2 res = select(r, nextafter(r, sign(r) * (double2)-INFINITY), convert_long2(convert_long2(abs_y > abs_x) | convert_long2(isinf(r))));
+  return select(res, (double2)(0x1.fffffffffffffp+62), convert_long2(x >= (long)0x7fffffffffffffffL));
 }
 #endif
 
@@ -51800,7 +52026,7 @@ double2 convert_double2_rtp(long2 x)
 {
   double2 r = convert_double2(x);
   long2 y = convert_long2_sat(r);
-  double2 res = select(r, nextafter(r, (double2)INFINITY), convert_long2(y < x));
+  double2 res = select(r, nextafter(r, (double2)INFINITY), convert_long2(convert_long2(y < x) | convert_long2(r == (double2)-INFINITY)));
   return res;
 }
 #endif
@@ -51811,8 +52037,8 @@ double2 convert_double2_rtn(long2 x)
 {
   double2 r = convert_double2(x);
   long2 y = convert_long2_sat(r);
-  double2 res = select(r, nextafter(r, (double2)-INFINITY), convert_long2(y > x));
-  return select(res, (double2)(0x1.fffffffffffffp+62), convert_long2(x >= 0x7fffffffffffffffL));
+  double2 res = select(r, nextafter(r, (double2)-INFINITY), convert_long2(convert_long2(y > x) | convert_long2(r == (double2)INFINITY)));
+  return select(res, (double2)(0x1.fffffffffffffp+62), convert_long2(x >= (long)0x7fffffffffffffffL));
 }
 #endif
 
@@ -51824,8 +52050,8 @@ double3 convert_double3_rtz(long3 x)
   long3 y = convert_long3_sat(r);
   ulong3 abs_x = abs(x);
   ulong3 abs_y = abs(y);
-  double3 res = select(r, nextafter(r, sign(r) * (double3)-INFINITY), convert_long3(abs_y > abs_x));
-  return select(res, (double3)(0x1.fffffffffffffp+62), convert_long3(x >= 0x7fffffffffffffffL));
+  double3 res = select(r, nextafter(r, sign(r) * (double3)-INFINITY), convert_long3(convert_long3(abs_y > abs_x) | convert_long3(isinf(r))));
+  return select(res, (double3)(0x1.fffffffffffffp+62), convert_long3(x >= (long)0x7fffffffffffffffL));
 }
 #endif
 
@@ -51843,7 +52069,7 @@ double3 convert_double3_rtp(long3 x)
 {
   double3 r = convert_double3(x);
   long3 y = convert_long3_sat(r);
-  double3 res = select(r, nextafter(r, (double3)INFINITY), convert_long3(y < x));
+  double3 res = select(r, nextafter(r, (double3)INFINITY), convert_long3(convert_long3(y < x) | convert_long3(r == (double3)-INFINITY)));
   return res;
 }
 #endif
@@ -51854,8 +52080,8 @@ double3 convert_double3_rtn(long3 x)
 {
   double3 r = convert_double3(x);
   long3 y = convert_long3_sat(r);
-  double3 res = select(r, nextafter(r, (double3)-INFINITY), convert_long3(y > x));
-  return select(res, (double3)(0x1.fffffffffffffp+62), convert_long3(x >= 0x7fffffffffffffffL));
+  double3 res = select(r, nextafter(r, (double3)-INFINITY), convert_long3(convert_long3(y > x) | convert_long3(r == (double3)INFINITY)));
+  return select(res, (double3)(0x1.fffffffffffffp+62), convert_long3(x >= (long)0x7fffffffffffffffL));
 }
 #endif
 
@@ -51867,8 +52093,8 @@ double4 convert_double4_rtz(long4 x)
   long4 y = convert_long4_sat(r);
   ulong4 abs_x = abs(x);
   ulong4 abs_y = abs(y);
-  double4 res = select(r, nextafter(r, sign(r) * (double4)-INFINITY), convert_long4(abs_y > abs_x));
-  return select(res, (double4)(0x1.fffffffffffffp+62), convert_long4(x >= 0x7fffffffffffffffL));
+  double4 res = select(r, nextafter(r, sign(r) * (double4)-INFINITY), convert_long4(convert_long4(abs_y > abs_x) | convert_long4(isinf(r))));
+  return select(res, (double4)(0x1.fffffffffffffp+62), convert_long4(x >= (long)0x7fffffffffffffffL));
 }
 #endif
 
@@ -51886,7 +52112,7 @@ double4 convert_double4_rtp(long4 x)
 {
   double4 r = convert_double4(x);
   long4 y = convert_long4_sat(r);
-  double4 res = select(r, nextafter(r, (double4)INFINITY), convert_long4(y < x));
+  double4 res = select(r, nextafter(r, (double4)INFINITY), convert_long4(convert_long4(y < x) | convert_long4(r == (double4)-INFINITY)));
   return res;
 }
 #endif
@@ -51897,8 +52123,8 @@ double4 convert_double4_rtn(long4 x)
 {
   double4 r = convert_double4(x);
   long4 y = convert_long4_sat(r);
-  double4 res = select(r, nextafter(r, (double4)-INFINITY), convert_long4(y > x));
-  return select(res, (double4)(0x1.fffffffffffffp+62), convert_long4(x >= 0x7fffffffffffffffL));
+  double4 res = select(r, nextafter(r, (double4)-INFINITY), convert_long4(convert_long4(y > x) | convert_long4(r == (double4)INFINITY)));
+  return select(res, (double4)(0x1.fffffffffffffp+62), convert_long4(x >= (long)0x7fffffffffffffffL));
 }
 #endif
 
@@ -51910,8 +52136,8 @@ double8 convert_double8_rtz(long8 x)
   long8 y = convert_long8_sat(r);
   ulong8 abs_x = abs(x);
   ulong8 abs_y = abs(y);
-  double8 res = select(r, nextafter(r, sign(r) * (double8)-INFINITY), convert_long8(abs_y > abs_x));
-  return select(res, (double8)(0x1.fffffffffffffp+62), convert_long8(x >= 0x7fffffffffffffffL));
+  double8 res = select(r, nextafter(r, sign(r) * (double8)-INFINITY), convert_long8(convert_long8(abs_y > abs_x) | convert_long8(isinf(r))));
+  return select(res, (double8)(0x1.fffffffffffffp+62), convert_long8(x >= (long)0x7fffffffffffffffL));
 }
 #endif
 
@@ -51929,7 +52155,7 @@ double8 convert_double8_rtp(long8 x)
 {
   double8 r = convert_double8(x);
   long8 y = convert_long8_sat(r);
-  double8 res = select(r, nextafter(r, (double8)INFINITY), convert_long8(y < x));
+  double8 res = select(r, nextafter(r, (double8)INFINITY), convert_long8(convert_long8(y < x) | convert_long8(r == (double8)-INFINITY)));
   return res;
 }
 #endif
@@ -51940,8 +52166,8 @@ double8 convert_double8_rtn(long8 x)
 {
   double8 r = convert_double8(x);
   long8 y = convert_long8_sat(r);
-  double8 res = select(r, nextafter(r, (double8)-INFINITY), convert_long8(y > x));
-  return select(res, (double8)(0x1.fffffffffffffp+62), convert_long8(x >= 0x7fffffffffffffffL));
+  double8 res = select(r, nextafter(r, (double8)-INFINITY), convert_long8(convert_long8(y > x) | convert_long8(r == (double8)INFINITY)));
+  return select(res, (double8)(0x1.fffffffffffffp+62), convert_long8(x >= (long)0x7fffffffffffffffL));
 }
 #endif
 
@@ -51953,8 +52179,8 @@ double16 convert_double16_rtz(long16 x)
   long16 y = convert_long16_sat(r);
   ulong16 abs_x = abs(x);
   ulong16 abs_y = abs(y);
-  double16 res = select(r, nextafter(r, sign(r) * (double16)-INFINITY), convert_long16(abs_y > abs_x));
-  return select(res, (double16)(0x1.fffffffffffffp+62), convert_long16(x >= 0x7fffffffffffffffL));
+  double16 res = select(r, nextafter(r, sign(r) * (double16)-INFINITY), convert_long16(convert_long16(abs_y > abs_x) | convert_long16(isinf(r))));
+  return select(res, (double16)(0x1.fffffffffffffp+62), convert_long16(x >= (long)0x7fffffffffffffffL));
 }
 #endif
 
@@ -51972,7 +52198,7 @@ double16 convert_double16_rtp(long16 x)
 {
   double16 r = convert_double16(x);
   long16 y = convert_long16_sat(r);
-  double16 res = select(r, nextafter(r, (double16)INFINITY), convert_long16(y < x));
+  double16 res = select(r, nextafter(r, (double16)INFINITY), convert_long16(convert_long16(y < x) | convert_long16(r == (double16)-INFINITY)));
   return res;
 }
 #endif
@@ -51983,8 +52209,8 @@ double16 convert_double16_rtn(long16 x)
 {
   double16 r = convert_double16(x);
   long16 y = convert_long16_sat(r);
-  double16 res = select(r, nextafter(r, (double16)-INFINITY), convert_long16(y > x));
-  return select(res, (double16)(0x1.fffffffffffffp+62), convert_long16(x >= 0x7fffffffffffffffL));
+  double16 res = select(r, nextafter(r, (double16)-INFINITY), convert_long16(convert_long16(y > x) | convert_long16(r == (double16)INFINITY)));
+  return select(res, (double16)(0x1.fffffffffffffp+62), convert_long16(x >= (long)0x7fffffffffffffffL));
 }
 #endif
 
@@ -51996,8 +52222,8 @@ float convert_float_rtz(ulong x)
   ulong y = convert_ulong_sat(r);
   ulong abs_x = abs(x);
   ulong abs_y = abs(y);
-  float res = select(r, nextafter(r, sign(r) * (float)-INFINITY), convert_int(abs_y > abs_x));
-  return select(res, (float)(0x1.fffffep+63f), convert_int(x >= 0xfffffffffffffffeUL));
+  float res = select(r, nextafter(r, sign(r) * (float)-INFINITY), convert_int(convert_int(abs_y > abs_x) | convert_int(isinf(r))));
+  return select(res, (float)(0x1.fffffep+63f), convert_int(x >= (ulong)0xfffffffffffffffeUL));
 }
 #endif
 
@@ -52015,7 +52241,7 @@ float convert_float_rtp(ulong x)
 {
   float r = convert_float(x);
   ulong y = convert_ulong_sat(r);
-  float res = select(r, nextafter(r, (float)INFINITY), convert_int(y < x));
+  float res = select(r, nextafter(r, (float)INFINITY), convert_int(convert_int(y < x) | convert_int(r == (float)-INFINITY)));
   return res;
 }
 #endif
@@ -52026,8 +52252,8 @@ float convert_float_rtn(ulong x)
 {
   float r = convert_float(x);
   ulong y = convert_ulong_sat(r);
-  float res = select(r, nextafter(r, (float)-INFINITY), convert_int(y > x));
-  return select(res, (float)(0x1.fffffep+63f), convert_int(x >= 0xfffffffffffffffeUL));
+  float res = select(r, nextafter(r, (float)-INFINITY), convert_int(convert_int(y > x) | convert_int(r == (float)INFINITY)));
+  return select(res, (float)(0x1.fffffep+63f), convert_int(x >= (ulong)0xfffffffffffffffeUL));
 }
 #endif
 
@@ -52039,8 +52265,8 @@ float2 convert_float2_rtz(ulong2 x)
   ulong2 y = convert_ulong2_sat(r);
   ulong2 abs_x = abs(x);
   ulong2 abs_y = abs(y);
-  float2 res = select(r, nextafter(r, sign(r) * (float2)-INFINITY), convert_int2(abs_y > abs_x));
-  return select(res, (float2)(0x1.fffffep+63f), convert_int2(x >= 0xfffffffffffffffeUL));
+  float2 res = select(r, nextafter(r, sign(r) * (float2)-INFINITY), convert_int2(convert_int2(abs_y > abs_x) | convert_int2(isinf(r))));
+  return select(res, (float2)(0x1.fffffep+63f), convert_int2(x >= (ulong)0xfffffffffffffffeUL));
 }
 #endif
 
@@ -52058,7 +52284,7 @@ float2 convert_float2_rtp(ulong2 x)
 {
   float2 r = convert_float2(x);
   ulong2 y = convert_ulong2_sat(r);
-  float2 res = select(r, nextafter(r, (float2)INFINITY), convert_int2(y < x));
+  float2 res = select(r, nextafter(r, (float2)INFINITY), convert_int2(convert_int2(y < x) | convert_int2(r == (float2)-INFINITY)));
   return res;
 }
 #endif
@@ -52069,8 +52295,8 @@ float2 convert_float2_rtn(ulong2 x)
 {
   float2 r = convert_float2(x);
   ulong2 y = convert_ulong2_sat(r);
-  float2 res = select(r, nextafter(r, (float2)-INFINITY), convert_int2(y > x));
-  return select(res, (float2)(0x1.fffffep+63f), convert_int2(x >= 0xfffffffffffffffeUL));
+  float2 res = select(r, nextafter(r, (float2)-INFINITY), convert_int2(convert_int2(y > x) | convert_int2(r == (float2)INFINITY)));
+  return select(res, (float2)(0x1.fffffep+63f), convert_int2(x >= (ulong)0xfffffffffffffffeUL));
 }
 #endif
 
@@ -52082,8 +52308,8 @@ float3 convert_float3_rtz(ulong3 x)
   ulong3 y = convert_ulong3_sat(r);
   ulong3 abs_x = abs(x);
   ulong3 abs_y = abs(y);
-  float3 res = select(r, nextafter(r, sign(r) * (float3)-INFINITY), convert_int3(abs_y > abs_x));
-  return select(res, (float3)(0x1.fffffep+63f), convert_int3(x >= 0xfffffffffffffffeUL));
+  float3 res = select(r, nextafter(r, sign(r) * (float3)-INFINITY), convert_int3(convert_int3(abs_y > abs_x) | convert_int3(isinf(r))));
+  return select(res, (float3)(0x1.fffffep+63f), convert_int3(x >= (ulong)0xfffffffffffffffeUL));
 }
 #endif
 
@@ -52101,7 +52327,7 @@ float3 convert_float3_rtp(ulong3 x)
 {
   float3 r = convert_float3(x);
   ulong3 y = convert_ulong3_sat(r);
-  float3 res = select(r, nextafter(r, (float3)INFINITY), convert_int3(y < x));
+  float3 res = select(r, nextafter(r, (float3)INFINITY), convert_int3(convert_int3(y < x) | convert_int3(r == (float3)-INFINITY)));
   return res;
 }
 #endif
@@ -52112,8 +52338,8 @@ float3 convert_float3_rtn(ulong3 x)
 {
   float3 r = convert_float3(x);
   ulong3 y = convert_ulong3_sat(r);
-  float3 res = select(r, nextafter(r, (float3)-INFINITY), convert_int3(y > x));
-  return select(res, (float3)(0x1.fffffep+63f), convert_int3(x >= 0xfffffffffffffffeUL));
+  float3 res = select(r, nextafter(r, (float3)-INFINITY), convert_int3(convert_int3(y > x) | convert_int3(r == (float3)INFINITY)));
+  return select(res, (float3)(0x1.fffffep+63f), convert_int3(x >= (ulong)0xfffffffffffffffeUL));
 }
 #endif
 
@@ -52125,8 +52351,8 @@ float4 convert_float4_rtz(ulong4 x)
   ulong4 y = convert_ulong4_sat(r);
   ulong4 abs_x = abs(x);
   ulong4 abs_y = abs(y);
-  float4 res = select(r, nextafter(r, sign(r) * (float4)-INFINITY), convert_int4(abs_y > abs_x));
-  return select(res, (float4)(0x1.fffffep+63f), convert_int4(x >= 0xfffffffffffffffeUL));
+  float4 res = select(r, nextafter(r, sign(r) * (float4)-INFINITY), convert_int4(convert_int4(abs_y > abs_x) | convert_int4(isinf(r))));
+  return select(res, (float4)(0x1.fffffep+63f), convert_int4(x >= (ulong)0xfffffffffffffffeUL));
 }
 #endif
 
@@ -52144,7 +52370,7 @@ float4 convert_float4_rtp(ulong4 x)
 {
   float4 r = convert_float4(x);
   ulong4 y = convert_ulong4_sat(r);
-  float4 res = select(r, nextafter(r, (float4)INFINITY), convert_int4(y < x));
+  float4 res = select(r, nextafter(r, (float4)INFINITY), convert_int4(convert_int4(y < x) | convert_int4(r == (float4)-INFINITY)));
   return res;
 }
 #endif
@@ -52155,8 +52381,8 @@ float4 convert_float4_rtn(ulong4 x)
 {
   float4 r = convert_float4(x);
   ulong4 y = convert_ulong4_sat(r);
-  float4 res = select(r, nextafter(r, (float4)-INFINITY), convert_int4(y > x));
-  return select(res, (float4)(0x1.fffffep+63f), convert_int4(x >= 0xfffffffffffffffeUL));
+  float4 res = select(r, nextafter(r, (float4)-INFINITY), convert_int4(convert_int4(y > x) | convert_int4(r == (float4)INFINITY)));
+  return select(res, (float4)(0x1.fffffep+63f), convert_int4(x >= (ulong)0xfffffffffffffffeUL));
 }
 #endif
 
@@ -52168,8 +52394,8 @@ float8 convert_float8_rtz(ulong8 x)
   ulong8 y = convert_ulong8_sat(r);
   ulong8 abs_x = abs(x);
   ulong8 abs_y = abs(y);
-  float8 res = select(r, nextafter(r, sign(r) * (float8)-INFINITY), convert_int8(abs_y > abs_x));
-  return select(res, (float8)(0x1.fffffep+63f), convert_int8(x >= 0xfffffffffffffffeUL));
+  float8 res = select(r, nextafter(r, sign(r) * (float8)-INFINITY), convert_int8(convert_int8(abs_y > abs_x) | convert_int8(isinf(r))));
+  return select(res, (float8)(0x1.fffffep+63f), convert_int8(x >= (ulong)0xfffffffffffffffeUL));
 }
 #endif
 
@@ -52187,7 +52413,7 @@ float8 convert_float8_rtp(ulong8 x)
 {
   float8 r = convert_float8(x);
   ulong8 y = convert_ulong8_sat(r);
-  float8 res = select(r, nextafter(r, (float8)INFINITY), convert_int8(y < x));
+  float8 res = select(r, nextafter(r, (float8)INFINITY), convert_int8(convert_int8(y < x) | convert_int8(r == (float8)-INFINITY)));
   return res;
 }
 #endif
@@ -52198,8 +52424,8 @@ float8 convert_float8_rtn(ulong8 x)
 {
   float8 r = convert_float8(x);
   ulong8 y = convert_ulong8_sat(r);
-  float8 res = select(r, nextafter(r, (float8)-INFINITY), convert_int8(y > x));
-  return select(res, (float8)(0x1.fffffep+63f), convert_int8(x >= 0xfffffffffffffffeUL));
+  float8 res = select(r, nextafter(r, (float8)-INFINITY), convert_int8(convert_int8(y > x) | convert_int8(r == (float8)INFINITY)));
+  return select(res, (float8)(0x1.fffffep+63f), convert_int8(x >= (ulong)0xfffffffffffffffeUL));
 }
 #endif
 
@@ -52211,8 +52437,8 @@ float16 convert_float16_rtz(ulong16 x)
   ulong16 y = convert_ulong16_sat(r);
   ulong16 abs_x = abs(x);
   ulong16 abs_y = abs(y);
-  float16 res = select(r, nextafter(r, sign(r) * (float16)-INFINITY), convert_int16(abs_y > abs_x));
-  return select(res, (float16)(0x1.fffffep+63f), convert_int16(x >= 0xfffffffffffffffeUL));
+  float16 res = select(r, nextafter(r, sign(r) * (float16)-INFINITY), convert_int16(convert_int16(abs_y > abs_x) | convert_int16(isinf(r))));
+  return select(res, (float16)(0x1.fffffep+63f), convert_int16(x >= (ulong)0xfffffffffffffffeUL));
 }
 #endif
 
@@ -52230,7 +52456,7 @@ float16 convert_float16_rtp(ulong16 x)
 {
   float16 r = convert_float16(x);
   ulong16 y = convert_ulong16_sat(r);
-  float16 res = select(r, nextafter(r, (float16)INFINITY), convert_int16(y < x));
+  float16 res = select(r, nextafter(r, (float16)INFINITY), convert_int16(convert_int16(y < x) | convert_int16(r == (float16)-INFINITY)));
   return res;
 }
 #endif
@@ -52241,8 +52467,8 @@ float16 convert_float16_rtn(ulong16 x)
 {
   float16 r = convert_float16(x);
   ulong16 y = convert_ulong16_sat(r);
-  float16 res = select(r, nextafter(r, (float16)-INFINITY), convert_int16(y > x));
-  return select(res, (float16)(0x1.fffffep+63f), convert_int16(x >= 0xfffffffffffffffeUL));
+  float16 res = select(r, nextafter(r, (float16)-INFINITY), convert_int16(convert_int16(y > x) | convert_int16(r == (float16)INFINITY)));
+  return select(res, (float16)(0x1.fffffep+63f), convert_int16(x >= (ulong)0xfffffffffffffffeUL));
 }
 #endif
 
@@ -52254,8 +52480,8 @@ double convert_double_rtz(ulong x)
   ulong y = convert_ulong_sat(r);
   ulong abs_x = abs(x);
   ulong abs_y = abs(y);
-  double res = select(r, nextafter(r, sign(r) * (double)-INFINITY), convert_long(abs_y > abs_x));
-  return select(res, (double)(0x1.fffffffffffffp+63), convert_long(x >= 0xfffffffffffffffeUL));
+  double res = select(r, nextafter(r, sign(r) * (double)-INFINITY), convert_long(convert_long(abs_y > abs_x) | convert_long(isinf(r))));
+  return select(res, (double)(0x1.fffffffffffffp+63), convert_long(x >= (ulong)0xfffffffffffffffeUL));
 }
 #endif
 
@@ -52273,7 +52499,7 @@ double convert_double_rtp(ulong x)
 {
   double r = convert_double(x);
   ulong y = convert_ulong_sat(r);
-  double res = select(r, nextafter(r, (double)INFINITY), convert_long(y < x));
+  double res = select(r, nextafter(r, (double)INFINITY), convert_long(convert_long(y < x) | convert_long(r == (double)-INFINITY)));
   return res;
 }
 #endif
@@ -52284,8 +52510,8 @@ double convert_double_rtn(ulong x)
 {
   double r = convert_double(x);
   ulong y = convert_ulong_sat(r);
-  double res = select(r, nextafter(r, (double)-INFINITY), convert_long(y > x));
-  return select(res, (double)(0x1.fffffffffffffp+63), convert_long(x >= 0xfffffffffffffffeUL));
+  double res = select(r, nextafter(r, (double)-INFINITY), convert_long(convert_long(y > x) | convert_long(r == (double)INFINITY)));
+  return select(res, (double)(0x1.fffffffffffffp+63), convert_long(x >= (ulong)0xfffffffffffffffeUL));
 }
 #endif
 
@@ -52297,8 +52523,8 @@ double2 convert_double2_rtz(ulong2 x)
   ulong2 y = convert_ulong2_sat(r);
   ulong2 abs_x = abs(x);
   ulong2 abs_y = abs(y);
-  double2 res = select(r, nextafter(r, sign(r) * (double2)-INFINITY), convert_long2(abs_y > abs_x));
-  return select(res, (double2)(0x1.fffffffffffffp+63), convert_long2(x >= 0xfffffffffffffffeUL));
+  double2 res = select(r, nextafter(r, sign(r) * (double2)-INFINITY), convert_long2(convert_long2(abs_y > abs_x) | convert_long2(isinf(r))));
+  return select(res, (double2)(0x1.fffffffffffffp+63), convert_long2(x >= (ulong)0xfffffffffffffffeUL));
 }
 #endif
 
@@ -52316,7 +52542,7 @@ double2 convert_double2_rtp(ulong2 x)
 {
   double2 r = convert_double2(x);
   ulong2 y = convert_ulong2_sat(r);
-  double2 res = select(r, nextafter(r, (double2)INFINITY), convert_long2(y < x));
+  double2 res = select(r, nextafter(r, (double2)INFINITY), convert_long2(convert_long2(y < x) | convert_long2(r == (double2)-INFINITY)));
   return res;
 }
 #endif
@@ -52327,8 +52553,8 @@ double2 convert_double2_rtn(ulong2 x)
 {
   double2 r = convert_double2(x);
   ulong2 y = convert_ulong2_sat(r);
-  double2 res = select(r, nextafter(r, (double2)-INFINITY), convert_long2(y > x));
-  return select(res, (double2)(0x1.fffffffffffffp+63), convert_long2(x >= 0xfffffffffffffffeUL));
+  double2 res = select(r, nextafter(r, (double2)-INFINITY), convert_long2(convert_long2(y > x) | convert_long2(r == (double2)INFINITY)));
+  return select(res, (double2)(0x1.fffffffffffffp+63), convert_long2(x >= (ulong)0xfffffffffffffffeUL));
 }
 #endif
 
@@ -52340,8 +52566,8 @@ double3 convert_double3_rtz(ulong3 x)
   ulong3 y = convert_ulong3_sat(r);
   ulong3 abs_x = abs(x);
   ulong3 abs_y = abs(y);
-  double3 res = select(r, nextafter(r, sign(r) * (double3)-INFINITY), convert_long3(abs_y > abs_x));
-  return select(res, (double3)(0x1.fffffffffffffp+63), convert_long3(x >= 0xfffffffffffffffeUL));
+  double3 res = select(r, nextafter(r, sign(r) * (double3)-INFINITY), convert_long3(convert_long3(abs_y > abs_x) | convert_long3(isinf(r))));
+  return select(res, (double3)(0x1.fffffffffffffp+63), convert_long3(x >= (ulong)0xfffffffffffffffeUL));
 }
 #endif
 
@@ -52359,7 +52585,7 @@ double3 convert_double3_rtp(ulong3 x)
 {
   double3 r = convert_double3(x);
   ulong3 y = convert_ulong3_sat(r);
-  double3 res = select(r, nextafter(r, (double3)INFINITY), convert_long3(y < x));
+  double3 res = select(r, nextafter(r, (double3)INFINITY), convert_long3(convert_long3(y < x) | convert_long3(r == (double3)-INFINITY)));
   return res;
 }
 #endif
@@ -52370,8 +52596,8 @@ double3 convert_double3_rtn(ulong3 x)
 {
   double3 r = convert_double3(x);
   ulong3 y = convert_ulong3_sat(r);
-  double3 res = select(r, nextafter(r, (double3)-INFINITY), convert_long3(y > x));
-  return select(res, (double3)(0x1.fffffffffffffp+63), convert_long3(x >= 0xfffffffffffffffeUL));
+  double3 res = select(r, nextafter(r, (double3)-INFINITY), convert_long3(convert_long3(y > x) | convert_long3(r == (double3)INFINITY)));
+  return select(res, (double3)(0x1.fffffffffffffp+63), convert_long3(x >= (ulong)0xfffffffffffffffeUL));
 }
 #endif
 
@@ -52383,8 +52609,8 @@ double4 convert_double4_rtz(ulong4 x)
   ulong4 y = convert_ulong4_sat(r);
   ulong4 abs_x = abs(x);
   ulong4 abs_y = abs(y);
-  double4 res = select(r, nextafter(r, sign(r) * (double4)-INFINITY), convert_long4(abs_y > abs_x));
-  return select(res, (double4)(0x1.fffffffffffffp+63), convert_long4(x >= 0xfffffffffffffffeUL));
+  double4 res = select(r, nextafter(r, sign(r) * (double4)-INFINITY), convert_long4(convert_long4(abs_y > abs_x) | convert_long4(isinf(r))));
+  return select(res, (double4)(0x1.fffffffffffffp+63), convert_long4(x >= (ulong)0xfffffffffffffffeUL));
 }
 #endif
 
@@ -52402,7 +52628,7 @@ double4 convert_double4_rtp(ulong4 x)
 {
   double4 r = convert_double4(x);
   ulong4 y = convert_ulong4_sat(r);
-  double4 res = select(r, nextafter(r, (double4)INFINITY), convert_long4(y < x));
+  double4 res = select(r, nextafter(r, (double4)INFINITY), convert_long4(convert_long4(y < x) | convert_long4(r == (double4)-INFINITY)));
   return res;
 }
 #endif
@@ -52413,8 +52639,8 @@ double4 convert_double4_rtn(ulong4 x)
 {
   double4 r = convert_double4(x);
   ulong4 y = convert_ulong4_sat(r);
-  double4 res = select(r, nextafter(r, (double4)-INFINITY), convert_long4(y > x));
-  return select(res, (double4)(0x1.fffffffffffffp+63), convert_long4(x >= 0xfffffffffffffffeUL));
+  double4 res = select(r, nextafter(r, (double4)-INFINITY), convert_long4(convert_long4(y > x) | convert_long4(r == (double4)INFINITY)));
+  return select(res, (double4)(0x1.fffffffffffffp+63), convert_long4(x >= (ulong)0xfffffffffffffffeUL));
 }
 #endif
 
@@ -52426,8 +52652,8 @@ double8 convert_double8_rtz(ulong8 x)
   ulong8 y = convert_ulong8_sat(r);
   ulong8 abs_x = abs(x);
   ulong8 abs_y = abs(y);
-  double8 res = select(r, nextafter(r, sign(r) * (double8)-INFINITY), convert_long8(abs_y > abs_x));
-  return select(res, (double8)(0x1.fffffffffffffp+63), convert_long8(x >= 0xfffffffffffffffeUL));
+  double8 res = select(r, nextafter(r, sign(r) * (double8)-INFINITY), convert_long8(convert_long8(abs_y > abs_x) | convert_long8(isinf(r))));
+  return select(res, (double8)(0x1.fffffffffffffp+63), convert_long8(x >= (ulong)0xfffffffffffffffeUL));
 }
 #endif
 
@@ -52445,7 +52671,7 @@ double8 convert_double8_rtp(ulong8 x)
 {
   double8 r = convert_double8(x);
   ulong8 y = convert_ulong8_sat(r);
-  double8 res = select(r, nextafter(r, (double8)INFINITY), convert_long8(y < x));
+  double8 res = select(r, nextafter(r, (double8)INFINITY), convert_long8(convert_long8(y < x) | convert_long8(r == (double8)-INFINITY)));
   return res;
 }
 #endif
@@ -52456,8 +52682,8 @@ double8 convert_double8_rtn(ulong8 x)
 {
   double8 r = convert_double8(x);
   ulong8 y = convert_ulong8_sat(r);
-  double8 res = select(r, nextafter(r, (double8)-INFINITY), convert_long8(y > x));
-  return select(res, (double8)(0x1.fffffffffffffp+63), convert_long8(x >= 0xfffffffffffffffeUL));
+  double8 res = select(r, nextafter(r, (double8)-INFINITY), convert_long8(convert_long8(y > x) | convert_long8(r == (double8)INFINITY)));
+  return select(res, (double8)(0x1.fffffffffffffp+63), convert_long8(x >= (ulong)0xfffffffffffffffeUL));
 }
 #endif
 
@@ -52469,8 +52695,8 @@ double16 convert_double16_rtz(ulong16 x)
   ulong16 y = convert_ulong16_sat(r);
   ulong16 abs_x = abs(x);
   ulong16 abs_y = abs(y);
-  double16 res = select(r, nextafter(r, sign(r) * (double16)-INFINITY), convert_long16(abs_y > abs_x));
-  return select(res, (double16)(0x1.fffffffffffffp+63), convert_long16(x >= 0xfffffffffffffffeUL));
+  double16 res = select(r, nextafter(r, sign(r) * (double16)-INFINITY), convert_long16(convert_long16(abs_y > abs_x) | convert_long16(isinf(r))));
+  return select(res, (double16)(0x1.fffffffffffffp+63), convert_long16(x >= (ulong)0xfffffffffffffffeUL));
 }
 #endif
 
@@ -52488,7 +52714,7 @@ double16 convert_double16_rtp(ulong16 x)
 {
   double16 r = convert_double16(x);
   ulong16 y = convert_ulong16_sat(r);
-  double16 res = select(r, nextafter(r, (double16)INFINITY), convert_long16(y < x));
+  double16 res = select(r, nextafter(r, (double16)INFINITY), convert_long16(convert_long16(y < x) | convert_long16(r == (double16)-INFINITY)));
   return res;
 }
 #endif
@@ -52499,8 +52725,8 @@ double16 convert_double16_rtn(ulong16 x)
 {
   double16 r = convert_double16(x);
   ulong16 y = convert_ulong16_sat(r);
-  double16 res = select(r, nextafter(r, (double16)-INFINITY), convert_long16(y > x));
-  return select(res, (double16)(0x1.fffffffffffffp+63), convert_long16(x >= 0xfffffffffffffffeUL));
+  double16 res = select(r, nextafter(r, (double16)-INFINITY), convert_long16(convert_long16(y > x) | convert_long16(r == (double16)INFINITY)));
+  return select(res, (double16)(0x1.fffffffffffffp+63), convert_long16(x >= (ulong)0xfffffffffffffffeUL));
 }
 #endif
 
@@ -52512,7 +52738,7 @@ float convert_float_rtz(half x)
   half y = convert_half(r);
   half abs_x = fabs(x);
   half abs_y = fabs(y);
-  float res = select(r, nextafter(r, sign(r) * (float)-INFINITY), convert_int(abs_y > abs_x));
+  float res = select(r, nextafter(r, sign(r) * (float)-INFINITY), convert_int(convert_int(abs_y > abs_x) | convert_int(convert_int(isinf(r)) & ~convert_int(isinf(x)))));
   return res;
 }
 #endif
@@ -52531,7 +52757,7 @@ float convert_float_rtp(half x)
 {
   float r = convert_float(x);
   half y = convert_half(r);
-  float res = select(r, nextafter(r, (float)INFINITY), convert_int(y < x));
+  float res = select(r, nextafter(r, (float)INFINITY), convert_int(convert_int(y < x) | convert_int(convert_int(r == (float)-INFINITY) & ~convert_int(isinf(x)))));
   return res;
 }
 #endif
@@ -52542,7 +52768,7 @@ float convert_float_rtn(half x)
 {
   float r = convert_float(x);
   half y = convert_half(r);
-  float res = select(r, nextafter(r, (float)-INFINITY), convert_int(y > x));
+  float res = select(r, nextafter(r, (float)-INFINITY), convert_int(convert_int(y > x) | convert_int(convert_int(r == (float)INFINITY) & ~convert_int(isinf(x)))));
   return res;
 }
 #endif
@@ -52555,7 +52781,7 @@ float2 convert_float2_rtz(half2 x)
   half2 y = convert_half2(r);
   half2 abs_x = fabs(x);
   half2 abs_y = fabs(y);
-  float2 res = select(r, nextafter(r, sign(r) * (float2)-INFINITY), convert_int2(abs_y > abs_x));
+  float2 res = select(r, nextafter(r, sign(r) * (float2)-INFINITY), convert_int2(convert_int2(abs_y > abs_x) | convert_int2(convert_int2(isinf(r)) & ~convert_int2(isinf(x)))));
   return res;
 }
 #endif
@@ -52574,7 +52800,7 @@ float2 convert_float2_rtp(half2 x)
 {
   float2 r = convert_float2(x);
   half2 y = convert_half2(r);
-  float2 res = select(r, nextafter(r, (float2)INFINITY), convert_int2(y < x));
+  float2 res = select(r, nextafter(r, (float2)INFINITY), convert_int2(convert_int2(y < x) | convert_int2(convert_int2(r == (float2)-INFINITY) & ~convert_int2(isinf(x)))));
   return res;
 }
 #endif
@@ -52585,7 +52811,7 @@ float2 convert_float2_rtn(half2 x)
 {
   float2 r = convert_float2(x);
   half2 y = convert_half2(r);
-  float2 res = select(r, nextafter(r, (float2)-INFINITY), convert_int2(y > x));
+  float2 res = select(r, nextafter(r, (float2)-INFINITY), convert_int2(convert_int2(y > x) | convert_int2(convert_int2(r == (float2)INFINITY) & ~convert_int2(isinf(x)))));
   return res;
 }
 #endif
@@ -52598,7 +52824,7 @@ float3 convert_float3_rtz(half3 x)
   half3 y = convert_half3(r);
   half3 abs_x = fabs(x);
   half3 abs_y = fabs(y);
-  float3 res = select(r, nextafter(r, sign(r) * (float3)-INFINITY), convert_int3(abs_y > abs_x));
+  float3 res = select(r, nextafter(r, sign(r) * (float3)-INFINITY), convert_int3(convert_int3(abs_y > abs_x) | convert_int3(convert_int3(isinf(r)) & ~convert_int3(isinf(x)))));
   return res;
 }
 #endif
@@ -52617,7 +52843,7 @@ float3 convert_float3_rtp(half3 x)
 {
   float3 r = convert_float3(x);
   half3 y = convert_half3(r);
-  float3 res = select(r, nextafter(r, (float3)INFINITY), convert_int3(y < x));
+  float3 res = select(r, nextafter(r, (float3)INFINITY), convert_int3(convert_int3(y < x) | convert_int3(convert_int3(r == (float3)-INFINITY) & ~convert_int3(isinf(x)))));
   return res;
 }
 #endif
@@ -52628,7 +52854,7 @@ float3 convert_float3_rtn(half3 x)
 {
   float3 r = convert_float3(x);
   half3 y = convert_half3(r);
-  float3 res = select(r, nextafter(r, (float3)-INFINITY), convert_int3(y > x));
+  float3 res = select(r, nextafter(r, (float3)-INFINITY), convert_int3(convert_int3(y > x) | convert_int3(convert_int3(r == (float3)INFINITY) & ~convert_int3(isinf(x)))));
   return res;
 }
 #endif
@@ -52641,7 +52867,7 @@ float4 convert_float4_rtz(half4 x)
   half4 y = convert_half4(r);
   half4 abs_x = fabs(x);
   half4 abs_y = fabs(y);
-  float4 res = select(r, nextafter(r, sign(r) * (float4)-INFINITY), convert_int4(abs_y > abs_x));
+  float4 res = select(r, nextafter(r, sign(r) * (float4)-INFINITY), convert_int4(convert_int4(abs_y > abs_x) | convert_int4(convert_int4(isinf(r)) & ~convert_int4(isinf(x)))));
   return res;
 }
 #endif
@@ -52660,7 +52886,7 @@ float4 convert_float4_rtp(half4 x)
 {
   float4 r = convert_float4(x);
   half4 y = convert_half4(r);
-  float4 res = select(r, nextafter(r, (float4)INFINITY), convert_int4(y < x));
+  float4 res = select(r, nextafter(r, (float4)INFINITY), convert_int4(convert_int4(y < x) | convert_int4(convert_int4(r == (float4)-INFINITY) & ~convert_int4(isinf(x)))));
   return res;
 }
 #endif
@@ -52671,7 +52897,7 @@ float4 convert_float4_rtn(half4 x)
 {
   float4 r = convert_float4(x);
   half4 y = convert_half4(r);
-  float4 res = select(r, nextafter(r, (float4)-INFINITY), convert_int4(y > x));
+  float4 res = select(r, nextafter(r, (float4)-INFINITY), convert_int4(convert_int4(y > x) | convert_int4(convert_int4(r == (float4)INFINITY) & ~convert_int4(isinf(x)))));
   return res;
 }
 #endif
@@ -52684,7 +52910,7 @@ float8 convert_float8_rtz(half8 x)
   half8 y = convert_half8(r);
   half8 abs_x = fabs(x);
   half8 abs_y = fabs(y);
-  float8 res = select(r, nextafter(r, sign(r) * (float8)-INFINITY), convert_int8(abs_y > abs_x));
+  float8 res = select(r, nextafter(r, sign(r) * (float8)-INFINITY), convert_int8(convert_int8(abs_y > abs_x) | convert_int8(convert_int8(isinf(r)) & ~convert_int8(isinf(x)))));
   return res;
 }
 #endif
@@ -52703,7 +52929,7 @@ float8 convert_float8_rtp(half8 x)
 {
   float8 r = convert_float8(x);
   half8 y = convert_half8(r);
-  float8 res = select(r, nextafter(r, (float8)INFINITY), convert_int8(y < x));
+  float8 res = select(r, nextafter(r, (float8)INFINITY), convert_int8(convert_int8(y < x) | convert_int8(convert_int8(r == (float8)-INFINITY) & ~convert_int8(isinf(x)))));
   return res;
 }
 #endif
@@ -52714,7 +52940,7 @@ float8 convert_float8_rtn(half8 x)
 {
   float8 r = convert_float8(x);
   half8 y = convert_half8(r);
-  float8 res = select(r, nextafter(r, (float8)-INFINITY), convert_int8(y > x));
+  float8 res = select(r, nextafter(r, (float8)-INFINITY), convert_int8(convert_int8(y > x) | convert_int8(convert_int8(r == (float8)INFINITY) & ~convert_int8(isinf(x)))));
   return res;
 }
 #endif
@@ -52727,7 +52953,7 @@ float16 convert_float16_rtz(half16 x)
   half16 y = convert_half16(r);
   half16 abs_x = fabs(x);
   half16 abs_y = fabs(y);
-  float16 res = select(r, nextafter(r, sign(r) * (float16)-INFINITY), convert_int16(abs_y > abs_x));
+  float16 res = select(r, nextafter(r, sign(r) * (float16)-INFINITY), convert_int16(convert_int16(abs_y > abs_x) | convert_int16(convert_int16(isinf(r)) & ~convert_int16(isinf(x)))));
   return res;
 }
 #endif
@@ -52746,7 +52972,7 @@ float16 convert_float16_rtp(half16 x)
 {
   float16 r = convert_float16(x);
   half16 y = convert_half16(r);
-  float16 res = select(r, nextafter(r, (float16)INFINITY), convert_int16(y < x));
+  float16 res = select(r, nextafter(r, (float16)INFINITY), convert_int16(convert_int16(y < x) | convert_int16(convert_int16(r == (float16)-INFINITY) & ~convert_int16(isinf(x)))));
   return res;
 }
 #endif
@@ -52757,7 +52983,7 @@ float16 convert_float16_rtn(half16 x)
 {
   float16 r = convert_float16(x);
   half16 y = convert_half16(r);
-  float16 res = select(r, nextafter(r, (float16)-INFINITY), convert_int16(y > x));
+  float16 res = select(r, nextafter(r, (float16)-INFINITY), convert_int16(convert_int16(y > x) | convert_int16(convert_int16(r == (float16)INFINITY) & ~convert_int16(isinf(x)))));
   return res;
 }
 #endif
@@ -52770,7 +52996,7 @@ double convert_double_rtz(half x)
   half y = convert_half(r);
   half abs_x = fabs(x);
   half abs_y = fabs(y);
-  double res = select(r, nextafter(r, sign(r) * (double)-INFINITY), convert_long(abs_y > abs_x));
+  double res = select(r, nextafter(r, sign(r) * (double)-INFINITY), convert_long(convert_long(abs_y > abs_x) | convert_long(convert_long(isinf(r)) & ~convert_long(isinf(x)))));
   return res;
 }
 #endif
@@ -52789,7 +53015,7 @@ double convert_double_rtp(half x)
 {
   double r = convert_double(x);
   half y = convert_half(r);
-  double res = select(r, nextafter(r, (double)INFINITY), convert_long(y < x));
+  double res = select(r, nextafter(r, (double)INFINITY), convert_long(convert_long(y < x) | convert_long(convert_long(r == (double)-INFINITY) & ~convert_long(isinf(x)))));
   return res;
 }
 #endif
@@ -52800,7 +53026,7 @@ double convert_double_rtn(half x)
 {
   double r = convert_double(x);
   half y = convert_half(r);
-  double res = select(r, nextafter(r, (double)-INFINITY), convert_long(y > x));
+  double res = select(r, nextafter(r, (double)-INFINITY), convert_long(convert_long(y > x) | convert_long(convert_long(r == (double)INFINITY) & ~convert_long(isinf(x)))));
   return res;
 }
 #endif
@@ -52813,7 +53039,7 @@ double2 convert_double2_rtz(half2 x)
   half2 y = convert_half2(r);
   half2 abs_x = fabs(x);
   half2 abs_y = fabs(y);
-  double2 res = select(r, nextafter(r, sign(r) * (double2)-INFINITY), convert_long2(abs_y > abs_x));
+  double2 res = select(r, nextafter(r, sign(r) * (double2)-INFINITY), convert_long2(convert_long2(abs_y > abs_x) | convert_long2(convert_long2(isinf(r)) & ~convert_long2(isinf(x)))));
   return res;
 }
 #endif
@@ -52832,7 +53058,7 @@ double2 convert_double2_rtp(half2 x)
 {
   double2 r = convert_double2(x);
   half2 y = convert_half2(r);
-  double2 res = select(r, nextafter(r, (double2)INFINITY), convert_long2(y < x));
+  double2 res = select(r, nextafter(r, (double2)INFINITY), convert_long2(convert_long2(y < x) | convert_long2(convert_long2(r == (double2)-INFINITY) & ~convert_long2(isinf(x)))));
   return res;
 }
 #endif
@@ -52843,7 +53069,7 @@ double2 convert_double2_rtn(half2 x)
 {
   double2 r = convert_double2(x);
   half2 y = convert_half2(r);
-  double2 res = select(r, nextafter(r, (double2)-INFINITY), convert_long2(y > x));
+  double2 res = select(r, nextafter(r, (double2)-INFINITY), convert_long2(convert_long2(y > x) | convert_long2(convert_long2(r == (double2)INFINITY) & ~convert_long2(isinf(x)))));
   return res;
 }
 #endif
@@ -52856,7 +53082,7 @@ double3 convert_double3_rtz(half3 x)
   half3 y = convert_half3(r);
   half3 abs_x = fabs(x);
   half3 abs_y = fabs(y);
-  double3 res = select(r, nextafter(r, sign(r) * (double3)-INFINITY), convert_long3(abs_y > abs_x));
+  double3 res = select(r, nextafter(r, sign(r) * (double3)-INFINITY), convert_long3(convert_long3(abs_y > abs_x) | convert_long3(convert_long3(isinf(r)) & ~convert_long3(isinf(x)))));
   return res;
 }
 #endif
@@ -52875,7 +53101,7 @@ double3 convert_double3_rtp(half3 x)
 {
   double3 r = convert_double3(x);
   half3 y = convert_half3(r);
-  double3 res = select(r, nextafter(r, (double3)INFINITY), convert_long3(y < x));
+  double3 res = select(r, nextafter(r, (double3)INFINITY), convert_long3(convert_long3(y < x) | convert_long3(convert_long3(r == (double3)-INFINITY) & ~convert_long3(isinf(x)))));
   return res;
 }
 #endif
@@ -52886,7 +53112,7 @@ double3 convert_double3_rtn(half3 x)
 {
   double3 r = convert_double3(x);
   half3 y = convert_half3(r);
-  double3 res = select(r, nextafter(r, (double3)-INFINITY), convert_long3(y > x));
+  double3 res = select(r, nextafter(r, (double3)-INFINITY), convert_long3(convert_long3(y > x) | convert_long3(convert_long3(r == (double3)INFINITY) & ~convert_long3(isinf(x)))));
   return res;
 }
 #endif
@@ -52899,7 +53125,7 @@ double4 convert_double4_rtz(half4 x)
   half4 y = convert_half4(r);
   half4 abs_x = fabs(x);
   half4 abs_y = fabs(y);
-  double4 res = select(r, nextafter(r, sign(r) * (double4)-INFINITY), convert_long4(abs_y > abs_x));
+  double4 res = select(r, nextafter(r, sign(r) * (double4)-INFINITY), convert_long4(convert_long4(abs_y > abs_x) | convert_long4(convert_long4(isinf(r)) & ~convert_long4(isinf(x)))));
   return res;
 }
 #endif
@@ -52918,7 +53144,7 @@ double4 convert_double4_rtp(half4 x)
 {
   double4 r = convert_double4(x);
   half4 y = convert_half4(r);
-  double4 res = select(r, nextafter(r, (double4)INFINITY), convert_long4(y < x));
+  double4 res = select(r, nextafter(r, (double4)INFINITY), convert_long4(convert_long4(y < x) | convert_long4(convert_long4(r == (double4)-INFINITY) & ~convert_long4(isinf(x)))));
   return res;
 }
 #endif
@@ -52929,7 +53155,7 @@ double4 convert_double4_rtn(half4 x)
 {
   double4 r = convert_double4(x);
   half4 y = convert_half4(r);
-  double4 res = select(r, nextafter(r, (double4)-INFINITY), convert_long4(y > x));
+  double4 res = select(r, nextafter(r, (double4)-INFINITY), convert_long4(convert_long4(y > x) | convert_long4(convert_long4(r == (double4)INFINITY) & ~convert_long4(isinf(x)))));
   return res;
 }
 #endif
@@ -52942,7 +53168,7 @@ double8 convert_double8_rtz(half8 x)
   half8 y = convert_half8(r);
   half8 abs_x = fabs(x);
   half8 abs_y = fabs(y);
-  double8 res = select(r, nextafter(r, sign(r) * (double8)-INFINITY), convert_long8(abs_y > abs_x));
+  double8 res = select(r, nextafter(r, sign(r) * (double8)-INFINITY), convert_long8(convert_long8(abs_y > abs_x) | convert_long8(convert_long8(isinf(r)) & ~convert_long8(isinf(x)))));
   return res;
 }
 #endif
@@ -52961,7 +53187,7 @@ double8 convert_double8_rtp(half8 x)
 {
   double8 r = convert_double8(x);
   half8 y = convert_half8(r);
-  double8 res = select(r, nextafter(r, (double8)INFINITY), convert_long8(y < x));
+  double8 res = select(r, nextafter(r, (double8)INFINITY), convert_long8(convert_long8(y < x) | convert_long8(convert_long8(r == (double8)-INFINITY) & ~convert_long8(isinf(x)))));
   return res;
 }
 #endif
@@ -52972,7 +53198,7 @@ double8 convert_double8_rtn(half8 x)
 {
   double8 r = convert_double8(x);
   half8 y = convert_half8(r);
-  double8 res = select(r, nextafter(r, (double8)-INFINITY), convert_long8(y > x));
+  double8 res = select(r, nextafter(r, (double8)-INFINITY), convert_long8(convert_long8(y > x) | convert_long8(convert_long8(r == (double8)INFINITY) & ~convert_long8(isinf(x)))));
   return res;
 }
 #endif
@@ -52985,7 +53211,7 @@ double16 convert_double16_rtz(half16 x)
   half16 y = convert_half16(r);
   half16 abs_x = fabs(x);
   half16 abs_y = fabs(y);
-  double16 res = select(r, nextafter(r, sign(r) * (double16)-INFINITY), convert_long16(abs_y > abs_x));
+  double16 res = select(r, nextafter(r, sign(r) * (double16)-INFINITY), convert_long16(convert_long16(abs_y > abs_x) | convert_long16(convert_long16(isinf(r)) & ~convert_long16(isinf(x)))));
   return res;
 }
 #endif
@@ -53004,7 +53230,7 @@ double16 convert_double16_rtp(half16 x)
 {
   double16 r = convert_double16(x);
   half16 y = convert_half16(r);
-  double16 res = select(r, nextafter(r, (double16)INFINITY), convert_long16(y < x));
+  double16 res = select(r, nextafter(r, (double16)INFINITY), convert_long16(convert_long16(y < x) | convert_long16(convert_long16(r == (double16)-INFINITY) & ~convert_long16(isinf(x)))));
   return res;
 }
 #endif
@@ -53015,7 +53241,7 @@ double16 convert_double16_rtn(half16 x)
 {
   double16 r = convert_double16(x);
   half16 y = convert_half16(r);
-  double16 res = select(r, nextafter(r, (double16)-INFINITY), convert_long16(y > x));
+  double16 res = select(r, nextafter(r, (double16)-INFINITY), convert_long16(convert_long16(y > x) | convert_long16(convert_long16(r == (double16)INFINITY) & ~convert_long16(isinf(x)))));
   return res;
 }
 #endif
@@ -53027,7 +53253,7 @@ float convert_float_rtz(float x)
   float y = convert_float(r);
   float abs_x = fabs(x);
   float abs_y = fabs(y);
-  float res = select(r, nextafter(r, sign(r) * (float)-INFINITY), convert_int(abs_y > abs_x));
+  float res = select(r, nextafter(r, sign(r) * (float)-INFINITY), convert_int(convert_int(abs_y > abs_x) | convert_int(convert_int(isinf(r)) & ~convert_int(isinf(x)))));
   return res;
 }
 
@@ -53042,7 +53268,7 @@ float convert_float_rtp(float x)
 {
   float r = convert_float(x);
   float y = convert_float(r);
-  float res = select(r, nextafter(r, (float)INFINITY), convert_int(y < x));
+  float res = select(r, nextafter(r, (float)INFINITY), convert_int(convert_int(y < x) | convert_int(convert_int(r == (float)-INFINITY) & ~convert_int(isinf(x)))));
   return res;
 }
 
@@ -53051,7 +53277,7 @@ float convert_float_rtn(float x)
 {
   float r = convert_float(x);
   float y = convert_float(r);
-  float res = select(r, nextafter(r, (float)-INFINITY), convert_int(y > x));
+  float res = select(r, nextafter(r, (float)-INFINITY), convert_int(convert_int(y > x) | convert_int(convert_int(r == (float)INFINITY) & ~convert_int(isinf(x)))));
   return res;
 }
 
@@ -53062,7 +53288,7 @@ float2 convert_float2_rtz(float2 x)
   float2 y = convert_float2(r);
   float2 abs_x = fabs(x);
   float2 abs_y = fabs(y);
-  float2 res = select(r, nextafter(r, sign(r) * (float2)-INFINITY), convert_int2(abs_y > abs_x));
+  float2 res = select(r, nextafter(r, sign(r) * (float2)-INFINITY), convert_int2(convert_int2(abs_y > abs_x) | convert_int2(convert_int2(isinf(r)) & ~convert_int2(isinf(x)))));
   return res;
 }
 
@@ -53077,7 +53303,7 @@ float2 convert_float2_rtp(float2 x)
 {
   float2 r = convert_float2(x);
   float2 y = convert_float2(r);
-  float2 res = select(r, nextafter(r, (float2)INFINITY), convert_int2(y < x));
+  float2 res = select(r, nextafter(r, (float2)INFINITY), convert_int2(convert_int2(y < x) | convert_int2(convert_int2(r == (float2)-INFINITY) & ~convert_int2(isinf(x)))));
   return res;
 }
 
@@ -53086,7 +53312,7 @@ float2 convert_float2_rtn(float2 x)
 {
   float2 r = convert_float2(x);
   float2 y = convert_float2(r);
-  float2 res = select(r, nextafter(r, (float2)-INFINITY), convert_int2(y > x));
+  float2 res = select(r, nextafter(r, (float2)-INFINITY), convert_int2(convert_int2(y > x) | convert_int2(convert_int2(r == (float2)INFINITY) & ~convert_int2(isinf(x)))));
   return res;
 }
 
@@ -53097,7 +53323,7 @@ float3 convert_float3_rtz(float3 x)
   float3 y = convert_float3(r);
   float3 abs_x = fabs(x);
   float3 abs_y = fabs(y);
-  float3 res = select(r, nextafter(r, sign(r) * (float3)-INFINITY), convert_int3(abs_y > abs_x));
+  float3 res = select(r, nextafter(r, sign(r) * (float3)-INFINITY), convert_int3(convert_int3(abs_y > abs_x) | convert_int3(convert_int3(isinf(r)) & ~convert_int3(isinf(x)))));
   return res;
 }
 
@@ -53112,7 +53338,7 @@ float3 convert_float3_rtp(float3 x)
 {
   float3 r = convert_float3(x);
   float3 y = convert_float3(r);
-  float3 res = select(r, nextafter(r, (float3)INFINITY), convert_int3(y < x));
+  float3 res = select(r, nextafter(r, (float3)INFINITY), convert_int3(convert_int3(y < x) | convert_int3(convert_int3(r == (float3)-INFINITY) & ~convert_int3(isinf(x)))));
   return res;
 }
 
@@ -53121,7 +53347,7 @@ float3 convert_float3_rtn(float3 x)
 {
   float3 r = convert_float3(x);
   float3 y = convert_float3(r);
-  float3 res = select(r, nextafter(r, (float3)-INFINITY), convert_int3(y > x));
+  float3 res = select(r, nextafter(r, (float3)-INFINITY), convert_int3(convert_int3(y > x) | convert_int3(convert_int3(r == (float3)INFINITY) & ~convert_int3(isinf(x)))));
   return res;
 }
 
@@ -53132,7 +53358,7 @@ float4 convert_float4_rtz(float4 x)
   float4 y = convert_float4(r);
   float4 abs_x = fabs(x);
   float4 abs_y = fabs(y);
-  float4 res = select(r, nextafter(r, sign(r) * (float4)-INFINITY), convert_int4(abs_y > abs_x));
+  float4 res = select(r, nextafter(r, sign(r) * (float4)-INFINITY), convert_int4(convert_int4(abs_y > abs_x) | convert_int4(convert_int4(isinf(r)) & ~convert_int4(isinf(x)))));
   return res;
 }
 
@@ -53147,7 +53373,7 @@ float4 convert_float4_rtp(float4 x)
 {
   float4 r = convert_float4(x);
   float4 y = convert_float4(r);
-  float4 res = select(r, nextafter(r, (float4)INFINITY), convert_int4(y < x));
+  float4 res = select(r, nextafter(r, (float4)INFINITY), convert_int4(convert_int4(y < x) | convert_int4(convert_int4(r == (float4)-INFINITY) & ~convert_int4(isinf(x)))));
   return res;
 }
 
@@ -53156,7 +53382,7 @@ float4 convert_float4_rtn(float4 x)
 {
   float4 r = convert_float4(x);
   float4 y = convert_float4(r);
-  float4 res = select(r, nextafter(r, (float4)-INFINITY), convert_int4(y > x));
+  float4 res = select(r, nextafter(r, (float4)-INFINITY), convert_int4(convert_int4(y > x) | convert_int4(convert_int4(r == (float4)INFINITY) & ~convert_int4(isinf(x)))));
   return res;
 }
 
@@ -53167,7 +53393,7 @@ float8 convert_float8_rtz(float8 x)
   float8 y = convert_float8(r);
   float8 abs_x = fabs(x);
   float8 abs_y = fabs(y);
-  float8 res = select(r, nextafter(r, sign(r) * (float8)-INFINITY), convert_int8(abs_y > abs_x));
+  float8 res = select(r, nextafter(r, sign(r) * (float8)-INFINITY), convert_int8(convert_int8(abs_y > abs_x) | convert_int8(convert_int8(isinf(r)) & ~convert_int8(isinf(x)))));
   return res;
 }
 
@@ -53182,7 +53408,7 @@ float8 convert_float8_rtp(float8 x)
 {
   float8 r = convert_float8(x);
   float8 y = convert_float8(r);
-  float8 res = select(r, nextafter(r, (float8)INFINITY), convert_int8(y < x));
+  float8 res = select(r, nextafter(r, (float8)INFINITY), convert_int8(convert_int8(y < x) | convert_int8(convert_int8(r == (float8)-INFINITY) & ~convert_int8(isinf(x)))));
   return res;
 }
 
@@ -53191,7 +53417,7 @@ float8 convert_float8_rtn(float8 x)
 {
   float8 r = convert_float8(x);
   float8 y = convert_float8(r);
-  float8 res = select(r, nextafter(r, (float8)-INFINITY), convert_int8(y > x));
+  float8 res = select(r, nextafter(r, (float8)-INFINITY), convert_int8(convert_int8(y > x) | convert_int8(convert_int8(r == (float8)INFINITY) & ~convert_int8(isinf(x)))));
   return res;
 }
 
@@ -53202,7 +53428,7 @@ float16 convert_float16_rtz(float16 x)
   float16 y = convert_float16(r);
   float16 abs_x = fabs(x);
   float16 abs_y = fabs(y);
-  float16 res = select(r, nextafter(r, sign(r) * (float16)-INFINITY), convert_int16(abs_y > abs_x));
+  float16 res = select(r, nextafter(r, sign(r) * (float16)-INFINITY), convert_int16(convert_int16(abs_y > abs_x) | convert_int16(convert_int16(isinf(r)) & ~convert_int16(isinf(x)))));
   return res;
 }
 
@@ -53217,7 +53443,7 @@ float16 convert_float16_rtp(float16 x)
 {
   float16 r = convert_float16(x);
   float16 y = convert_float16(r);
-  float16 res = select(r, nextafter(r, (float16)INFINITY), convert_int16(y < x));
+  float16 res = select(r, nextafter(r, (float16)INFINITY), convert_int16(convert_int16(y < x) | convert_int16(convert_int16(r == (float16)-INFINITY) & ~convert_int16(isinf(x)))));
   return res;
 }
 
@@ -53226,7 +53452,7 @@ float16 convert_float16_rtn(float16 x)
 {
   float16 r = convert_float16(x);
   float16 y = convert_float16(r);
-  float16 res = select(r, nextafter(r, (float16)-INFINITY), convert_int16(y > x));
+  float16 res = select(r, nextafter(r, (float16)-INFINITY), convert_int16(convert_int16(y > x) | convert_int16(convert_int16(r == (float16)INFINITY) & ~convert_int16(isinf(x)))));
   return res;
 }
 
@@ -53430,7 +53656,7 @@ float convert_float_rtz(double x)
   double y = convert_double(r);
   double abs_x = fabs(x);
   double abs_y = fabs(y);
-  float res = select(r, nextafter(r, sign(r) * (float)-INFINITY), convert_int(abs_y > abs_x));
+  float res = select(r, nextafter(r, sign(r) * (float)-INFINITY), convert_int(convert_int(abs_y > abs_x) | convert_int(convert_int(isinf(r)) & ~convert_int(isinf(x)))));
   return res;
 }
 #endif
@@ -53449,7 +53675,7 @@ float convert_float_rtp(double x)
 {
   float r = convert_float(x);
   double y = convert_double(r);
-  float res = select(r, nextafter(r, (float)INFINITY), convert_int(y < x));
+  float res = select(r, nextafter(r, (float)INFINITY), convert_int(convert_int(y < x) | convert_int(convert_int(r == (float)-INFINITY) & ~convert_int(isinf(x)))));
   return res;
 }
 #endif
@@ -53460,7 +53686,7 @@ float convert_float_rtn(double x)
 {
   float r = convert_float(x);
   double y = convert_double(r);
-  float res = select(r, nextafter(r, (float)-INFINITY), convert_int(y > x));
+  float res = select(r, nextafter(r, (float)-INFINITY), convert_int(convert_int(y > x) | convert_int(convert_int(r == (float)INFINITY) & ~convert_int(isinf(x)))));
   return res;
 }
 #endif
@@ -53473,7 +53699,7 @@ float2 convert_float2_rtz(double2 x)
   double2 y = convert_double2(r);
   double2 abs_x = fabs(x);
   double2 abs_y = fabs(y);
-  float2 res = select(r, nextafter(r, sign(r) * (float2)-INFINITY), convert_int2(abs_y > abs_x));
+  float2 res = select(r, nextafter(r, sign(r) * (float2)-INFINITY), convert_int2(convert_int2(abs_y > abs_x) | convert_int2(convert_int2(isinf(r)) & ~convert_int2(isinf(x)))));
   return res;
 }
 #endif
@@ -53492,7 +53718,7 @@ float2 convert_float2_rtp(double2 x)
 {
   float2 r = convert_float2(x);
   double2 y = convert_double2(r);
-  float2 res = select(r, nextafter(r, (float2)INFINITY), convert_int2(y < x));
+  float2 res = select(r, nextafter(r, (float2)INFINITY), convert_int2(convert_int2(y < x) | convert_int2(convert_int2(r == (float2)-INFINITY) & ~convert_int2(isinf(x)))));
   return res;
 }
 #endif
@@ -53503,7 +53729,7 @@ float2 convert_float2_rtn(double2 x)
 {
   float2 r = convert_float2(x);
   double2 y = convert_double2(r);
-  float2 res = select(r, nextafter(r, (float2)-INFINITY), convert_int2(y > x));
+  float2 res = select(r, nextafter(r, (float2)-INFINITY), convert_int2(convert_int2(y > x) | convert_int2(convert_int2(r == (float2)INFINITY) & ~convert_int2(isinf(x)))));
   return res;
 }
 #endif
@@ -53516,7 +53742,7 @@ float3 convert_float3_rtz(double3 x)
   double3 y = convert_double3(r);
   double3 abs_x = fabs(x);
   double3 abs_y = fabs(y);
-  float3 res = select(r, nextafter(r, sign(r) * (float3)-INFINITY), convert_int3(abs_y > abs_x));
+  float3 res = select(r, nextafter(r, sign(r) * (float3)-INFINITY), convert_int3(convert_int3(abs_y > abs_x) | convert_int3(convert_int3(isinf(r)) & ~convert_int3(isinf(x)))));
   return res;
 }
 #endif
@@ -53535,7 +53761,7 @@ float3 convert_float3_rtp(double3 x)
 {
   float3 r = convert_float3(x);
   double3 y = convert_double3(r);
-  float3 res = select(r, nextafter(r, (float3)INFINITY), convert_int3(y < x));
+  float3 res = select(r, nextafter(r, (float3)INFINITY), convert_int3(convert_int3(y < x) | convert_int3(convert_int3(r == (float3)-INFINITY) & ~convert_int3(isinf(x)))));
   return res;
 }
 #endif
@@ -53546,7 +53772,7 @@ float3 convert_float3_rtn(double3 x)
 {
   float3 r = convert_float3(x);
   double3 y = convert_double3(r);
-  float3 res = select(r, nextafter(r, (float3)-INFINITY), convert_int3(y > x));
+  float3 res = select(r, nextafter(r, (float3)-INFINITY), convert_int3(convert_int3(y > x) | convert_int3(convert_int3(r == (float3)INFINITY) & ~convert_int3(isinf(x)))));
   return res;
 }
 #endif
@@ -53559,7 +53785,7 @@ float4 convert_float4_rtz(double4 x)
   double4 y = convert_double4(r);
   double4 abs_x = fabs(x);
   double4 abs_y = fabs(y);
-  float4 res = select(r, nextafter(r, sign(r) * (float4)-INFINITY), convert_int4(abs_y > abs_x));
+  float4 res = select(r, nextafter(r, sign(r) * (float4)-INFINITY), convert_int4(convert_int4(abs_y > abs_x) | convert_int4(convert_int4(isinf(r)) & ~convert_int4(isinf(x)))));
   return res;
 }
 #endif
@@ -53578,7 +53804,7 @@ float4 convert_float4_rtp(double4 x)
 {
   float4 r = convert_float4(x);
   double4 y = convert_double4(r);
-  float4 res = select(r, nextafter(r, (float4)INFINITY), convert_int4(y < x));
+  float4 res = select(r, nextafter(r, (float4)INFINITY), convert_int4(convert_int4(y < x) | convert_int4(convert_int4(r == (float4)-INFINITY) & ~convert_int4(isinf(x)))));
   return res;
 }
 #endif
@@ -53589,7 +53815,7 @@ float4 convert_float4_rtn(double4 x)
 {
   float4 r = convert_float4(x);
   double4 y = convert_double4(r);
-  float4 res = select(r, nextafter(r, (float4)-INFINITY), convert_int4(y > x));
+  float4 res = select(r, nextafter(r, (float4)-INFINITY), convert_int4(convert_int4(y > x) | convert_int4(convert_int4(r == (float4)INFINITY) & ~convert_int4(isinf(x)))));
   return res;
 }
 #endif
@@ -53602,7 +53828,7 @@ float8 convert_float8_rtz(double8 x)
   double8 y = convert_double8(r);
   double8 abs_x = fabs(x);
   double8 abs_y = fabs(y);
-  float8 res = select(r, nextafter(r, sign(r) * (float8)-INFINITY), convert_int8(abs_y > abs_x));
+  float8 res = select(r, nextafter(r, sign(r) * (float8)-INFINITY), convert_int8(convert_int8(abs_y > abs_x) | convert_int8(convert_int8(isinf(r)) & ~convert_int8(isinf(x)))));
   return res;
 }
 #endif
@@ -53621,7 +53847,7 @@ float8 convert_float8_rtp(double8 x)
 {
   float8 r = convert_float8(x);
   double8 y = convert_double8(r);
-  float8 res = select(r, nextafter(r, (float8)INFINITY), convert_int8(y < x));
+  float8 res = select(r, nextafter(r, (float8)INFINITY), convert_int8(convert_int8(y < x) | convert_int8(convert_int8(r == (float8)-INFINITY) & ~convert_int8(isinf(x)))));
   return res;
 }
 #endif
@@ -53632,7 +53858,7 @@ float8 convert_float8_rtn(double8 x)
 {
   float8 r = convert_float8(x);
   double8 y = convert_double8(r);
-  float8 res = select(r, nextafter(r, (float8)-INFINITY), convert_int8(y > x));
+  float8 res = select(r, nextafter(r, (float8)-INFINITY), convert_int8(convert_int8(y > x) | convert_int8(convert_int8(r == (float8)INFINITY) & ~convert_int8(isinf(x)))));
   return res;
 }
 #endif
@@ -53645,7 +53871,7 @@ float16 convert_float16_rtz(double16 x)
   double16 y = convert_double16(r);
   double16 abs_x = fabs(x);
   double16 abs_y = fabs(y);
-  float16 res = select(r, nextafter(r, sign(r) * (float16)-INFINITY), convert_int16(abs_y > abs_x));
+  float16 res = select(r, nextafter(r, sign(r) * (float16)-INFINITY), convert_int16(convert_int16(abs_y > abs_x) | convert_int16(convert_int16(isinf(r)) & ~convert_int16(isinf(x)))));
   return res;
 }
 #endif
@@ -53664,7 +53890,7 @@ float16 convert_float16_rtp(double16 x)
 {
   float16 r = convert_float16(x);
   double16 y = convert_double16(r);
-  float16 res = select(r, nextafter(r, (float16)INFINITY), convert_int16(y < x));
+  float16 res = select(r, nextafter(r, (float16)INFINITY), convert_int16(convert_int16(y < x) | convert_int16(convert_int16(r == (float16)-INFINITY) & ~convert_int16(isinf(x)))));
   return res;
 }
 #endif
@@ -53675,7 +53901,7 @@ float16 convert_float16_rtn(double16 x)
 {
   float16 r = convert_float16(x);
   double16 y = convert_double16(r);
-  float16 res = select(r, nextafter(r, (float16)-INFINITY), convert_int16(y > x));
+  float16 res = select(r, nextafter(r, (float16)-INFINITY), convert_int16(convert_int16(y > x) | convert_int16(convert_int16(r == (float16)INFINITY) & ~convert_int16(isinf(x)))));
   return res;
 }
 #endif
@@ -53688,7 +53914,7 @@ double convert_double_rtz(double x)
   double y = convert_double(r);
   double abs_x = fabs(x);
   double abs_y = fabs(y);
-  double res = select(r, nextafter(r, sign(r) * (double)-INFINITY), convert_long(abs_y > abs_x));
+  double res = select(r, nextafter(r, sign(r) * (double)-INFINITY), convert_long(convert_long(abs_y > abs_x) | convert_long(convert_long(isinf(r)) & ~convert_long(isinf(x)))));
   return res;
 }
 #endif
@@ -53707,7 +53933,7 @@ double convert_double_rtp(double x)
 {
   double r = convert_double(x);
   double y = convert_double(r);
-  double res = select(r, nextafter(r, (double)INFINITY), convert_long(y < x));
+  double res = select(r, nextafter(r, (double)INFINITY), convert_long(convert_long(y < x) | convert_long(convert_long(r == (double)-INFINITY) & ~convert_long(isinf(x)))));
   return res;
 }
 #endif
@@ -53718,7 +53944,7 @@ double convert_double_rtn(double x)
 {
   double r = convert_double(x);
   double y = convert_double(r);
-  double res = select(r, nextafter(r, (double)-INFINITY), convert_long(y > x));
+  double res = select(r, nextafter(r, (double)-INFINITY), convert_long(convert_long(y > x) | convert_long(convert_long(r == (double)INFINITY) & ~convert_long(isinf(x)))));
   return res;
 }
 #endif
@@ -53731,7 +53957,7 @@ double2 convert_double2_rtz(double2 x)
   double2 y = convert_double2(r);
   double2 abs_x = fabs(x);
   double2 abs_y = fabs(y);
-  double2 res = select(r, nextafter(r, sign(r) * (double2)-INFINITY), convert_long2(abs_y > abs_x));
+  double2 res = select(r, nextafter(r, sign(r) * (double2)-INFINITY), convert_long2(convert_long2(abs_y > abs_x) | convert_long2(convert_long2(isinf(r)) & ~convert_long2(isinf(x)))));
   return res;
 }
 #endif
@@ -53750,7 +53976,7 @@ double2 convert_double2_rtp(double2 x)
 {
   double2 r = convert_double2(x);
   double2 y = convert_double2(r);
-  double2 res = select(r, nextafter(r, (double2)INFINITY), convert_long2(y < x));
+  double2 res = select(r, nextafter(r, (double2)INFINITY), convert_long2(convert_long2(y < x) | convert_long2(convert_long2(r == (double2)-INFINITY) & ~convert_long2(isinf(x)))));
   return res;
 }
 #endif
@@ -53761,7 +53987,7 @@ double2 convert_double2_rtn(double2 x)
 {
   double2 r = convert_double2(x);
   double2 y = convert_double2(r);
-  double2 res = select(r, nextafter(r, (double2)-INFINITY), convert_long2(y > x));
+  double2 res = select(r, nextafter(r, (double2)-INFINITY), convert_long2(convert_long2(y > x) | convert_long2(convert_long2(r == (double2)INFINITY) & ~convert_long2(isinf(x)))));
   return res;
 }
 #endif
@@ -53774,7 +54000,7 @@ double3 convert_double3_rtz(double3 x)
   double3 y = convert_double3(r);
   double3 abs_x = fabs(x);
   double3 abs_y = fabs(y);
-  double3 res = select(r, nextafter(r, sign(r) * (double3)-INFINITY), convert_long3(abs_y > abs_x));
+  double3 res = select(r, nextafter(r, sign(r) * (double3)-INFINITY), convert_long3(convert_long3(abs_y > abs_x) | convert_long3(convert_long3(isinf(r)) & ~convert_long3(isinf(x)))));
   return res;
 }
 #endif
@@ -53793,7 +54019,7 @@ double3 convert_double3_rtp(double3 x)
 {
   double3 r = convert_double3(x);
   double3 y = convert_double3(r);
-  double3 res = select(r, nextafter(r, (double3)INFINITY), convert_long3(y < x));
+  double3 res = select(r, nextafter(r, (double3)INFINITY), convert_long3(convert_long3(y < x) | convert_long3(convert_long3(r == (double3)-INFINITY) & ~convert_long3(isinf(x)))));
   return res;
 }
 #endif
@@ -53804,7 +54030,7 @@ double3 convert_double3_rtn(double3 x)
 {
   double3 r = convert_double3(x);
   double3 y = convert_double3(r);
-  double3 res = select(r, nextafter(r, (double3)-INFINITY), convert_long3(y > x));
+  double3 res = select(r, nextafter(r, (double3)-INFINITY), convert_long3(convert_long3(y > x) | convert_long3(convert_long3(r == (double3)INFINITY) & ~convert_long3(isinf(x)))));
   return res;
 }
 #endif
@@ -53817,7 +54043,7 @@ double4 convert_double4_rtz(double4 x)
   double4 y = convert_double4(r);
   double4 abs_x = fabs(x);
   double4 abs_y = fabs(y);
-  double4 res = select(r, nextafter(r, sign(r) * (double4)-INFINITY), convert_long4(abs_y > abs_x));
+  double4 res = select(r, nextafter(r, sign(r) * (double4)-INFINITY), convert_long4(convert_long4(abs_y > abs_x) | convert_long4(convert_long4(isinf(r)) & ~convert_long4(isinf(x)))));
   return res;
 }
 #endif
@@ -53836,7 +54062,7 @@ double4 convert_double4_rtp(double4 x)
 {
   double4 r = convert_double4(x);
   double4 y = convert_double4(r);
-  double4 res = select(r, nextafter(r, (double4)INFINITY), convert_long4(y < x));
+  double4 res = select(r, nextafter(r, (double4)INFINITY), convert_long4(convert_long4(y < x) | convert_long4(convert_long4(r == (double4)-INFINITY) & ~convert_long4(isinf(x)))));
   return res;
 }
 #endif
@@ -53847,7 +54073,7 @@ double4 convert_double4_rtn(double4 x)
 {
   double4 r = convert_double4(x);
   double4 y = convert_double4(r);
-  double4 res = select(r, nextafter(r, (double4)-INFINITY), convert_long4(y > x));
+  double4 res = select(r, nextafter(r, (double4)-INFINITY), convert_long4(convert_long4(y > x) | convert_long4(convert_long4(r == (double4)INFINITY) & ~convert_long4(isinf(x)))));
   return res;
 }
 #endif
@@ -53860,7 +54086,7 @@ double8 convert_double8_rtz(double8 x)
   double8 y = convert_double8(r);
   double8 abs_x = fabs(x);
   double8 abs_y = fabs(y);
-  double8 res = select(r, nextafter(r, sign(r) * (double8)-INFINITY), convert_long8(abs_y > abs_x));
+  double8 res = select(r, nextafter(r, sign(r) * (double8)-INFINITY), convert_long8(convert_long8(abs_y > abs_x) | convert_long8(convert_long8(isinf(r)) & ~convert_long8(isinf(x)))));
   return res;
 }
 #endif
@@ -53879,7 +54105,7 @@ double8 convert_double8_rtp(double8 x)
 {
   double8 r = convert_double8(x);
   double8 y = convert_double8(r);
-  double8 res = select(r, nextafter(r, (double8)INFINITY), convert_long8(y < x));
+  double8 res = select(r, nextafter(r, (double8)INFINITY), convert_long8(convert_long8(y < x) | convert_long8(convert_long8(r == (double8)-INFINITY) & ~convert_long8(isinf(x)))));
   return res;
 }
 #endif
@@ -53890,7 +54116,7 @@ double8 convert_double8_rtn(double8 x)
 {
   double8 r = convert_double8(x);
   double8 y = convert_double8(r);
-  double8 res = select(r, nextafter(r, (double8)-INFINITY), convert_long8(y > x));
+  double8 res = select(r, nextafter(r, (double8)-INFINITY), convert_long8(convert_long8(y > x) | convert_long8(convert_long8(r == (double8)INFINITY) & ~convert_long8(isinf(x)))));
   return res;
 }
 #endif
@@ -53903,7 +54129,7 @@ double16 convert_double16_rtz(double16 x)
   double16 y = convert_double16(r);
   double16 abs_x = fabs(x);
   double16 abs_y = fabs(y);
-  double16 res = select(r, nextafter(r, sign(r) * (double16)-INFINITY), convert_long16(abs_y > abs_x));
+  double16 res = select(r, nextafter(r, sign(r) * (double16)-INFINITY), convert_long16(convert_long16(abs_y > abs_x) | convert_long16(convert_long16(isinf(r)) & ~convert_long16(isinf(x)))));
   return res;
 }
 #endif
@@ -53922,7 +54148,7 @@ double16 convert_double16_rtp(double16 x)
 {
   double16 r = convert_double16(x);
   double16 y = convert_double16(r);
-  double16 res = select(r, nextafter(r, (double16)INFINITY), convert_long16(y < x));
+  double16 res = select(r, nextafter(r, (double16)INFINITY), convert_long16(convert_long16(y < x) | convert_long16(convert_long16(r == (double16)-INFINITY) & ~convert_long16(isinf(x)))));
   return res;
 }
 #endif
@@ -53933,7 +54159,6073 @@ double16 convert_double16_rtn(double16 x)
 {
   double16 r = convert_double16(x);
   double16 y = convert_double16(r);
-  double16 res = select(r, nextafter(r, (double16)-INFINITY), convert_long16(y > x));
+  double16 res = select(r, nextafter(r, (double16)-INFINITY), convert_long16(convert_long16(y > x) | convert_long16(convert_long16(r == (double16)INFINITY) & ~convert_long16(isinf(x)))));
   return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtz(char x)
+{
+  return convert_half(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rte(char x)
+{
+  return convert_half(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtp(char x)
+{
+  return convert_half(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtn(char x)
+{
+  return convert_half(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtz(char2 x)
+{
+  return convert_half2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rte(char2 x)
+{
+  return convert_half2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtp(char2 x)
+{
+  return convert_half2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtn(char2 x)
+{
+  return convert_half2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtz(char3 x)
+{
+  return convert_half3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rte(char3 x)
+{
+  return convert_half3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtp(char3 x)
+{
+  return convert_half3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtn(char3 x)
+{
+  return convert_half3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtz(char4 x)
+{
+  return convert_half4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rte(char4 x)
+{
+  return convert_half4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtp(char4 x)
+{
+  return convert_half4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtn(char4 x)
+{
+  return convert_half4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtz(char8 x)
+{
+  return convert_half8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rte(char8 x)
+{
+  return convert_half8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtp(char8 x)
+{
+  return convert_half8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtn(char8 x)
+{
+  return convert_half8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtz(char16 x)
+{
+  return convert_half16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rte(char16 x)
+{
+  return convert_half16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtp(char16 x)
+{
+  return convert_half16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtn(char16 x)
+{
+  return convert_half16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtz(uchar x)
+{
+  return convert_half(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rte(uchar x)
+{
+  return convert_half(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtp(uchar x)
+{
+  return convert_half(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtn(uchar x)
+{
+  return convert_half(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtz(uchar2 x)
+{
+  return convert_half2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rte(uchar2 x)
+{
+  return convert_half2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtp(uchar2 x)
+{
+  return convert_half2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtn(uchar2 x)
+{
+  return convert_half2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtz(uchar3 x)
+{
+  return convert_half3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rte(uchar3 x)
+{
+  return convert_half3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtp(uchar3 x)
+{
+  return convert_half3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtn(uchar3 x)
+{
+  return convert_half3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtz(uchar4 x)
+{
+  return convert_half4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rte(uchar4 x)
+{
+  return convert_half4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtp(uchar4 x)
+{
+  return convert_half4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtn(uchar4 x)
+{
+  return convert_half4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtz(uchar8 x)
+{
+  return convert_half8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rte(uchar8 x)
+{
+  return convert_half8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtp(uchar8 x)
+{
+  return convert_half8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtn(uchar8 x)
+{
+  return convert_half8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtz(uchar16 x)
+{
+  return convert_half16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rte(uchar16 x)
+{
+  return convert_half16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtp(uchar16 x)
+{
+  return convert_half16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtn(uchar16 x)
+{
+  return convert_half16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtz(short x)
+{
+  half r = convert_half(x);
+  short y = convert_short_sat(r);
+  ushort abs_x = abs(x);
+  ushort abs_y = abs(y);
+  half res = select(r, nextafter(r, sign(r) * (half)-INFINITY), convert_short(convert_short(abs_y > abs_x) | convert_short(isinf(r))));
+  return select(res, (half)(0x1.ffcp+14), convert_short(x >= (short)32753));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rte(short x)
+{
+  return convert_half(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtp(short x)
+{
+  half r = convert_half(x);
+  short y = convert_short_sat(r);
+  half res = select(r, nextafter(r, (half)INFINITY), convert_short(convert_short(y < x) | convert_short(r == (half)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtn(short x)
+{
+  half r = convert_half(x);
+  short y = convert_short_sat(r);
+  half res = select(r, nextafter(r, (half)-INFINITY), convert_short(convert_short(y > x) | convert_short(r == (half)INFINITY)));
+  return select(res, (half)(0x1.ffcp+14), convert_short(x >= (short)32753));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtz(short2 x)
+{
+  half2 r = convert_half2(x);
+  short2 y = convert_short2_sat(r);
+  ushort2 abs_x = abs(x);
+  ushort2 abs_y = abs(y);
+  half2 res = select(r, nextafter(r, sign(r) * (half2)-INFINITY), convert_short2(convert_short2(abs_y > abs_x) | convert_short2(isinf(r))));
+  return select(res, (half2)(0x1.ffcp+14), convert_short2(x >= (short)32753));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rte(short2 x)
+{
+  return convert_half2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtp(short2 x)
+{
+  half2 r = convert_half2(x);
+  short2 y = convert_short2_sat(r);
+  half2 res = select(r, nextafter(r, (half2)INFINITY), convert_short2(convert_short2(y < x) | convert_short2(r == (half2)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtn(short2 x)
+{
+  half2 r = convert_half2(x);
+  short2 y = convert_short2_sat(r);
+  half2 res = select(r, nextafter(r, (half2)-INFINITY), convert_short2(convert_short2(y > x) | convert_short2(r == (half2)INFINITY)));
+  return select(res, (half2)(0x1.ffcp+14), convert_short2(x >= (short)32753));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtz(short3 x)
+{
+  half3 r = convert_half3(x);
+  short3 y = convert_short3_sat(r);
+  ushort3 abs_x = abs(x);
+  ushort3 abs_y = abs(y);
+  half3 res = select(r, nextafter(r, sign(r) * (half3)-INFINITY), convert_short3(convert_short3(abs_y > abs_x) | convert_short3(isinf(r))));
+  return select(res, (half3)(0x1.ffcp+14), convert_short3(x >= (short)32753));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rte(short3 x)
+{
+  return convert_half3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtp(short3 x)
+{
+  half3 r = convert_half3(x);
+  short3 y = convert_short3_sat(r);
+  half3 res = select(r, nextafter(r, (half3)INFINITY), convert_short3(convert_short3(y < x) | convert_short3(r == (half3)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtn(short3 x)
+{
+  half3 r = convert_half3(x);
+  short3 y = convert_short3_sat(r);
+  half3 res = select(r, nextafter(r, (half3)-INFINITY), convert_short3(convert_short3(y > x) | convert_short3(r == (half3)INFINITY)));
+  return select(res, (half3)(0x1.ffcp+14), convert_short3(x >= (short)32753));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtz(short4 x)
+{
+  half4 r = convert_half4(x);
+  short4 y = convert_short4_sat(r);
+  ushort4 abs_x = abs(x);
+  ushort4 abs_y = abs(y);
+  half4 res = select(r, nextafter(r, sign(r) * (half4)-INFINITY), convert_short4(convert_short4(abs_y > abs_x) | convert_short4(isinf(r))));
+  return select(res, (half4)(0x1.ffcp+14), convert_short4(x >= (short)32753));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rte(short4 x)
+{
+  return convert_half4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtp(short4 x)
+{
+  half4 r = convert_half4(x);
+  short4 y = convert_short4_sat(r);
+  half4 res = select(r, nextafter(r, (half4)INFINITY), convert_short4(convert_short4(y < x) | convert_short4(r == (half4)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtn(short4 x)
+{
+  half4 r = convert_half4(x);
+  short4 y = convert_short4_sat(r);
+  half4 res = select(r, nextafter(r, (half4)-INFINITY), convert_short4(convert_short4(y > x) | convert_short4(r == (half4)INFINITY)));
+  return select(res, (half4)(0x1.ffcp+14), convert_short4(x >= (short)32753));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtz(short8 x)
+{
+  half8 r = convert_half8(x);
+  short8 y = convert_short8_sat(r);
+  ushort8 abs_x = abs(x);
+  ushort8 abs_y = abs(y);
+  half8 res = select(r, nextafter(r, sign(r) * (half8)-INFINITY), convert_short8(convert_short8(abs_y > abs_x) | convert_short8(isinf(r))));
+  return select(res, (half8)(0x1.ffcp+14), convert_short8(x >= (short)32753));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rte(short8 x)
+{
+  return convert_half8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtp(short8 x)
+{
+  half8 r = convert_half8(x);
+  short8 y = convert_short8_sat(r);
+  half8 res = select(r, nextafter(r, (half8)INFINITY), convert_short8(convert_short8(y < x) | convert_short8(r == (half8)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtn(short8 x)
+{
+  half8 r = convert_half8(x);
+  short8 y = convert_short8_sat(r);
+  half8 res = select(r, nextafter(r, (half8)-INFINITY), convert_short8(convert_short8(y > x) | convert_short8(r == (half8)INFINITY)));
+  return select(res, (half8)(0x1.ffcp+14), convert_short8(x >= (short)32753));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtz(short16 x)
+{
+  half16 r = convert_half16(x);
+  short16 y = convert_short16_sat(r);
+  ushort16 abs_x = abs(x);
+  ushort16 abs_y = abs(y);
+  half16 res = select(r, nextafter(r, sign(r) * (half16)-INFINITY), convert_short16(convert_short16(abs_y > abs_x) | convert_short16(isinf(r))));
+  return select(res, (half16)(0x1.ffcp+14), convert_short16(x >= (short)32753));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rte(short16 x)
+{
+  return convert_half16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtp(short16 x)
+{
+  half16 r = convert_half16(x);
+  short16 y = convert_short16_sat(r);
+  half16 res = select(r, nextafter(r, (half16)INFINITY), convert_short16(convert_short16(y < x) | convert_short16(r == (half16)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtn(short16 x)
+{
+  half16 r = convert_half16(x);
+  short16 y = convert_short16_sat(r);
+  half16 res = select(r, nextafter(r, (half16)-INFINITY), convert_short16(convert_short16(y > x) | convert_short16(r == (half16)INFINITY)));
+  return select(res, (half16)(0x1.ffcp+14), convert_short16(x >= (short)32753));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtz(ushort x)
+{
+  half r = convert_half(x);
+  ushort y = convert_ushort_sat(r);
+  ushort abs_x = abs(x);
+  ushort abs_y = abs(y);
+  half res = select(r, nextafter(r, sign(r) * (half)-INFINITY), convert_short(convert_short(abs_y > abs_x) | convert_short(isinf(r))));
+  return select(res, (half)(0x1.ffcp+15), convert_short(x >= (ushort)65505U));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rte(ushort x)
+{
+  return convert_half(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtp(ushort x)
+{
+  half r = convert_half(x);
+  ushort y = convert_ushort_sat(r);
+  half res = select(r, nextafter(r, (half)INFINITY), convert_short(convert_short(y < x) | convert_short(r == (half)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtn(ushort x)
+{
+  half r = convert_half(x);
+  ushort y = convert_ushort_sat(r);
+  half res = select(r, nextafter(r, (half)-INFINITY), convert_short(convert_short(y > x) | convert_short(r == (half)INFINITY)));
+  return select(res, (half)(0x1.ffcp+15), convert_short(x >= (ushort)65505U));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtz(ushort2 x)
+{
+  half2 r = convert_half2(x);
+  ushort2 y = convert_ushort2_sat(r);
+  ushort2 abs_x = abs(x);
+  ushort2 abs_y = abs(y);
+  half2 res = select(r, nextafter(r, sign(r) * (half2)-INFINITY), convert_short2(convert_short2(abs_y > abs_x) | convert_short2(isinf(r))));
+  return select(res, (half2)(0x1.ffcp+15), convert_short2(x >= (ushort)65505U));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rte(ushort2 x)
+{
+  return convert_half2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtp(ushort2 x)
+{
+  half2 r = convert_half2(x);
+  ushort2 y = convert_ushort2_sat(r);
+  half2 res = select(r, nextafter(r, (half2)INFINITY), convert_short2(convert_short2(y < x) | convert_short2(r == (half2)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtn(ushort2 x)
+{
+  half2 r = convert_half2(x);
+  ushort2 y = convert_ushort2_sat(r);
+  half2 res = select(r, nextafter(r, (half2)-INFINITY), convert_short2(convert_short2(y > x) | convert_short2(r == (half2)INFINITY)));
+  return select(res, (half2)(0x1.ffcp+15), convert_short2(x >= (ushort)65505U));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtz(ushort3 x)
+{
+  half3 r = convert_half3(x);
+  ushort3 y = convert_ushort3_sat(r);
+  ushort3 abs_x = abs(x);
+  ushort3 abs_y = abs(y);
+  half3 res = select(r, nextafter(r, sign(r) * (half3)-INFINITY), convert_short3(convert_short3(abs_y > abs_x) | convert_short3(isinf(r))));
+  return select(res, (half3)(0x1.ffcp+15), convert_short3(x >= (ushort)65505U));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rte(ushort3 x)
+{
+  return convert_half3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtp(ushort3 x)
+{
+  half3 r = convert_half3(x);
+  ushort3 y = convert_ushort3_sat(r);
+  half3 res = select(r, nextafter(r, (half3)INFINITY), convert_short3(convert_short3(y < x) | convert_short3(r == (half3)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtn(ushort3 x)
+{
+  half3 r = convert_half3(x);
+  ushort3 y = convert_ushort3_sat(r);
+  half3 res = select(r, nextafter(r, (half3)-INFINITY), convert_short3(convert_short3(y > x) | convert_short3(r == (half3)INFINITY)));
+  return select(res, (half3)(0x1.ffcp+15), convert_short3(x >= (ushort)65505U));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtz(ushort4 x)
+{
+  half4 r = convert_half4(x);
+  ushort4 y = convert_ushort4_sat(r);
+  ushort4 abs_x = abs(x);
+  ushort4 abs_y = abs(y);
+  half4 res = select(r, nextafter(r, sign(r) * (half4)-INFINITY), convert_short4(convert_short4(abs_y > abs_x) | convert_short4(isinf(r))));
+  return select(res, (half4)(0x1.ffcp+15), convert_short4(x >= (ushort)65505U));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rte(ushort4 x)
+{
+  return convert_half4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtp(ushort4 x)
+{
+  half4 r = convert_half4(x);
+  ushort4 y = convert_ushort4_sat(r);
+  half4 res = select(r, nextafter(r, (half4)INFINITY), convert_short4(convert_short4(y < x) | convert_short4(r == (half4)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtn(ushort4 x)
+{
+  half4 r = convert_half4(x);
+  ushort4 y = convert_ushort4_sat(r);
+  half4 res = select(r, nextafter(r, (half4)-INFINITY), convert_short4(convert_short4(y > x) | convert_short4(r == (half4)INFINITY)));
+  return select(res, (half4)(0x1.ffcp+15), convert_short4(x >= (ushort)65505U));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtz(ushort8 x)
+{
+  half8 r = convert_half8(x);
+  ushort8 y = convert_ushort8_sat(r);
+  ushort8 abs_x = abs(x);
+  ushort8 abs_y = abs(y);
+  half8 res = select(r, nextafter(r, sign(r) * (half8)-INFINITY), convert_short8(convert_short8(abs_y > abs_x) | convert_short8(isinf(r))));
+  return select(res, (half8)(0x1.ffcp+15), convert_short8(x >= (ushort)65505U));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rte(ushort8 x)
+{
+  return convert_half8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtp(ushort8 x)
+{
+  half8 r = convert_half8(x);
+  ushort8 y = convert_ushort8_sat(r);
+  half8 res = select(r, nextafter(r, (half8)INFINITY), convert_short8(convert_short8(y < x) | convert_short8(r == (half8)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtn(ushort8 x)
+{
+  half8 r = convert_half8(x);
+  ushort8 y = convert_ushort8_sat(r);
+  half8 res = select(r, nextafter(r, (half8)-INFINITY), convert_short8(convert_short8(y > x) | convert_short8(r == (half8)INFINITY)));
+  return select(res, (half8)(0x1.ffcp+15), convert_short8(x >= (ushort)65505U));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtz(ushort16 x)
+{
+  half16 r = convert_half16(x);
+  ushort16 y = convert_ushort16_sat(r);
+  ushort16 abs_x = abs(x);
+  ushort16 abs_y = abs(y);
+  half16 res = select(r, nextafter(r, sign(r) * (half16)-INFINITY), convert_short16(convert_short16(abs_y > abs_x) | convert_short16(isinf(r))));
+  return select(res, (half16)(0x1.ffcp+15), convert_short16(x >= (ushort)65505U));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rte(ushort16 x)
+{
+  return convert_half16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtp(ushort16 x)
+{
+  half16 r = convert_half16(x);
+  ushort16 y = convert_ushort16_sat(r);
+  half16 res = select(r, nextafter(r, (half16)INFINITY), convert_short16(convert_short16(y < x) | convert_short16(r == (half16)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtn(ushort16 x)
+{
+  half16 r = convert_half16(x);
+  ushort16 y = convert_ushort16_sat(r);
+  half16 res = select(r, nextafter(r, (half16)-INFINITY), convert_short16(convert_short16(y > x) | convert_short16(r == (half16)INFINITY)));
+  return select(res, (half16)(0x1.ffcp+15), convert_short16(x >= (ushort)65505U));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtz(int x)
+{
+  half r = convert_half(x);
+  int y = convert_int_sat(r);
+  uint abs_x = abs(x);
+  uint abs_y = abs(y);
+  half res = select(r, nextafter(r, sign(r) * (half)-INFINITY), convert_short(convert_short(abs_y > abs_x) | convert_short(isinf(r))));
+  return select(res, (half)(0x1.ffcp+15), convert_short(x >= (int)65505));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rte(int x)
+{
+  return convert_half(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtp(int x)
+{
+  half r = convert_half(x);
+  int y = convert_int_sat(r);
+  half res = select(r, nextafter(r, (half)INFINITY), convert_short(convert_short(y < x) | convert_short(r == (half)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtn(int x)
+{
+  half r = convert_half(x);
+  int y = convert_int_sat(r);
+  half res = select(r, nextafter(r, (half)-INFINITY), convert_short(convert_short(y > x) | convert_short(r == (half)INFINITY)));
+  return select(res, (half)(0x1.ffcp+15), convert_short(x >= (int)65505));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtz(int2 x)
+{
+  half2 r = convert_half2(x);
+  int2 y = convert_int2_sat(r);
+  uint2 abs_x = abs(x);
+  uint2 abs_y = abs(y);
+  half2 res = select(r, nextafter(r, sign(r) * (half2)-INFINITY), convert_short2(convert_short2(abs_y > abs_x) | convert_short2(isinf(r))));
+  return select(res, (half2)(0x1.ffcp+15), convert_short2(x >= (int)65505));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rte(int2 x)
+{
+  return convert_half2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtp(int2 x)
+{
+  half2 r = convert_half2(x);
+  int2 y = convert_int2_sat(r);
+  half2 res = select(r, nextafter(r, (half2)INFINITY), convert_short2(convert_short2(y < x) | convert_short2(r == (half2)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtn(int2 x)
+{
+  half2 r = convert_half2(x);
+  int2 y = convert_int2_sat(r);
+  half2 res = select(r, nextafter(r, (half2)-INFINITY), convert_short2(convert_short2(y > x) | convert_short2(r == (half2)INFINITY)));
+  return select(res, (half2)(0x1.ffcp+15), convert_short2(x >= (int)65505));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtz(int3 x)
+{
+  half3 r = convert_half3(x);
+  int3 y = convert_int3_sat(r);
+  uint3 abs_x = abs(x);
+  uint3 abs_y = abs(y);
+  half3 res = select(r, nextafter(r, sign(r) * (half3)-INFINITY), convert_short3(convert_short3(abs_y > abs_x) | convert_short3(isinf(r))));
+  return select(res, (half3)(0x1.ffcp+15), convert_short3(x >= (int)65505));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rte(int3 x)
+{
+  return convert_half3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtp(int3 x)
+{
+  half3 r = convert_half3(x);
+  int3 y = convert_int3_sat(r);
+  half3 res = select(r, nextafter(r, (half3)INFINITY), convert_short3(convert_short3(y < x) | convert_short3(r == (half3)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtn(int3 x)
+{
+  half3 r = convert_half3(x);
+  int3 y = convert_int3_sat(r);
+  half3 res = select(r, nextafter(r, (half3)-INFINITY), convert_short3(convert_short3(y > x) | convert_short3(r == (half3)INFINITY)));
+  return select(res, (half3)(0x1.ffcp+15), convert_short3(x >= (int)65505));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtz(int4 x)
+{
+  half4 r = convert_half4(x);
+  int4 y = convert_int4_sat(r);
+  uint4 abs_x = abs(x);
+  uint4 abs_y = abs(y);
+  half4 res = select(r, nextafter(r, sign(r) * (half4)-INFINITY), convert_short4(convert_short4(abs_y > abs_x) | convert_short4(isinf(r))));
+  return select(res, (half4)(0x1.ffcp+15), convert_short4(x >= (int)65505));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rte(int4 x)
+{
+  return convert_half4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtp(int4 x)
+{
+  half4 r = convert_half4(x);
+  int4 y = convert_int4_sat(r);
+  half4 res = select(r, nextafter(r, (half4)INFINITY), convert_short4(convert_short4(y < x) | convert_short4(r == (half4)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtn(int4 x)
+{
+  half4 r = convert_half4(x);
+  int4 y = convert_int4_sat(r);
+  half4 res = select(r, nextafter(r, (half4)-INFINITY), convert_short4(convert_short4(y > x) | convert_short4(r == (half4)INFINITY)));
+  return select(res, (half4)(0x1.ffcp+15), convert_short4(x >= (int)65505));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtz(int8 x)
+{
+  half8 r = convert_half8(x);
+  int8 y = convert_int8_sat(r);
+  uint8 abs_x = abs(x);
+  uint8 abs_y = abs(y);
+  half8 res = select(r, nextafter(r, sign(r) * (half8)-INFINITY), convert_short8(convert_short8(abs_y > abs_x) | convert_short8(isinf(r))));
+  return select(res, (half8)(0x1.ffcp+15), convert_short8(x >= (int)65505));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rte(int8 x)
+{
+  return convert_half8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtp(int8 x)
+{
+  half8 r = convert_half8(x);
+  int8 y = convert_int8_sat(r);
+  half8 res = select(r, nextafter(r, (half8)INFINITY), convert_short8(convert_short8(y < x) | convert_short8(r == (half8)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtn(int8 x)
+{
+  half8 r = convert_half8(x);
+  int8 y = convert_int8_sat(r);
+  half8 res = select(r, nextafter(r, (half8)-INFINITY), convert_short8(convert_short8(y > x) | convert_short8(r == (half8)INFINITY)));
+  return select(res, (half8)(0x1.ffcp+15), convert_short8(x >= (int)65505));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtz(int16 x)
+{
+  half16 r = convert_half16(x);
+  int16 y = convert_int16_sat(r);
+  uint16 abs_x = abs(x);
+  uint16 abs_y = abs(y);
+  half16 res = select(r, nextafter(r, sign(r) * (half16)-INFINITY), convert_short16(convert_short16(abs_y > abs_x) | convert_short16(isinf(r))));
+  return select(res, (half16)(0x1.ffcp+15), convert_short16(x >= (int)65505));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rte(int16 x)
+{
+  return convert_half16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtp(int16 x)
+{
+  half16 r = convert_half16(x);
+  int16 y = convert_int16_sat(r);
+  half16 res = select(r, nextafter(r, (half16)INFINITY), convert_short16(convert_short16(y < x) | convert_short16(r == (half16)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtn(int16 x)
+{
+  half16 r = convert_half16(x);
+  int16 y = convert_int16_sat(r);
+  half16 res = select(r, nextafter(r, (half16)-INFINITY), convert_short16(convert_short16(y > x) | convert_short16(r == (half16)INFINITY)));
+  return select(res, (half16)(0x1.ffcp+15), convert_short16(x >= (int)65505));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtz(uint x)
+{
+  half r = convert_half(x);
+  uint y = convert_uint_sat(r);
+  uint abs_x = abs(x);
+  uint abs_y = abs(y);
+  half res = select(r, nextafter(r, sign(r) * (half)-INFINITY), convert_short(convert_short(abs_y > abs_x) | convert_short(isinf(r))));
+  return select(res, (half)(0x1.ffcp+15), convert_short(x >= (uint)65505U));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rte(uint x)
+{
+  return convert_half(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtp(uint x)
+{
+  half r = convert_half(x);
+  uint y = convert_uint_sat(r);
+  half res = select(r, nextafter(r, (half)INFINITY), convert_short(convert_short(y < x) | convert_short(r == (half)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtn(uint x)
+{
+  half r = convert_half(x);
+  uint y = convert_uint_sat(r);
+  half res = select(r, nextafter(r, (half)-INFINITY), convert_short(convert_short(y > x) | convert_short(r == (half)INFINITY)));
+  return select(res, (half)(0x1.ffcp+15), convert_short(x >= (uint)65505U));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtz(uint2 x)
+{
+  half2 r = convert_half2(x);
+  uint2 y = convert_uint2_sat(r);
+  uint2 abs_x = abs(x);
+  uint2 abs_y = abs(y);
+  half2 res = select(r, nextafter(r, sign(r) * (half2)-INFINITY), convert_short2(convert_short2(abs_y > abs_x) | convert_short2(isinf(r))));
+  return select(res, (half2)(0x1.ffcp+15), convert_short2(x >= (uint)65505U));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rte(uint2 x)
+{
+  return convert_half2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtp(uint2 x)
+{
+  half2 r = convert_half2(x);
+  uint2 y = convert_uint2_sat(r);
+  half2 res = select(r, nextafter(r, (half2)INFINITY), convert_short2(convert_short2(y < x) | convert_short2(r == (half2)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtn(uint2 x)
+{
+  half2 r = convert_half2(x);
+  uint2 y = convert_uint2_sat(r);
+  half2 res = select(r, nextafter(r, (half2)-INFINITY), convert_short2(convert_short2(y > x) | convert_short2(r == (half2)INFINITY)));
+  return select(res, (half2)(0x1.ffcp+15), convert_short2(x >= (uint)65505U));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtz(uint3 x)
+{
+  half3 r = convert_half3(x);
+  uint3 y = convert_uint3_sat(r);
+  uint3 abs_x = abs(x);
+  uint3 abs_y = abs(y);
+  half3 res = select(r, nextafter(r, sign(r) * (half3)-INFINITY), convert_short3(convert_short3(abs_y > abs_x) | convert_short3(isinf(r))));
+  return select(res, (half3)(0x1.ffcp+15), convert_short3(x >= (uint)65505U));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rte(uint3 x)
+{
+  return convert_half3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtp(uint3 x)
+{
+  half3 r = convert_half3(x);
+  uint3 y = convert_uint3_sat(r);
+  half3 res = select(r, nextafter(r, (half3)INFINITY), convert_short3(convert_short3(y < x) | convert_short3(r == (half3)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtn(uint3 x)
+{
+  half3 r = convert_half3(x);
+  uint3 y = convert_uint3_sat(r);
+  half3 res = select(r, nextafter(r, (half3)-INFINITY), convert_short3(convert_short3(y > x) | convert_short3(r == (half3)INFINITY)));
+  return select(res, (half3)(0x1.ffcp+15), convert_short3(x >= (uint)65505U));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtz(uint4 x)
+{
+  half4 r = convert_half4(x);
+  uint4 y = convert_uint4_sat(r);
+  uint4 abs_x = abs(x);
+  uint4 abs_y = abs(y);
+  half4 res = select(r, nextafter(r, sign(r) * (half4)-INFINITY), convert_short4(convert_short4(abs_y > abs_x) | convert_short4(isinf(r))));
+  return select(res, (half4)(0x1.ffcp+15), convert_short4(x >= (uint)65505U));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rte(uint4 x)
+{
+  return convert_half4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtp(uint4 x)
+{
+  half4 r = convert_half4(x);
+  uint4 y = convert_uint4_sat(r);
+  half4 res = select(r, nextafter(r, (half4)INFINITY), convert_short4(convert_short4(y < x) | convert_short4(r == (half4)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtn(uint4 x)
+{
+  half4 r = convert_half4(x);
+  uint4 y = convert_uint4_sat(r);
+  half4 res = select(r, nextafter(r, (half4)-INFINITY), convert_short4(convert_short4(y > x) | convert_short4(r == (half4)INFINITY)));
+  return select(res, (half4)(0x1.ffcp+15), convert_short4(x >= (uint)65505U));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtz(uint8 x)
+{
+  half8 r = convert_half8(x);
+  uint8 y = convert_uint8_sat(r);
+  uint8 abs_x = abs(x);
+  uint8 abs_y = abs(y);
+  half8 res = select(r, nextafter(r, sign(r) * (half8)-INFINITY), convert_short8(convert_short8(abs_y > abs_x) | convert_short8(isinf(r))));
+  return select(res, (half8)(0x1.ffcp+15), convert_short8(x >= (uint)65505U));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rte(uint8 x)
+{
+  return convert_half8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtp(uint8 x)
+{
+  half8 r = convert_half8(x);
+  uint8 y = convert_uint8_sat(r);
+  half8 res = select(r, nextafter(r, (half8)INFINITY), convert_short8(convert_short8(y < x) | convert_short8(r == (half8)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtn(uint8 x)
+{
+  half8 r = convert_half8(x);
+  uint8 y = convert_uint8_sat(r);
+  half8 res = select(r, nextafter(r, (half8)-INFINITY), convert_short8(convert_short8(y > x) | convert_short8(r == (half8)INFINITY)));
+  return select(res, (half8)(0x1.ffcp+15), convert_short8(x >= (uint)65505U));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtz(uint16 x)
+{
+  half16 r = convert_half16(x);
+  uint16 y = convert_uint16_sat(r);
+  uint16 abs_x = abs(x);
+  uint16 abs_y = abs(y);
+  half16 res = select(r, nextafter(r, sign(r) * (half16)-INFINITY), convert_short16(convert_short16(abs_y > abs_x) | convert_short16(isinf(r))));
+  return select(res, (half16)(0x1.ffcp+15), convert_short16(x >= (uint)65505U));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rte(uint16 x)
+{
+  return convert_half16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtp(uint16 x)
+{
+  half16 r = convert_half16(x);
+  uint16 y = convert_uint16_sat(r);
+  half16 res = select(r, nextafter(r, (half16)INFINITY), convert_short16(convert_short16(y < x) | convert_short16(r == (half16)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtn(uint16 x)
+{
+  half16 r = convert_half16(x);
+  uint16 y = convert_uint16_sat(r);
+  half16 res = select(r, nextafter(r, (half16)-INFINITY), convert_short16(convert_short16(y > x) | convert_short16(r == (half16)INFINITY)));
+  return select(res, (half16)(0x1.ffcp+15), convert_short16(x >= (uint)65505U));
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtz(long x)
+{
+  half r = convert_half(x);
+  long y = convert_long_sat(r);
+  ulong abs_x = abs(x);
+  ulong abs_y = abs(y);
+  half res = select(r, nextafter(r, sign(r) * (half)-INFINITY), convert_short(convert_short(abs_y > abs_x) | convert_short(isinf(r))));
+  return select(res, (half)(0x1.ffcp+15), convert_short(x >= (long)65505L));
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rte(long x)
+{
+  return convert_half(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtp(long x)
+{
+  half r = convert_half(x);
+  long y = convert_long_sat(r);
+  half res = select(r, nextafter(r, (half)INFINITY), convert_short(convert_short(y < x) | convert_short(r == (half)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtn(long x)
+{
+  half r = convert_half(x);
+  long y = convert_long_sat(r);
+  half res = select(r, nextafter(r, (half)-INFINITY), convert_short(convert_short(y > x) | convert_short(r == (half)INFINITY)));
+  return select(res, (half)(0x1.ffcp+15), convert_short(x >= (long)65505L));
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtz(long2 x)
+{
+  half2 r = convert_half2(x);
+  long2 y = convert_long2_sat(r);
+  ulong2 abs_x = abs(x);
+  ulong2 abs_y = abs(y);
+  half2 res = select(r, nextafter(r, sign(r) * (half2)-INFINITY), convert_short2(convert_short2(abs_y > abs_x) | convert_short2(isinf(r))));
+  return select(res, (half2)(0x1.ffcp+15), convert_short2(x >= (long)65505L));
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rte(long2 x)
+{
+  return convert_half2(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtp(long2 x)
+{
+  half2 r = convert_half2(x);
+  long2 y = convert_long2_sat(r);
+  half2 res = select(r, nextafter(r, (half2)INFINITY), convert_short2(convert_short2(y < x) | convert_short2(r == (half2)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtn(long2 x)
+{
+  half2 r = convert_half2(x);
+  long2 y = convert_long2_sat(r);
+  half2 res = select(r, nextafter(r, (half2)-INFINITY), convert_short2(convert_short2(y > x) | convert_short2(r == (half2)INFINITY)));
+  return select(res, (half2)(0x1.ffcp+15), convert_short2(x >= (long)65505L));
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtz(long3 x)
+{
+  half3 r = convert_half3(x);
+  long3 y = convert_long3_sat(r);
+  ulong3 abs_x = abs(x);
+  ulong3 abs_y = abs(y);
+  half3 res = select(r, nextafter(r, sign(r) * (half3)-INFINITY), convert_short3(convert_short3(abs_y > abs_x) | convert_short3(isinf(r))));
+  return select(res, (half3)(0x1.ffcp+15), convert_short3(x >= (long)65505L));
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rte(long3 x)
+{
+  return convert_half3(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtp(long3 x)
+{
+  half3 r = convert_half3(x);
+  long3 y = convert_long3_sat(r);
+  half3 res = select(r, nextafter(r, (half3)INFINITY), convert_short3(convert_short3(y < x) | convert_short3(r == (half3)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtn(long3 x)
+{
+  half3 r = convert_half3(x);
+  long3 y = convert_long3_sat(r);
+  half3 res = select(r, nextafter(r, (half3)-INFINITY), convert_short3(convert_short3(y > x) | convert_short3(r == (half3)INFINITY)));
+  return select(res, (half3)(0x1.ffcp+15), convert_short3(x >= (long)65505L));
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtz(long4 x)
+{
+  half4 r = convert_half4(x);
+  long4 y = convert_long4_sat(r);
+  ulong4 abs_x = abs(x);
+  ulong4 abs_y = abs(y);
+  half4 res = select(r, nextafter(r, sign(r) * (half4)-INFINITY), convert_short4(convert_short4(abs_y > abs_x) | convert_short4(isinf(r))));
+  return select(res, (half4)(0x1.ffcp+15), convert_short4(x >= (long)65505L));
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rte(long4 x)
+{
+  return convert_half4(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtp(long4 x)
+{
+  half4 r = convert_half4(x);
+  long4 y = convert_long4_sat(r);
+  half4 res = select(r, nextafter(r, (half4)INFINITY), convert_short4(convert_short4(y < x) | convert_short4(r == (half4)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtn(long4 x)
+{
+  half4 r = convert_half4(x);
+  long4 y = convert_long4_sat(r);
+  half4 res = select(r, nextafter(r, (half4)-INFINITY), convert_short4(convert_short4(y > x) | convert_short4(r == (half4)INFINITY)));
+  return select(res, (half4)(0x1.ffcp+15), convert_short4(x >= (long)65505L));
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtz(long8 x)
+{
+  half8 r = convert_half8(x);
+  long8 y = convert_long8_sat(r);
+  ulong8 abs_x = abs(x);
+  ulong8 abs_y = abs(y);
+  half8 res = select(r, nextafter(r, sign(r) * (half8)-INFINITY), convert_short8(convert_short8(abs_y > abs_x) | convert_short8(isinf(r))));
+  return select(res, (half8)(0x1.ffcp+15), convert_short8(x >= (long)65505L));
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rte(long8 x)
+{
+  return convert_half8(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtp(long8 x)
+{
+  half8 r = convert_half8(x);
+  long8 y = convert_long8_sat(r);
+  half8 res = select(r, nextafter(r, (half8)INFINITY), convert_short8(convert_short8(y < x) | convert_short8(r == (half8)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtn(long8 x)
+{
+  half8 r = convert_half8(x);
+  long8 y = convert_long8_sat(r);
+  half8 res = select(r, nextafter(r, (half8)-INFINITY), convert_short8(convert_short8(y > x) | convert_short8(r == (half8)INFINITY)));
+  return select(res, (half8)(0x1.ffcp+15), convert_short8(x >= (long)65505L));
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtz(long16 x)
+{
+  half16 r = convert_half16(x);
+  long16 y = convert_long16_sat(r);
+  ulong16 abs_x = abs(x);
+  ulong16 abs_y = abs(y);
+  half16 res = select(r, nextafter(r, sign(r) * (half16)-INFINITY), convert_short16(convert_short16(abs_y > abs_x) | convert_short16(isinf(r))));
+  return select(res, (half16)(0x1.ffcp+15), convert_short16(x >= (long)65505L));
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rte(long16 x)
+{
+  return convert_half16(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtp(long16 x)
+{
+  half16 r = convert_half16(x);
+  long16 y = convert_long16_sat(r);
+  half16 res = select(r, nextafter(r, (half16)INFINITY), convert_short16(convert_short16(y < x) | convert_short16(r == (half16)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtn(long16 x)
+{
+  half16 r = convert_half16(x);
+  long16 y = convert_long16_sat(r);
+  half16 res = select(r, nextafter(r, (half16)-INFINITY), convert_short16(convert_short16(y > x) | convert_short16(r == (half16)INFINITY)));
+  return select(res, (half16)(0x1.ffcp+15), convert_short16(x >= (long)65505L));
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtz(ulong x)
+{
+  half r = convert_half(x);
+  ulong y = convert_ulong_sat(r);
+  ulong abs_x = abs(x);
+  ulong abs_y = abs(y);
+  half res = select(r, nextafter(r, sign(r) * (half)-INFINITY), convert_short(convert_short(abs_y > abs_x) | convert_short(isinf(r))));
+  return select(res, (half)(0x1.ffcp+15), convert_short(x >= (ulong)65505UL));
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rte(ulong x)
+{
+  return convert_half(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtp(ulong x)
+{
+  half r = convert_half(x);
+  ulong y = convert_ulong_sat(r);
+  half res = select(r, nextafter(r, (half)INFINITY), convert_short(convert_short(y < x) | convert_short(r == (half)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtn(ulong x)
+{
+  half r = convert_half(x);
+  ulong y = convert_ulong_sat(r);
+  half res = select(r, nextafter(r, (half)-INFINITY), convert_short(convert_short(y > x) | convert_short(r == (half)INFINITY)));
+  return select(res, (half)(0x1.ffcp+15), convert_short(x >= (ulong)65505UL));
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtz(ulong2 x)
+{
+  half2 r = convert_half2(x);
+  ulong2 y = convert_ulong2_sat(r);
+  ulong2 abs_x = abs(x);
+  ulong2 abs_y = abs(y);
+  half2 res = select(r, nextafter(r, sign(r) * (half2)-INFINITY), convert_short2(convert_short2(abs_y > abs_x) | convert_short2(isinf(r))));
+  return select(res, (half2)(0x1.ffcp+15), convert_short2(x >= (ulong)65505UL));
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rte(ulong2 x)
+{
+  return convert_half2(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtp(ulong2 x)
+{
+  half2 r = convert_half2(x);
+  ulong2 y = convert_ulong2_sat(r);
+  half2 res = select(r, nextafter(r, (half2)INFINITY), convert_short2(convert_short2(y < x) | convert_short2(r == (half2)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtn(ulong2 x)
+{
+  half2 r = convert_half2(x);
+  ulong2 y = convert_ulong2_sat(r);
+  half2 res = select(r, nextafter(r, (half2)-INFINITY), convert_short2(convert_short2(y > x) | convert_short2(r == (half2)INFINITY)));
+  return select(res, (half2)(0x1.ffcp+15), convert_short2(x >= (ulong)65505UL));
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtz(ulong3 x)
+{
+  half3 r = convert_half3(x);
+  ulong3 y = convert_ulong3_sat(r);
+  ulong3 abs_x = abs(x);
+  ulong3 abs_y = abs(y);
+  half3 res = select(r, nextafter(r, sign(r) * (half3)-INFINITY), convert_short3(convert_short3(abs_y > abs_x) | convert_short3(isinf(r))));
+  return select(res, (half3)(0x1.ffcp+15), convert_short3(x >= (ulong)65505UL));
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rte(ulong3 x)
+{
+  return convert_half3(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtp(ulong3 x)
+{
+  half3 r = convert_half3(x);
+  ulong3 y = convert_ulong3_sat(r);
+  half3 res = select(r, nextafter(r, (half3)INFINITY), convert_short3(convert_short3(y < x) | convert_short3(r == (half3)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtn(ulong3 x)
+{
+  half3 r = convert_half3(x);
+  ulong3 y = convert_ulong3_sat(r);
+  half3 res = select(r, nextafter(r, (half3)-INFINITY), convert_short3(convert_short3(y > x) | convert_short3(r == (half3)INFINITY)));
+  return select(res, (half3)(0x1.ffcp+15), convert_short3(x >= (ulong)65505UL));
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtz(ulong4 x)
+{
+  half4 r = convert_half4(x);
+  ulong4 y = convert_ulong4_sat(r);
+  ulong4 abs_x = abs(x);
+  ulong4 abs_y = abs(y);
+  half4 res = select(r, nextafter(r, sign(r) * (half4)-INFINITY), convert_short4(convert_short4(abs_y > abs_x) | convert_short4(isinf(r))));
+  return select(res, (half4)(0x1.ffcp+15), convert_short4(x >= (ulong)65505UL));
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rte(ulong4 x)
+{
+  return convert_half4(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtp(ulong4 x)
+{
+  half4 r = convert_half4(x);
+  ulong4 y = convert_ulong4_sat(r);
+  half4 res = select(r, nextafter(r, (half4)INFINITY), convert_short4(convert_short4(y < x) | convert_short4(r == (half4)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtn(ulong4 x)
+{
+  half4 r = convert_half4(x);
+  ulong4 y = convert_ulong4_sat(r);
+  half4 res = select(r, nextafter(r, (half4)-INFINITY), convert_short4(convert_short4(y > x) | convert_short4(r == (half4)INFINITY)));
+  return select(res, (half4)(0x1.ffcp+15), convert_short4(x >= (ulong)65505UL));
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtz(ulong8 x)
+{
+  half8 r = convert_half8(x);
+  ulong8 y = convert_ulong8_sat(r);
+  ulong8 abs_x = abs(x);
+  ulong8 abs_y = abs(y);
+  half8 res = select(r, nextafter(r, sign(r) * (half8)-INFINITY), convert_short8(convert_short8(abs_y > abs_x) | convert_short8(isinf(r))));
+  return select(res, (half8)(0x1.ffcp+15), convert_short8(x >= (ulong)65505UL));
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rte(ulong8 x)
+{
+  return convert_half8(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtp(ulong8 x)
+{
+  half8 r = convert_half8(x);
+  ulong8 y = convert_ulong8_sat(r);
+  half8 res = select(r, nextafter(r, (half8)INFINITY), convert_short8(convert_short8(y < x) | convert_short8(r == (half8)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtn(ulong8 x)
+{
+  half8 r = convert_half8(x);
+  ulong8 y = convert_ulong8_sat(r);
+  half8 res = select(r, nextafter(r, (half8)-INFINITY), convert_short8(convert_short8(y > x) | convert_short8(r == (half8)INFINITY)));
+  return select(res, (half8)(0x1.ffcp+15), convert_short8(x >= (ulong)65505UL));
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtz(ulong16 x)
+{
+  half16 r = convert_half16(x);
+  ulong16 y = convert_ulong16_sat(r);
+  ulong16 abs_x = abs(x);
+  ulong16 abs_y = abs(y);
+  half16 res = select(r, nextafter(r, sign(r) * (half16)-INFINITY), convert_short16(convert_short16(abs_y > abs_x) | convert_short16(isinf(r))));
+  return select(res, (half16)(0x1.ffcp+15), convert_short16(x >= (ulong)65505UL));
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rte(ulong16 x)
+{
+  return convert_half16(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtp(ulong16 x)
+{
+  half16 r = convert_half16(x);
+  ulong16 y = convert_ulong16_sat(r);
+  half16 res = select(r, nextafter(r, (half16)INFINITY), convert_short16(convert_short16(y < x) | convert_short16(r == (half16)-INFINITY)));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtn(ulong16 x)
+{
+  half16 r = convert_half16(x);
+  ulong16 y = convert_ulong16_sat(r);
+  half16 res = select(r, nextafter(r, (half16)-INFINITY), convert_short16(convert_short16(y > x) | convert_short16(r == (half16)INFINITY)));
+  return select(res, (half16)(0x1.ffcp+15), convert_short16(x >= (ulong)65505UL));
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtz(half x)
+{
+  half r = convert_half(x);
+  half y = convert_half(r);
+  half abs_x = fabs(x);
+  half abs_y = fabs(y);
+  half res = select(r, nextafter(r, sign(r) * (half)-INFINITY), convert_short(convert_short(abs_y > abs_x) | convert_short(convert_short(isinf(r)) & ~convert_short(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rte(half x)
+{
+  return convert_half(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtp(half x)
+{
+  half r = convert_half(x);
+  half y = convert_half(r);
+  half res = select(r, nextafter(r, (half)INFINITY), convert_short(convert_short(y < x) | convert_short(convert_short(r == (half)-INFINITY) & ~convert_short(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtn(half x)
+{
+  half r = convert_half(x);
+  half y = convert_half(r);
+  half res = select(r, nextafter(r, (half)-INFINITY), convert_short(convert_short(y > x) | convert_short(convert_short(r == (half)INFINITY) & ~convert_short(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtz(half2 x)
+{
+  half2 r = convert_half2(x);
+  half2 y = convert_half2(r);
+  half2 abs_x = fabs(x);
+  half2 abs_y = fabs(y);
+  half2 res = select(r, nextafter(r, sign(r) * (half2)-INFINITY), convert_short2(convert_short2(abs_y > abs_x) | convert_short2(convert_short2(isinf(r)) & ~convert_short2(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rte(half2 x)
+{
+  return convert_half2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtp(half2 x)
+{
+  half2 r = convert_half2(x);
+  half2 y = convert_half2(r);
+  half2 res = select(r, nextafter(r, (half2)INFINITY), convert_short2(convert_short2(y < x) | convert_short2(convert_short2(r == (half2)-INFINITY) & ~convert_short2(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtn(half2 x)
+{
+  half2 r = convert_half2(x);
+  half2 y = convert_half2(r);
+  half2 res = select(r, nextafter(r, (half2)-INFINITY), convert_short2(convert_short2(y > x) | convert_short2(convert_short2(r == (half2)INFINITY) & ~convert_short2(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtz(half3 x)
+{
+  half3 r = convert_half3(x);
+  half3 y = convert_half3(r);
+  half3 abs_x = fabs(x);
+  half3 abs_y = fabs(y);
+  half3 res = select(r, nextafter(r, sign(r) * (half3)-INFINITY), convert_short3(convert_short3(abs_y > abs_x) | convert_short3(convert_short3(isinf(r)) & ~convert_short3(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rte(half3 x)
+{
+  return convert_half3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtp(half3 x)
+{
+  half3 r = convert_half3(x);
+  half3 y = convert_half3(r);
+  half3 res = select(r, nextafter(r, (half3)INFINITY), convert_short3(convert_short3(y < x) | convert_short3(convert_short3(r == (half3)-INFINITY) & ~convert_short3(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtn(half3 x)
+{
+  half3 r = convert_half3(x);
+  half3 y = convert_half3(r);
+  half3 res = select(r, nextafter(r, (half3)-INFINITY), convert_short3(convert_short3(y > x) | convert_short3(convert_short3(r == (half3)INFINITY) & ~convert_short3(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtz(half4 x)
+{
+  half4 r = convert_half4(x);
+  half4 y = convert_half4(r);
+  half4 abs_x = fabs(x);
+  half4 abs_y = fabs(y);
+  half4 res = select(r, nextafter(r, sign(r) * (half4)-INFINITY), convert_short4(convert_short4(abs_y > abs_x) | convert_short4(convert_short4(isinf(r)) & ~convert_short4(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rte(half4 x)
+{
+  return convert_half4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtp(half4 x)
+{
+  half4 r = convert_half4(x);
+  half4 y = convert_half4(r);
+  half4 res = select(r, nextafter(r, (half4)INFINITY), convert_short4(convert_short4(y < x) | convert_short4(convert_short4(r == (half4)-INFINITY) & ~convert_short4(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtn(half4 x)
+{
+  half4 r = convert_half4(x);
+  half4 y = convert_half4(r);
+  half4 res = select(r, nextafter(r, (half4)-INFINITY), convert_short4(convert_short4(y > x) | convert_short4(convert_short4(r == (half4)INFINITY) & ~convert_short4(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtz(half8 x)
+{
+  half8 r = convert_half8(x);
+  half8 y = convert_half8(r);
+  half8 abs_x = fabs(x);
+  half8 abs_y = fabs(y);
+  half8 res = select(r, nextafter(r, sign(r) * (half8)-INFINITY), convert_short8(convert_short8(abs_y > abs_x) | convert_short8(convert_short8(isinf(r)) & ~convert_short8(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rte(half8 x)
+{
+  return convert_half8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtp(half8 x)
+{
+  half8 r = convert_half8(x);
+  half8 y = convert_half8(r);
+  half8 res = select(r, nextafter(r, (half8)INFINITY), convert_short8(convert_short8(y < x) | convert_short8(convert_short8(r == (half8)-INFINITY) & ~convert_short8(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtn(half8 x)
+{
+  half8 r = convert_half8(x);
+  half8 y = convert_half8(r);
+  half8 res = select(r, nextafter(r, (half8)-INFINITY), convert_short8(convert_short8(y > x) | convert_short8(convert_short8(r == (half8)INFINITY) & ~convert_short8(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtz(half16 x)
+{
+  half16 r = convert_half16(x);
+  half16 y = convert_half16(r);
+  half16 abs_x = fabs(x);
+  half16 abs_y = fabs(y);
+  half16 res = select(r, nextafter(r, sign(r) * (half16)-INFINITY), convert_short16(convert_short16(abs_y > abs_x) | convert_short16(convert_short16(isinf(r)) & ~convert_short16(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rte(half16 x)
+{
+  return convert_half16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtp(half16 x)
+{
+  half16 r = convert_half16(x);
+  half16 y = convert_half16(r);
+  half16 res = select(r, nextafter(r, (half16)INFINITY), convert_short16(convert_short16(y < x) | convert_short16(convert_short16(r == (half16)-INFINITY) & ~convert_short16(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtn(half16 x)
+{
+  half16 r = convert_half16(x);
+  half16 y = convert_half16(r);
+  half16 res = select(r, nextafter(r, (half16)-INFINITY), convert_short16(convert_short16(y > x) | convert_short16(convert_short16(r == (half16)INFINITY) & ~convert_short16(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtz(float x)
+{
+  half r = convert_half(x);
+  float y = convert_float(r);
+  float abs_x = fabs(x);
+  float abs_y = fabs(y);
+  half res = select(r, nextafter(r, sign(r) * (half)-INFINITY), convert_short(convert_short(abs_y > abs_x) | convert_short(convert_short(isinf(r)) & ~convert_short(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rte(float x)
+{
+  return convert_half(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtp(float x)
+{
+  half r = convert_half(x);
+  float y = convert_float(r);
+  half res = select(r, nextafter(r, (half)INFINITY), convert_short(convert_short(y < x) | convert_short(convert_short(r == (half)-INFINITY) & ~convert_short(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtn(float x)
+{
+  half r = convert_half(x);
+  float y = convert_float(r);
+  half res = select(r, nextafter(r, (half)-INFINITY), convert_short(convert_short(y > x) | convert_short(convert_short(r == (half)INFINITY) & ~convert_short(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtz(float2 x)
+{
+  half2 r = convert_half2(x);
+  float2 y = convert_float2(r);
+  float2 abs_x = fabs(x);
+  float2 abs_y = fabs(y);
+  half2 res = select(r, nextafter(r, sign(r) * (half2)-INFINITY), convert_short2(convert_short2(abs_y > abs_x) | convert_short2(convert_short2(isinf(r)) & ~convert_short2(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rte(float2 x)
+{
+  return convert_half2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtp(float2 x)
+{
+  half2 r = convert_half2(x);
+  float2 y = convert_float2(r);
+  half2 res = select(r, nextafter(r, (half2)INFINITY), convert_short2(convert_short2(y < x) | convert_short2(convert_short2(r == (half2)-INFINITY) & ~convert_short2(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtn(float2 x)
+{
+  half2 r = convert_half2(x);
+  float2 y = convert_float2(r);
+  half2 res = select(r, nextafter(r, (half2)-INFINITY), convert_short2(convert_short2(y > x) | convert_short2(convert_short2(r == (half2)INFINITY) & ~convert_short2(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtz(float3 x)
+{
+  half3 r = convert_half3(x);
+  float3 y = convert_float3(r);
+  float3 abs_x = fabs(x);
+  float3 abs_y = fabs(y);
+  half3 res = select(r, nextafter(r, sign(r) * (half3)-INFINITY), convert_short3(convert_short3(abs_y > abs_x) | convert_short3(convert_short3(isinf(r)) & ~convert_short3(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rte(float3 x)
+{
+  return convert_half3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtp(float3 x)
+{
+  half3 r = convert_half3(x);
+  float3 y = convert_float3(r);
+  half3 res = select(r, nextafter(r, (half3)INFINITY), convert_short3(convert_short3(y < x) | convert_short3(convert_short3(r == (half3)-INFINITY) & ~convert_short3(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtn(float3 x)
+{
+  half3 r = convert_half3(x);
+  float3 y = convert_float3(r);
+  half3 res = select(r, nextafter(r, (half3)-INFINITY), convert_short3(convert_short3(y > x) | convert_short3(convert_short3(r == (half3)INFINITY) & ~convert_short3(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtz(float4 x)
+{
+  half4 r = convert_half4(x);
+  float4 y = convert_float4(r);
+  float4 abs_x = fabs(x);
+  float4 abs_y = fabs(y);
+  half4 res = select(r, nextafter(r, sign(r) * (half4)-INFINITY), convert_short4(convert_short4(abs_y > abs_x) | convert_short4(convert_short4(isinf(r)) & ~convert_short4(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rte(float4 x)
+{
+  return convert_half4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtp(float4 x)
+{
+  half4 r = convert_half4(x);
+  float4 y = convert_float4(r);
+  half4 res = select(r, nextafter(r, (half4)INFINITY), convert_short4(convert_short4(y < x) | convert_short4(convert_short4(r == (half4)-INFINITY) & ~convert_short4(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtn(float4 x)
+{
+  half4 r = convert_half4(x);
+  float4 y = convert_float4(r);
+  half4 res = select(r, nextafter(r, (half4)-INFINITY), convert_short4(convert_short4(y > x) | convert_short4(convert_short4(r == (half4)INFINITY) & ~convert_short4(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtz(float8 x)
+{
+  half8 r = convert_half8(x);
+  float8 y = convert_float8(r);
+  float8 abs_x = fabs(x);
+  float8 abs_y = fabs(y);
+  half8 res = select(r, nextafter(r, sign(r) * (half8)-INFINITY), convert_short8(convert_short8(abs_y > abs_x) | convert_short8(convert_short8(isinf(r)) & ~convert_short8(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rte(float8 x)
+{
+  return convert_half8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtp(float8 x)
+{
+  half8 r = convert_half8(x);
+  float8 y = convert_float8(r);
+  half8 res = select(r, nextafter(r, (half8)INFINITY), convert_short8(convert_short8(y < x) | convert_short8(convert_short8(r == (half8)-INFINITY) & ~convert_short8(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtn(float8 x)
+{
+  half8 r = convert_half8(x);
+  float8 y = convert_float8(r);
+  half8 res = select(r, nextafter(r, (half8)-INFINITY), convert_short8(convert_short8(y > x) | convert_short8(convert_short8(r == (half8)INFINITY) & ~convert_short8(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtz(float16 x)
+{
+  half16 r = convert_half16(x);
+  float16 y = convert_float16(r);
+  float16 abs_x = fabs(x);
+  float16 abs_y = fabs(y);
+  half16 res = select(r, nextafter(r, sign(r) * (half16)-INFINITY), convert_short16(convert_short16(abs_y > abs_x) | convert_short16(convert_short16(isinf(r)) & ~convert_short16(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rte(float16 x)
+{
+  return convert_half16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtp(float16 x)
+{
+  half16 r = convert_half16(x);
+  float16 y = convert_float16(r);
+  half16 res = select(r, nextafter(r, (half16)INFINITY), convert_short16(convert_short16(y < x) | convert_short16(convert_short16(r == (half16)-INFINITY) & ~convert_short16(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtn(float16 x)
+{
+  half16 r = convert_half16(x);
+  float16 y = convert_float16(r);
+  half16 res = select(r, nextafter(r, (half16)-INFINITY), convert_short16(convert_short16(y > x) | convert_short16(convert_short16(r == (half16)INFINITY) & ~convert_short16(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtz(double x)
+{
+  half r = convert_half(x);
+  double y = convert_double(r);
+  double abs_x = fabs(x);
+  double abs_y = fabs(y);
+  half res = select(r, nextafter(r, sign(r) * (half)-INFINITY), convert_short(convert_short(abs_y > abs_x) | convert_short(convert_short(isinf(r)) & ~convert_short(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rte(double x)
+{
+  return convert_half(x);
+}
+#endif
+
+#if defined(cl_khr_fp64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtp(double x)
+{
+  half r = convert_half(x);
+  double y = convert_double(r);
+  half res = select(r, nextafter(r, (half)INFINITY), convert_short(convert_short(y < x) | convert_short(convert_short(r == (half)-INFINITY) & ~convert_short(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half convert_half_rtn(double x)
+{
+  half r = convert_half(x);
+  double y = convert_double(r);
+  half res = select(r, nextafter(r, (half)-INFINITY), convert_short(convert_short(y > x) | convert_short(convert_short(r == (half)INFINITY) & ~convert_short(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtz(double2 x)
+{
+  half2 r = convert_half2(x);
+  double2 y = convert_double2(r);
+  double2 abs_x = fabs(x);
+  double2 abs_y = fabs(y);
+  half2 res = select(r, nextafter(r, sign(r) * (half2)-INFINITY), convert_short2(convert_short2(abs_y > abs_x) | convert_short2(convert_short2(isinf(r)) & ~convert_short2(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rte(double2 x)
+{
+  return convert_half2(x);
+}
+#endif
+
+#if defined(cl_khr_fp64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtp(double2 x)
+{
+  half2 r = convert_half2(x);
+  double2 y = convert_double2(r);
+  half2 res = select(r, nextafter(r, (half2)INFINITY), convert_short2(convert_short2(y < x) | convert_short2(convert_short2(r == (half2)-INFINITY) & ~convert_short2(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half2 convert_half2_rtn(double2 x)
+{
+  half2 r = convert_half2(x);
+  double2 y = convert_double2(r);
+  half2 res = select(r, nextafter(r, (half2)-INFINITY), convert_short2(convert_short2(y > x) | convert_short2(convert_short2(r == (half2)INFINITY) & ~convert_short2(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtz(double3 x)
+{
+  half3 r = convert_half3(x);
+  double3 y = convert_double3(r);
+  double3 abs_x = fabs(x);
+  double3 abs_y = fabs(y);
+  half3 res = select(r, nextafter(r, sign(r) * (half3)-INFINITY), convert_short3(convert_short3(abs_y > abs_x) | convert_short3(convert_short3(isinf(r)) & ~convert_short3(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rte(double3 x)
+{
+  return convert_half3(x);
+}
+#endif
+
+#if defined(cl_khr_fp64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtp(double3 x)
+{
+  half3 r = convert_half3(x);
+  double3 y = convert_double3(r);
+  half3 res = select(r, nextafter(r, (half3)INFINITY), convert_short3(convert_short3(y < x) | convert_short3(convert_short3(r == (half3)-INFINITY) & ~convert_short3(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half3 convert_half3_rtn(double3 x)
+{
+  half3 r = convert_half3(x);
+  double3 y = convert_double3(r);
+  half3 res = select(r, nextafter(r, (half3)-INFINITY), convert_short3(convert_short3(y > x) | convert_short3(convert_short3(r == (half3)INFINITY) & ~convert_short3(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtz(double4 x)
+{
+  half4 r = convert_half4(x);
+  double4 y = convert_double4(r);
+  double4 abs_x = fabs(x);
+  double4 abs_y = fabs(y);
+  half4 res = select(r, nextafter(r, sign(r) * (half4)-INFINITY), convert_short4(convert_short4(abs_y > abs_x) | convert_short4(convert_short4(isinf(r)) & ~convert_short4(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rte(double4 x)
+{
+  return convert_half4(x);
+}
+#endif
+
+#if defined(cl_khr_fp64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtp(double4 x)
+{
+  half4 r = convert_half4(x);
+  double4 y = convert_double4(r);
+  half4 res = select(r, nextafter(r, (half4)INFINITY), convert_short4(convert_short4(y < x) | convert_short4(convert_short4(r == (half4)-INFINITY) & ~convert_short4(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half4 convert_half4_rtn(double4 x)
+{
+  half4 r = convert_half4(x);
+  double4 y = convert_double4(r);
+  half4 res = select(r, nextafter(r, (half4)-INFINITY), convert_short4(convert_short4(y > x) | convert_short4(convert_short4(r == (half4)INFINITY) & ~convert_short4(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtz(double8 x)
+{
+  half8 r = convert_half8(x);
+  double8 y = convert_double8(r);
+  double8 abs_x = fabs(x);
+  double8 abs_y = fabs(y);
+  half8 res = select(r, nextafter(r, sign(r) * (half8)-INFINITY), convert_short8(convert_short8(abs_y > abs_x) | convert_short8(convert_short8(isinf(r)) & ~convert_short8(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rte(double8 x)
+{
+  return convert_half8(x);
+}
+#endif
+
+#if defined(cl_khr_fp64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtp(double8 x)
+{
+  half8 r = convert_half8(x);
+  double8 y = convert_double8(r);
+  half8 res = select(r, nextafter(r, (half8)INFINITY), convert_short8(convert_short8(y < x) | convert_short8(convert_short8(r == (half8)-INFINITY) & ~convert_short8(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half8 convert_half8_rtn(double8 x)
+{
+  half8 r = convert_half8(x);
+  double8 y = convert_double8(r);
+  half8 res = select(r, nextafter(r, (half8)-INFINITY), convert_short8(convert_short8(y > x) | convert_short8(convert_short8(r == (half8)INFINITY) & ~convert_short8(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtz(double16 x)
+{
+  half16 r = convert_half16(x);
+  double16 y = convert_double16(r);
+  double16 abs_x = fabs(x);
+  double16 abs_y = fabs(y);
+  half16 res = select(r, nextafter(r, sign(r) * (half16)-INFINITY), convert_short16(convert_short16(abs_y > abs_x) | convert_short16(convert_short16(isinf(r)) & ~convert_short16(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rte(double16 x)
+{
+  return convert_half16(x);
+}
+#endif
+
+#if defined(cl_khr_fp64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtp(double16 x)
+{
+  half16 r = convert_half16(x);
+  double16 y = convert_double16(r);
+  half16 res = select(r, nextafter(r, (half16)INFINITY), convert_short16(convert_short16(y < x) | convert_short16(convert_short16(r == (half16)-INFINITY) & ~convert_short16(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+half16 convert_half16_rtn(double16 x)
+{
+  half16 r = convert_half16(x);
+  double16 y = convert_double16(r);
+  half16 res = select(r, nextafter(r, (half16)-INFINITY), convert_short16(convert_short16(y > x) | convert_short16(convert_short16(r == (half16)INFINITY) & ~convert_short16(isinf(x)))));
+  return res;
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char convert_char_rtz(half x)
+{
+  return convert_char(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char convert_char_sat_rtz(half x)
+{
+  return convert_char_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char convert_char_rte(half x)
+{
+  x = rint(x);
+  return convert_char(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char convert_char_sat_rte(half x)
+{
+  x = rint(x);
+  return convert_char_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char convert_char_rtp(half x)
+{
+  x = ceil(x);
+  return convert_char(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char convert_char_sat_rtp(half x)
+{
+  x = ceil(x);
+  return convert_char_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char convert_char_rtn(half x)
+{
+  x = floor(x);
+  return convert_char(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char convert_char_sat_rtn(half x)
+{
+  x = floor(x);
+  return convert_char_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char2 convert_char2_rtz(half2 x)
+{
+  return convert_char2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char2 convert_char2_sat_rtz(half2 x)
+{
+  return convert_char2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char2 convert_char2_rte(half2 x)
+{
+  x = rint(x);
+  return convert_char2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char2 convert_char2_sat_rte(half2 x)
+{
+  x = rint(x);
+  return convert_char2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char2 convert_char2_rtp(half2 x)
+{
+  x = ceil(x);
+  return convert_char2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char2 convert_char2_sat_rtp(half2 x)
+{
+  x = ceil(x);
+  return convert_char2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char2 convert_char2_rtn(half2 x)
+{
+  x = floor(x);
+  return convert_char2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char2 convert_char2_sat_rtn(half2 x)
+{
+  x = floor(x);
+  return convert_char2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char3 convert_char3_rtz(half3 x)
+{
+  return convert_char3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char3 convert_char3_sat_rtz(half3 x)
+{
+  return convert_char3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char3 convert_char3_rte(half3 x)
+{
+  x = rint(x);
+  return convert_char3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char3 convert_char3_sat_rte(half3 x)
+{
+  x = rint(x);
+  return convert_char3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char3 convert_char3_rtp(half3 x)
+{
+  x = ceil(x);
+  return convert_char3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char3 convert_char3_sat_rtp(half3 x)
+{
+  x = ceil(x);
+  return convert_char3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char3 convert_char3_rtn(half3 x)
+{
+  x = floor(x);
+  return convert_char3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char3 convert_char3_sat_rtn(half3 x)
+{
+  x = floor(x);
+  return convert_char3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char4 convert_char4_rtz(half4 x)
+{
+  return convert_char4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char4 convert_char4_sat_rtz(half4 x)
+{
+  return convert_char4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char4 convert_char4_rte(half4 x)
+{
+  x = rint(x);
+  return convert_char4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char4 convert_char4_sat_rte(half4 x)
+{
+  x = rint(x);
+  return convert_char4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char4 convert_char4_rtp(half4 x)
+{
+  x = ceil(x);
+  return convert_char4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char4 convert_char4_sat_rtp(half4 x)
+{
+  x = ceil(x);
+  return convert_char4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char4 convert_char4_rtn(half4 x)
+{
+  x = floor(x);
+  return convert_char4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char4 convert_char4_sat_rtn(half4 x)
+{
+  x = floor(x);
+  return convert_char4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char8 convert_char8_rtz(half8 x)
+{
+  return convert_char8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char8 convert_char8_sat_rtz(half8 x)
+{
+  return convert_char8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char8 convert_char8_rte(half8 x)
+{
+  x = rint(x);
+  return convert_char8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char8 convert_char8_sat_rte(half8 x)
+{
+  x = rint(x);
+  return convert_char8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char8 convert_char8_rtp(half8 x)
+{
+  x = ceil(x);
+  return convert_char8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char8 convert_char8_sat_rtp(half8 x)
+{
+  x = ceil(x);
+  return convert_char8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char8 convert_char8_rtn(half8 x)
+{
+  x = floor(x);
+  return convert_char8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char8 convert_char8_sat_rtn(half8 x)
+{
+  x = floor(x);
+  return convert_char8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char16 convert_char16_rtz(half16 x)
+{
+  return convert_char16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char16 convert_char16_sat_rtz(half16 x)
+{
+  return convert_char16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char16 convert_char16_rte(half16 x)
+{
+  x = rint(x);
+  return convert_char16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char16 convert_char16_sat_rte(half16 x)
+{
+  x = rint(x);
+  return convert_char16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char16 convert_char16_rtp(half16 x)
+{
+  x = ceil(x);
+  return convert_char16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char16 convert_char16_sat_rtp(half16 x)
+{
+  x = ceil(x);
+  return convert_char16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char16 convert_char16_rtn(half16 x)
+{
+  x = floor(x);
+  return convert_char16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+char16 convert_char16_sat_rtn(half16 x)
+{
+  x = floor(x);
+  return convert_char16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar convert_uchar_rtz(half x)
+{
+  return convert_uchar(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar convert_uchar_sat_rtz(half x)
+{
+  return convert_uchar_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar convert_uchar_rte(half x)
+{
+  x = rint(x);
+  return convert_uchar(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar convert_uchar_sat_rte(half x)
+{
+  x = rint(x);
+  return convert_uchar_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar convert_uchar_rtp(half x)
+{
+  x = ceil(x);
+  return convert_uchar(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar convert_uchar_sat_rtp(half x)
+{
+  x = ceil(x);
+  return convert_uchar_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar convert_uchar_rtn(half x)
+{
+  x = floor(x);
+  return convert_uchar(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar convert_uchar_sat_rtn(half x)
+{
+  x = floor(x);
+  return convert_uchar_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar2 convert_uchar2_rtz(half2 x)
+{
+  return convert_uchar2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar2 convert_uchar2_sat_rtz(half2 x)
+{
+  return convert_uchar2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar2 convert_uchar2_rte(half2 x)
+{
+  x = rint(x);
+  return convert_uchar2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar2 convert_uchar2_sat_rte(half2 x)
+{
+  x = rint(x);
+  return convert_uchar2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar2 convert_uchar2_rtp(half2 x)
+{
+  x = ceil(x);
+  return convert_uchar2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar2 convert_uchar2_sat_rtp(half2 x)
+{
+  x = ceil(x);
+  return convert_uchar2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar2 convert_uchar2_rtn(half2 x)
+{
+  x = floor(x);
+  return convert_uchar2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar2 convert_uchar2_sat_rtn(half2 x)
+{
+  x = floor(x);
+  return convert_uchar2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar3 convert_uchar3_rtz(half3 x)
+{
+  return convert_uchar3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar3 convert_uchar3_sat_rtz(half3 x)
+{
+  return convert_uchar3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar3 convert_uchar3_rte(half3 x)
+{
+  x = rint(x);
+  return convert_uchar3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar3 convert_uchar3_sat_rte(half3 x)
+{
+  x = rint(x);
+  return convert_uchar3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar3 convert_uchar3_rtp(half3 x)
+{
+  x = ceil(x);
+  return convert_uchar3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar3 convert_uchar3_sat_rtp(half3 x)
+{
+  x = ceil(x);
+  return convert_uchar3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar3 convert_uchar3_rtn(half3 x)
+{
+  x = floor(x);
+  return convert_uchar3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar3 convert_uchar3_sat_rtn(half3 x)
+{
+  x = floor(x);
+  return convert_uchar3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar4 convert_uchar4_rtz(half4 x)
+{
+  return convert_uchar4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar4 convert_uchar4_sat_rtz(half4 x)
+{
+  return convert_uchar4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar4 convert_uchar4_rte(half4 x)
+{
+  x = rint(x);
+  return convert_uchar4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar4 convert_uchar4_sat_rte(half4 x)
+{
+  x = rint(x);
+  return convert_uchar4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar4 convert_uchar4_rtp(half4 x)
+{
+  x = ceil(x);
+  return convert_uchar4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar4 convert_uchar4_sat_rtp(half4 x)
+{
+  x = ceil(x);
+  return convert_uchar4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar4 convert_uchar4_rtn(half4 x)
+{
+  x = floor(x);
+  return convert_uchar4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar4 convert_uchar4_sat_rtn(half4 x)
+{
+  x = floor(x);
+  return convert_uchar4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar8 convert_uchar8_rtz(half8 x)
+{
+  return convert_uchar8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar8 convert_uchar8_sat_rtz(half8 x)
+{
+  return convert_uchar8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar8 convert_uchar8_rte(half8 x)
+{
+  x = rint(x);
+  return convert_uchar8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar8 convert_uchar8_sat_rte(half8 x)
+{
+  x = rint(x);
+  return convert_uchar8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar8 convert_uchar8_rtp(half8 x)
+{
+  x = ceil(x);
+  return convert_uchar8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar8 convert_uchar8_sat_rtp(half8 x)
+{
+  x = ceil(x);
+  return convert_uchar8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar8 convert_uchar8_rtn(half8 x)
+{
+  x = floor(x);
+  return convert_uchar8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar8 convert_uchar8_sat_rtn(half8 x)
+{
+  x = floor(x);
+  return convert_uchar8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar16 convert_uchar16_rtz(half16 x)
+{
+  return convert_uchar16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar16 convert_uchar16_sat_rtz(half16 x)
+{
+  return convert_uchar16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar16 convert_uchar16_rte(half16 x)
+{
+  x = rint(x);
+  return convert_uchar16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar16 convert_uchar16_sat_rte(half16 x)
+{
+  x = rint(x);
+  return convert_uchar16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar16 convert_uchar16_rtp(half16 x)
+{
+  x = ceil(x);
+  return convert_uchar16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar16 convert_uchar16_sat_rtp(half16 x)
+{
+  x = ceil(x);
+  return convert_uchar16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar16 convert_uchar16_rtn(half16 x)
+{
+  x = floor(x);
+  return convert_uchar16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uchar16 convert_uchar16_sat_rtn(half16 x)
+{
+  x = floor(x);
+  return convert_uchar16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short convert_short_rtz(half x)
+{
+  return convert_short(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short convert_short_sat_rtz(half x)
+{
+  return convert_short_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short convert_short_rte(half x)
+{
+  x = rint(x);
+  return convert_short(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short convert_short_sat_rte(half x)
+{
+  x = rint(x);
+  return convert_short_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short convert_short_rtp(half x)
+{
+  x = ceil(x);
+  return convert_short(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short convert_short_sat_rtp(half x)
+{
+  x = ceil(x);
+  return convert_short_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short convert_short_rtn(half x)
+{
+  x = floor(x);
+  return convert_short(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short convert_short_sat_rtn(half x)
+{
+  x = floor(x);
+  return convert_short_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short2 convert_short2_rtz(half2 x)
+{
+  return convert_short2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short2 convert_short2_sat_rtz(half2 x)
+{
+  return convert_short2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short2 convert_short2_rte(half2 x)
+{
+  x = rint(x);
+  return convert_short2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short2 convert_short2_sat_rte(half2 x)
+{
+  x = rint(x);
+  return convert_short2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short2 convert_short2_rtp(half2 x)
+{
+  x = ceil(x);
+  return convert_short2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short2 convert_short2_sat_rtp(half2 x)
+{
+  x = ceil(x);
+  return convert_short2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short2 convert_short2_rtn(half2 x)
+{
+  x = floor(x);
+  return convert_short2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short2 convert_short2_sat_rtn(half2 x)
+{
+  x = floor(x);
+  return convert_short2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short3 convert_short3_rtz(half3 x)
+{
+  return convert_short3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short3 convert_short3_sat_rtz(half3 x)
+{
+  return convert_short3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short3 convert_short3_rte(half3 x)
+{
+  x = rint(x);
+  return convert_short3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short3 convert_short3_sat_rte(half3 x)
+{
+  x = rint(x);
+  return convert_short3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short3 convert_short3_rtp(half3 x)
+{
+  x = ceil(x);
+  return convert_short3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short3 convert_short3_sat_rtp(half3 x)
+{
+  x = ceil(x);
+  return convert_short3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short3 convert_short3_rtn(half3 x)
+{
+  x = floor(x);
+  return convert_short3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short3 convert_short3_sat_rtn(half3 x)
+{
+  x = floor(x);
+  return convert_short3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short4 convert_short4_rtz(half4 x)
+{
+  return convert_short4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short4 convert_short4_sat_rtz(half4 x)
+{
+  return convert_short4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short4 convert_short4_rte(half4 x)
+{
+  x = rint(x);
+  return convert_short4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short4 convert_short4_sat_rte(half4 x)
+{
+  x = rint(x);
+  return convert_short4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short4 convert_short4_rtp(half4 x)
+{
+  x = ceil(x);
+  return convert_short4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short4 convert_short4_sat_rtp(half4 x)
+{
+  x = ceil(x);
+  return convert_short4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short4 convert_short4_rtn(half4 x)
+{
+  x = floor(x);
+  return convert_short4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short4 convert_short4_sat_rtn(half4 x)
+{
+  x = floor(x);
+  return convert_short4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short8 convert_short8_rtz(half8 x)
+{
+  return convert_short8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short8 convert_short8_sat_rtz(half8 x)
+{
+  return convert_short8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short8 convert_short8_rte(half8 x)
+{
+  x = rint(x);
+  return convert_short8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short8 convert_short8_sat_rte(half8 x)
+{
+  x = rint(x);
+  return convert_short8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short8 convert_short8_rtp(half8 x)
+{
+  x = ceil(x);
+  return convert_short8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short8 convert_short8_sat_rtp(half8 x)
+{
+  x = ceil(x);
+  return convert_short8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short8 convert_short8_rtn(half8 x)
+{
+  x = floor(x);
+  return convert_short8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short8 convert_short8_sat_rtn(half8 x)
+{
+  x = floor(x);
+  return convert_short8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short16 convert_short16_rtz(half16 x)
+{
+  return convert_short16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short16 convert_short16_sat_rtz(half16 x)
+{
+  return convert_short16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short16 convert_short16_rte(half16 x)
+{
+  x = rint(x);
+  return convert_short16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short16 convert_short16_sat_rte(half16 x)
+{
+  x = rint(x);
+  return convert_short16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short16 convert_short16_rtp(half16 x)
+{
+  x = ceil(x);
+  return convert_short16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short16 convert_short16_sat_rtp(half16 x)
+{
+  x = ceil(x);
+  return convert_short16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short16 convert_short16_rtn(half16 x)
+{
+  x = floor(x);
+  return convert_short16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+short16 convert_short16_sat_rtn(half16 x)
+{
+  x = floor(x);
+  return convert_short16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort convert_ushort_rtz(half x)
+{
+  return convert_ushort(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort convert_ushort_sat_rtz(half x)
+{
+  return convert_ushort_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort convert_ushort_rte(half x)
+{
+  x = rint(x);
+  return convert_ushort(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort convert_ushort_sat_rte(half x)
+{
+  x = rint(x);
+  return convert_ushort_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort convert_ushort_rtp(half x)
+{
+  x = ceil(x);
+  return convert_ushort(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort convert_ushort_sat_rtp(half x)
+{
+  x = ceil(x);
+  return convert_ushort_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort convert_ushort_rtn(half x)
+{
+  x = floor(x);
+  return convert_ushort(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort convert_ushort_sat_rtn(half x)
+{
+  x = floor(x);
+  return convert_ushort_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort2 convert_ushort2_rtz(half2 x)
+{
+  return convert_ushort2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort2 convert_ushort2_sat_rtz(half2 x)
+{
+  return convert_ushort2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort2 convert_ushort2_rte(half2 x)
+{
+  x = rint(x);
+  return convert_ushort2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort2 convert_ushort2_sat_rte(half2 x)
+{
+  x = rint(x);
+  return convert_ushort2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort2 convert_ushort2_rtp(half2 x)
+{
+  x = ceil(x);
+  return convert_ushort2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort2 convert_ushort2_sat_rtp(half2 x)
+{
+  x = ceil(x);
+  return convert_ushort2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort2 convert_ushort2_rtn(half2 x)
+{
+  x = floor(x);
+  return convert_ushort2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort2 convert_ushort2_sat_rtn(half2 x)
+{
+  x = floor(x);
+  return convert_ushort2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort3 convert_ushort3_rtz(half3 x)
+{
+  return convert_ushort3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort3 convert_ushort3_sat_rtz(half3 x)
+{
+  return convert_ushort3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort3 convert_ushort3_rte(half3 x)
+{
+  x = rint(x);
+  return convert_ushort3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort3 convert_ushort3_sat_rte(half3 x)
+{
+  x = rint(x);
+  return convert_ushort3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort3 convert_ushort3_rtp(half3 x)
+{
+  x = ceil(x);
+  return convert_ushort3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort3 convert_ushort3_sat_rtp(half3 x)
+{
+  x = ceil(x);
+  return convert_ushort3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort3 convert_ushort3_rtn(half3 x)
+{
+  x = floor(x);
+  return convert_ushort3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort3 convert_ushort3_sat_rtn(half3 x)
+{
+  x = floor(x);
+  return convert_ushort3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort4 convert_ushort4_rtz(half4 x)
+{
+  return convert_ushort4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort4 convert_ushort4_sat_rtz(half4 x)
+{
+  return convert_ushort4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort4 convert_ushort4_rte(half4 x)
+{
+  x = rint(x);
+  return convert_ushort4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort4 convert_ushort4_sat_rte(half4 x)
+{
+  x = rint(x);
+  return convert_ushort4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort4 convert_ushort4_rtp(half4 x)
+{
+  x = ceil(x);
+  return convert_ushort4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort4 convert_ushort4_sat_rtp(half4 x)
+{
+  x = ceil(x);
+  return convert_ushort4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort4 convert_ushort4_rtn(half4 x)
+{
+  x = floor(x);
+  return convert_ushort4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort4 convert_ushort4_sat_rtn(half4 x)
+{
+  x = floor(x);
+  return convert_ushort4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort8 convert_ushort8_rtz(half8 x)
+{
+  return convert_ushort8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort8 convert_ushort8_sat_rtz(half8 x)
+{
+  return convert_ushort8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort8 convert_ushort8_rte(half8 x)
+{
+  x = rint(x);
+  return convert_ushort8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort8 convert_ushort8_sat_rte(half8 x)
+{
+  x = rint(x);
+  return convert_ushort8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort8 convert_ushort8_rtp(half8 x)
+{
+  x = ceil(x);
+  return convert_ushort8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort8 convert_ushort8_sat_rtp(half8 x)
+{
+  x = ceil(x);
+  return convert_ushort8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort8 convert_ushort8_rtn(half8 x)
+{
+  x = floor(x);
+  return convert_ushort8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort8 convert_ushort8_sat_rtn(half8 x)
+{
+  x = floor(x);
+  return convert_ushort8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort16 convert_ushort16_rtz(half16 x)
+{
+  return convert_ushort16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort16 convert_ushort16_sat_rtz(half16 x)
+{
+  return convert_ushort16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort16 convert_ushort16_rte(half16 x)
+{
+  x = rint(x);
+  return convert_ushort16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort16 convert_ushort16_sat_rte(half16 x)
+{
+  x = rint(x);
+  return convert_ushort16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort16 convert_ushort16_rtp(half16 x)
+{
+  x = ceil(x);
+  return convert_ushort16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort16 convert_ushort16_sat_rtp(half16 x)
+{
+  x = ceil(x);
+  return convert_ushort16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort16 convert_ushort16_rtn(half16 x)
+{
+  x = floor(x);
+  return convert_ushort16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ushort16 convert_ushort16_sat_rtn(half16 x)
+{
+  x = floor(x);
+  return convert_ushort16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int convert_int_rtz(half x)
+{
+  return convert_int(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int convert_int_sat_rtz(half x)
+{
+  return convert_int_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int convert_int_rte(half x)
+{
+  x = rint(x);
+  return convert_int(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int convert_int_sat_rte(half x)
+{
+  x = rint(x);
+  return convert_int_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int convert_int_rtp(half x)
+{
+  x = ceil(x);
+  return convert_int(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int convert_int_sat_rtp(half x)
+{
+  x = ceil(x);
+  return convert_int_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int convert_int_rtn(half x)
+{
+  x = floor(x);
+  return convert_int(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int convert_int_sat_rtn(half x)
+{
+  x = floor(x);
+  return convert_int_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int2 convert_int2_rtz(half2 x)
+{
+  return convert_int2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int2 convert_int2_sat_rtz(half2 x)
+{
+  return convert_int2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int2 convert_int2_rte(half2 x)
+{
+  x = rint(x);
+  return convert_int2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int2 convert_int2_sat_rte(half2 x)
+{
+  x = rint(x);
+  return convert_int2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int2 convert_int2_rtp(half2 x)
+{
+  x = ceil(x);
+  return convert_int2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int2 convert_int2_sat_rtp(half2 x)
+{
+  x = ceil(x);
+  return convert_int2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int2 convert_int2_rtn(half2 x)
+{
+  x = floor(x);
+  return convert_int2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int2 convert_int2_sat_rtn(half2 x)
+{
+  x = floor(x);
+  return convert_int2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int3 convert_int3_rtz(half3 x)
+{
+  return convert_int3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int3 convert_int3_sat_rtz(half3 x)
+{
+  return convert_int3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int3 convert_int3_rte(half3 x)
+{
+  x = rint(x);
+  return convert_int3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int3 convert_int3_sat_rte(half3 x)
+{
+  x = rint(x);
+  return convert_int3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int3 convert_int3_rtp(half3 x)
+{
+  x = ceil(x);
+  return convert_int3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int3 convert_int3_sat_rtp(half3 x)
+{
+  x = ceil(x);
+  return convert_int3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int3 convert_int3_rtn(half3 x)
+{
+  x = floor(x);
+  return convert_int3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int3 convert_int3_sat_rtn(half3 x)
+{
+  x = floor(x);
+  return convert_int3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int4 convert_int4_rtz(half4 x)
+{
+  return convert_int4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int4 convert_int4_sat_rtz(half4 x)
+{
+  return convert_int4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int4 convert_int4_rte(half4 x)
+{
+  x = rint(x);
+  return convert_int4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int4 convert_int4_sat_rte(half4 x)
+{
+  x = rint(x);
+  return convert_int4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int4 convert_int4_rtp(half4 x)
+{
+  x = ceil(x);
+  return convert_int4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int4 convert_int4_sat_rtp(half4 x)
+{
+  x = ceil(x);
+  return convert_int4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int4 convert_int4_rtn(half4 x)
+{
+  x = floor(x);
+  return convert_int4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int4 convert_int4_sat_rtn(half4 x)
+{
+  x = floor(x);
+  return convert_int4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int8 convert_int8_rtz(half8 x)
+{
+  return convert_int8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int8 convert_int8_sat_rtz(half8 x)
+{
+  return convert_int8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int8 convert_int8_rte(half8 x)
+{
+  x = rint(x);
+  return convert_int8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int8 convert_int8_sat_rte(half8 x)
+{
+  x = rint(x);
+  return convert_int8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int8 convert_int8_rtp(half8 x)
+{
+  x = ceil(x);
+  return convert_int8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int8 convert_int8_sat_rtp(half8 x)
+{
+  x = ceil(x);
+  return convert_int8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int8 convert_int8_rtn(half8 x)
+{
+  x = floor(x);
+  return convert_int8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int8 convert_int8_sat_rtn(half8 x)
+{
+  x = floor(x);
+  return convert_int8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int16 convert_int16_rtz(half16 x)
+{
+  return convert_int16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int16 convert_int16_sat_rtz(half16 x)
+{
+  return convert_int16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int16 convert_int16_rte(half16 x)
+{
+  x = rint(x);
+  return convert_int16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int16 convert_int16_sat_rte(half16 x)
+{
+  x = rint(x);
+  return convert_int16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int16 convert_int16_rtp(half16 x)
+{
+  x = ceil(x);
+  return convert_int16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int16 convert_int16_sat_rtp(half16 x)
+{
+  x = ceil(x);
+  return convert_int16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int16 convert_int16_rtn(half16 x)
+{
+  x = floor(x);
+  return convert_int16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+int16 convert_int16_sat_rtn(half16 x)
+{
+  x = floor(x);
+  return convert_int16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint convert_uint_rtz(half x)
+{
+  return convert_uint(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint convert_uint_sat_rtz(half x)
+{
+  return convert_uint_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint convert_uint_rte(half x)
+{
+  x = rint(x);
+  return convert_uint(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint convert_uint_sat_rte(half x)
+{
+  x = rint(x);
+  return convert_uint_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint convert_uint_rtp(half x)
+{
+  x = ceil(x);
+  return convert_uint(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint convert_uint_sat_rtp(half x)
+{
+  x = ceil(x);
+  return convert_uint_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint convert_uint_rtn(half x)
+{
+  x = floor(x);
+  return convert_uint(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint convert_uint_sat_rtn(half x)
+{
+  x = floor(x);
+  return convert_uint_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint2 convert_uint2_rtz(half2 x)
+{
+  return convert_uint2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint2 convert_uint2_sat_rtz(half2 x)
+{
+  return convert_uint2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint2 convert_uint2_rte(half2 x)
+{
+  x = rint(x);
+  return convert_uint2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint2 convert_uint2_sat_rte(half2 x)
+{
+  x = rint(x);
+  return convert_uint2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint2 convert_uint2_rtp(half2 x)
+{
+  x = ceil(x);
+  return convert_uint2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint2 convert_uint2_sat_rtp(half2 x)
+{
+  x = ceil(x);
+  return convert_uint2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint2 convert_uint2_rtn(half2 x)
+{
+  x = floor(x);
+  return convert_uint2(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint2 convert_uint2_sat_rtn(half2 x)
+{
+  x = floor(x);
+  return convert_uint2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint3 convert_uint3_rtz(half3 x)
+{
+  return convert_uint3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint3 convert_uint3_sat_rtz(half3 x)
+{
+  return convert_uint3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint3 convert_uint3_rte(half3 x)
+{
+  x = rint(x);
+  return convert_uint3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint3 convert_uint3_sat_rte(half3 x)
+{
+  x = rint(x);
+  return convert_uint3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint3 convert_uint3_rtp(half3 x)
+{
+  x = ceil(x);
+  return convert_uint3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint3 convert_uint3_sat_rtp(half3 x)
+{
+  x = ceil(x);
+  return convert_uint3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint3 convert_uint3_rtn(half3 x)
+{
+  x = floor(x);
+  return convert_uint3(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint3 convert_uint3_sat_rtn(half3 x)
+{
+  x = floor(x);
+  return convert_uint3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint4 convert_uint4_rtz(half4 x)
+{
+  return convert_uint4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint4 convert_uint4_sat_rtz(half4 x)
+{
+  return convert_uint4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint4 convert_uint4_rte(half4 x)
+{
+  x = rint(x);
+  return convert_uint4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint4 convert_uint4_sat_rte(half4 x)
+{
+  x = rint(x);
+  return convert_uint4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint4 convert_uint4_rtp(half4 x)
+{
+  x = ceil(x);
+  return convert_uint4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint4 convert_uint4_sat_rtp(half4 x)
+{
+  x = ceil(x);
+  return convert_uint4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint4 convert_uint4_rtn(half4 x)
+{
+  x = floor(x);
+  return convert_uint4(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint4 convert_uint4_sat_rtn(half4 x)
+{
+  x = floor(x);
+  return convert_uint4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint8 convert_uint8_rtz(half8 x)
+{
+  return convert_uint8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint8 convert_uint8_sat_rtz(half8 x)
+{
+  return convert_uint8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint8 convert_uint8_rte(half8 x)
+{
+  x = rint(x);
+  return convert_uint8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint8 convert_uint8_sat_rte(half8 x)
+{
+  x = rint(x);
+  return convert_uint8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint8 convert_uint8_rtp(half8 x)
+{
+  x = ceil(x);
+  return convert_uint8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint8 convert_uint8_sat_rtp(half8 x)
+{
+  x = ceil(x);
+  return convert_uint8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint8 convert_uint8_rtn(half8 x)
+{
+  x = floor(x);
+  return convert_uint8(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint8 convert_uint8_sat_rtn(half8 x)
+{
+  x = floor(x);
+  return convert_uint8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint16 convert_uint16_rtz(half16 x)
+{
+  return convert_uint16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint16 convert_uint16_sat_rtz(half16 x)
+{
+  return convert_uint16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint16 convert_uint16_rte(half16 x)
+{
+  x = rint(x);
+  return convert_uint16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint16 convert_uint16_sat_rte(half16 x)
+{
+  x = rint(x);
+  return convert_uint16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint16 convert_uint16_rtp(half16 x)
+{
+  x = ceil(x);
+  return convert_uint16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint16 convert_uint16_sat_rtp(half16 x)
+{
+  x = ceil(x);
+  return convert_uint16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint16 convert_uint16_rtn(half16 x)
+{
+  x = floor(x);
+  return convert_uint16(x);
+}
+#endif
+
+#if defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+uint16 convert_uint16_sat_rtn(half16 x)
+{
+  x = floor(x);
+  return convert_uint16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long convert_long_rtz(half x)
+{
+  return convert_long(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long convert_long_sat_rtz(half x)
+{
+  return convert_long_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long convert_long_rte(half x)
+{
+  x = rint(x);
+  return convert_long(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long convert_long_sat_rte(half x)
+{
+  x = rint(x);
+  return convert_long_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long convert_long_rtp(half x)
+{
+  x = ceil(x);
+  return convert_long(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long convert_long_sat_rtp(half x)
+{
+  x = ceil(x);
+  return convert_long_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long convert_long_rtn(half x)
+{
+  x = floor(x);
+  return convert_long(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long convert_long_sat_rtn(half x)
+{
+  x = floor(x);
+  return convert_long_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long2 convert_long2_rtz(half2 x)
+{
+  return convert_long2(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long2 convert_long2_sat_rtz(half2 x)
+{
+  return convert_long2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long2 convert_long2_rte(half2 x)
+{
+  x = rint(x);
+  return convert_long2(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long2 convert_long2_sat_rte(half2 x)
+{
+  x = rint(x);
+  return convert_long2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long2 convert_long2_rtp(half2 x)
+{
+  x = ceil(x);
+  return convert_long2(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long2 convert_long2_sat_rtp(half2 x)
+{
+  x = ceil(x);
+  return convert_long2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long2 convert_long2_rtn(half2 x)
+{
+  x = floor(x);
+  return convert_long2(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long2 convert_long2_sat_rtn(half2 x)
+{
+  x = floor(x);
+  return convert_long2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long3 convert_long3_rtz(half3 x)
+{
+  return convert_long3(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long3 convert_long3_sat_rtz(half3 x)
+{
+  return convert_long3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long3 convert_long3_rte(half3 x)
+{
+  x = rint(x);
+  return convert_long3(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long3 convert_long3_sat_rte(half3 x)
+{
+  x = rint(x);
+  return convert_long3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long3 convert_long3_rtp(half3 x)
+{
+  x = ceil(x);
+  return convert_long3(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long3 convert_long3_sat_rtp(half3 x)
+{
+  x = ceil(x);
+  return convert_long3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long3 convert_long3_rtn(half3 x)
+{
+  x = floor(x);
+  return convert_long3(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long3 convert_long3_sat_rtn(half3 x)
+{
+  x = floor(x);
+  return convert_long3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long4 convert_long4_rtz(half4 x)
+{
+  return convert_long4(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long4 convert_long4_sat_rtz(half4 x)
+{
+  return convert_long4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long4 convert_long4_rte(half4 x)
+{
+  x = rint(x);
+  return convert_long4(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long4 convert_long4_sat_rte(half4 x)
+{
+  x = rint(x);
+  return convert_long4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long4 convert_long4_rtp(half4 x)
+{
+  x = ceil(x);
+  return convert_long4(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long4 convert_long4_sat_rtp(half4 x)
+{
+  x = ceil(x);
+  return convert_long4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long4 convert_long4_rtn(half4 x)
+{
+  x = floor(x);
+  return convert_long4(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long4 convert_long4_sat_rtn(half4 x)
+{
+  x = floor(x);
+  return convert_long4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long8 convert_long8_rtz(half8 x)
+{
+  return convert_long8(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long8 convert_long8_sat_rtz(half8 x)
+{
+  return convert_long8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long8 convert_long8_rte(half8 x)
+{
+  x = rint(x);
+  return convert_long8(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long8 convert_long8_sat_rte(half8 x)
+{
+  x = rint(x);
+  return convert_long8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long8 convert_long8_rtp(half8 x)
+{
+  x = ceil(x);
+  return convert_long8(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long8 convert_long8_sat_rtp(half8 x)
+{
+  x = ceil(x);
+  return convert_long8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long8 convert_long8_rtn(half8 x)
+{
+  x = floor(x);
+  return convert_long8(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long8 convert_long8_sat_rtn(half8 x)
+{
+  x = floor(x);
+  return convert_long8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long16 convert_long16_rtz(half16 x)
+{
+  return convert_long16(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long16 convert_long16_sat_rtz(half16 x)
+{
+  return convert_long16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long16 convert_long16_rte(half16 x)
+{
+  x = rint(x);
+  return convert_long16(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long16 convert_long16_sat_rte(half16 x)
+{
+  x = rint(x);
+  return convert_long16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long16 convert_long16_rtp(half16 x)
+{
+  x = ceil(x);
+  return convert_long16(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long16 convert_long16_sat_rtp(half16 x)
+{
+  x = ceil(x);
+  return convert_long16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long16 convert_long16_rtn(half16 x)
+{
+  x = floor(x);
+  return convert_long16(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+long16 convert_long16_sat_rtn(half16 x)
+{
+  x = floor(x);
+  return convert_long16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong convert_ulong_rtz(half x)
+{
+  return convert_ulong(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong convert_ulong_sat_rtz(half x)
+{
+  return convert_ulong_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong convert_ulong_rte(half x)
+{
+  x = rint(x);
+  return convert_ulong(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong convert_ulong_sat_rte(half x)
+{
+  x = rint(x);
+  return convert_ulong_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong convert_ulong_rtp(half x)
+{
+  x = ceil(x);
+  return convert_ulong(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong convert_ulong_sat_rtp(half x)
+{
+  x = ceil(x);
+  return convert_ulong_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong convert_ulong_rtn(half x)
+{
+  x = floor(x);
+  return convert_ulong(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong convert_ulong_sat_rtn(half x)
+{
+  x = floor(x);
+  return convert_ulong_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong2 convert_ulong2_rtz(half2 x)
+{
+  return convert_ulong2(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong2 convert_ulong2_sat_rtz(half2 x)
+{
+  return convert_ulong2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong2 convert_ulong2_rte(half2 x)
+{
+  x = rint(x);
+  return convert_ulong2(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong2 convert_ulong2_sat_rte(half2 x)
+{
+  x = rint(x);
+  return convert_ulong2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong2 convert_ulong2_rtp(half2 x)
+{
+  x = ceil(x);
+  return convert_ulong2(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong2 convert_ulong2_sat_rtp(half2 x)
+{
+  x = ceil(x);
+  return convert_ulong2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong2 convert_ulong2_rtn(half2 x)
+{
+  x = floor(x);
+  return convert_ulong2(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong2 convert_ulong2_sat_rtn(half2 x)
+{
+  x = floor(x);
+  return convert_ulong2_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong3 convert_ulong3_rtz(half3 x)
+{
+  return convert_ulong3(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong3 convert_ulong3_sat_rtz(half3 x)
+{
+  return convert_ulong3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong3 convert_ulong3_rte(half3 x)
+{
+  x = rint(x);
+  return convert_ulong3(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong3 convert_ulong3_sat_rte(half3 x)
+{
+  x = rint(x);
+  return convert_ulong3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong3 convert_ulong3_rtp(half3 x)
+{
+  x = ceil(x);
+  return convert_ulong3(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong3 convert_ulong3_sat_rtp(half3 x)
+{
+  x = ceil(x);
+  return convert_ulong3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong3 convert_ulong3_rtn(half3 x)
+{
+  x = floor(x);
+  return convert_ulong3(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong3 convert_ulong3_sat_rtn(half3 x)
+{
+  x = floor(x);
+  return convert_ulong3_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong4 convert_ulong4_rtz(half4 x)
+{
+  return convert_ulong4(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong4 convert_ulong4_sat_rtz(half4 x)
+{
+  return convert_ulong4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong4 convert_ulong4_rte(half4 x)
+{
+  x = rint(x);
+  return convert_ulong4(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong4 convert_ulong4_sat_rte(half4 x)
+{
+  x = rint(x);
+  return convert_ulong4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong4 convert_ulong4_rtp(half4 x)
+{
+  x = ceil(x);
+  return convert_ulong4(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong4 convert_ulong4_sat_rtp(half4 x)
+{
+  x = ceil(x);
+  return convert_ulong4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong4 convert_ulong4_rtn(half4 x)
+{
+  x = floor(x);
+  return convert_ulong4(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong4 convert_ulong4_sat_rtn(half4 x)
+{
+  x = floor(x);
+  return convert_ulong4_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong8 convert_ulong8_rtz(half8 x)
+{
+  return convert_ulong8(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong8 convert_ulong8_sat_rtz(half8 x)
+{
+  return convert_ulong8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong8 convert_ulong8_rte(half8 x)
+{
+  x = rint(x);
+  return convert_ulong8(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong8 convert_ulong8_sat_rte(half8 x)
+{
+  x = rint(x);
+  return convert_ulong8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong8 convert_ulong8_rtp(half8 x)
+{
+  x = ceil(x);
+  return convert_ulong8(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong8 convert_ulong8_sat_rtp(half8 x)
+{
+  x = ceil(x);
+  return convert_ulong8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong8 convert_ulong8_rtn(half8 x)
+{
+  x = floor(x);
+  return convert_ulong8(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong8 convert_ulong8_sat_rtn(half8 x)
+{
+  x = floor(x);
+  return convert_ulong8_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong16 convert_ulong16_rtz(half16 x)
+{
+  return convert_ulong16(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong16 convert_ulong16_sat_rtz(half16 x)
+{
+  return convert_ulong16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong16 convert_ulong16_rte(half16 x)
+{
+  x = rint(x);
+  return convert_ulong16(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong16 convert_ulong16_sat_rte(half16 x)
+{
+  x = rint(x);
+  return convert_ulong16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong16 convert_ulong16_rtp(half16 x)
+{
+  x = ceil(x);
+  return convert_ulong16(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong16 convert_ulong16_sat_rtp(half16 x)
+{
+  x = ceil(x);
+  return convert_ulong16_sat(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong16 convert_ulong16_rtn(half16 x)
+{
+  x = floor(x);
+  return convert_ulong16(x);
+}
+#endif
+
+#if defined(cl_khr_int64) && defined(cl_khr_fp16)
+_CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+ulong16 convert_ulong16_sat_rtn(half16 x)
+{
+  x = floor(x);
+  return convert_ulong16_sat(x);
 }
 #endif

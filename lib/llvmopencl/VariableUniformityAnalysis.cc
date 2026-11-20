@@ -184,21 +184,35 @@ void VariableUniformityAnalysisResult::analyzeBBDivergence(
     return;
   }
 
+#if LLVM_MAJOR >= 23
+  UncondBrInst *UncondBr = dyn_cast<UncondBrInst>(Term);
+  CondBrInst *CondBr = dyn_cast<CondBrInst>(Term);
+#else
   llvm::BranchInst *BrInst = dyn_cast<llvm::BranchInst>(Term);
+#endif
   llvm::SwitchInst *SwInst = dyn_cast<llvm::SwitchInst>(Term);
 
+#if LLVM_MAJOR >= 23
+  if (UncondBr == nullptr && CondBr == nullptr && SwInst == nullptr) {
+#else
   if (BrInst == nullptr && SwInst == nullptr) {
+#endif
     // Can only handle branches and switches for now.
     return;
   }
 
   // The BBs that were found uniform.
-  std::vector<llvm::BasicBlock *> FoundUniforms;
+  std::vector<BasicBlock *> FoundUniforms;
 
   // Condition c)
+#if LLVM_MAJOR >= 23
+  if (UncondBr || (CondBr && isUniform(F, CondBr->getCondition())) ||
+      (SwInst && isUniform(F, SwInst->getCondition()))) {
+#else
   if ((BrInst && (!BrInst->isConditional() ||
                   isUniform(F, BrInst->getCondition()))) ||
       (SwInst && isUniform(F, SwInst->getCondition()))) {
+#endif
     // This is a branch with a uniform condition, propagate the uniformity
     // to the BB of interest.
     for (unsigned suc = 0, end = Term->getNumSuccessors(); suc < end; ++suc) {
@@ -237,14 +251,24 @@ void VariableUniformityAnalysisResult::analyzeBBDivergence(
   }
 }
 
+const bool *
+VariableUniformityAnalysisResult::lookupUniformity(llvm::Function *F,
+                                                   llvm::Value *V) const {
+  UniformityIndex &Cache = uniformityCache_[F];
+  UniformityIndex::iterator I = Cache.find(V);
+  if (I == Cache.end())
+    return nullptr;
+  if (I->second.Handle != V) {
+    // the cached value was deleted, and V reuses its address
+    Cache.erase(I);
+    return nullptr;
+  }
+  return &I->second.IsUniform;
+}
+
 bool VariableUniformityAnalysisResult::isUniformityAnalyzed(
     llvm::Function *F, llvm::Value *V) const {
-  UniformityIndex &Cache = uniformityCache_[F];
-  UniformityIndex::const_iterator I = Cache.find(V);
-  if (I != Cache.end()) {
-    return true;
-  }
-  return false;
+  return lookupUniformity(F, V) != nullptr;
 }
 
 /**
@@ -261,11 +285,8 @@ bool VariableUniformityAnalysisResult::isUniformityAnalyzed(
 bool VariableUniformityAnalysisResult::isUniform(llvm::Function *F,
                                                  llvm::Value *V) {
 
-  UniformityIndex &Cache = uniformityCache_[F];
-  UniformityIndex::const_iterator I = Cache.find(V);
-  if (I != Cache.end()) {
-    return (*I).second;
-  }
+  if (const bool *Cached = lookupUniformity(F, V))
+    return *Cached;
 
   if (llvm::BasicBlock *BB = dyn_cast<llvm::BasicBlock>(V)) {
     if (BB == &F->getEntryBlock()) {
@@ -469,7 +490,7 @@ void VariableUniformityAnalysisResult::setUniform(llvm::Function *F,
                                                   bool isUniform) {
 
   UniformityIndex &Cache = uniformityCache_[F];
-  Cache[V] = isUniform;
+  Cache[V] = UniformityEntry{llvm::WeakVH(V), isUniform};
 
 #ifdef DEBUG_UNIFORMITY_ANALYSIS
   std::cerr << "### ";

@@ -164,6 +164,7 @@ void pocl_formosa_init_device_ops(struct pocl_device_ops *ops) {
   ops->build_source = pocl_driver_build_source;
   ops->link_program = pocl_driver_link_program;
   ops->build_binary = pocl_driver_build_binary;
+  ops->count_kernels = pocl_driver_count_kernels;
   ops->setup_metadata = pocl_driver_setup_metadata;
   ops->supports_binary = pocl_driver_supports_binary;
   ops->build_builtin = pocl_driver_build_opencl_builtins;
@@ -382,10 +383,11 @@ cl_int pocl_formosa_init(unsigned j, cl_device_id device,
 #if defined(ENABLE_SPIRV)
   device->supported_spir_v_versions =
       "SPIR-V_1.5 SPIR-V_1.4 SPIR-V_1.3 SPIR-V_1.2 SPIR-V_1.1 SPIR-V_1.0";
-  device->supported_spirv_extensions = "+SPV_KHR_no_integer_wrap_decoration";
+  device->supported_spirv_extensions =
+      "+SPV_KHR_no_integer_wrap_decoration,+SPV_KHR_shader_clock";
 #endif
 
-  pocl_setup_opencl_c_with_version(device, CL_TRUE);
+  pocl_setup_opencl_c_with_version(device);
   pocl_setup_features_with_version(device);
   pocl_setup_extensions_with_version(device);
   pocl_setup_ils_with_version(device);
@@ -563,7 +565,8 @@ static cl_int formosa_run_kernel(void *data, _cl_command_node *cmd) {
 
   formosa_program_data_t *pdata =
       (formosa_program_data_t *)program->data[device_i];
-  formosa_kernel_data_t *kdata = (formosa_kernel_data_t *)meta->data[device_i];
+  formosa_kernel_data_t *kdata =
+      (formosa_kernel_data_t *)meta->devices[device_i].driver_data;
   if (pdata == NULL || kdata == NULL || pdata->kernel_layouts == NULL) {
     errcode = CL_INVALID_PROGRAM_EXECUTABLE;
     goto FAIL;
@@ -1014,7 +1017,7 @@ static void formosa_free_program_data(formosa_program_data_t *pdata) {
  * this value, so include the most padding formosa_run_kernel can add. */
 static void formosa_setup_local_mem_size(pocl_kernel_metadata_t *meta,
                                          cl_uint device_i) {
-  if (meta->local_mem_size == NULL) return;
+  if (meta->devices == NULL) return;
   uint64_t size = 0;
   for (cl_uint i = 0; i < meta->num_locals; ++i) {
     size =
@@ -1026,7 +1029,7 @@ static void formosa_setup_local_mem_size(pocl_kernel_metadata_t *meta,
     if (ARG_IS_LOCAL(meta->arg_info[i])) ++padded_args;
   }
   if (padded_args != 0 && meta->num_locals == 0) --padded_args;
-  meta->local_mem_size[device_i] =
+  meta->devices[device_i].local_mem_size =
       size + padded_args * (MAX_EXTENDED_ALIGNMENT - 1);
 }
 
@@ -1102,7 +1105,7 @@ int pocl_formosa_free_program(cl_device_id device, cl_program program,
 cl_int pocl_formosa_create_kernel(cl_device_id device, cl_program program,
                                   cl_kernel kernel, unsigned program_device_i) {
   pocl_kernel_metadata_t *meta = kernel->meta;
-  assert(meta->data != NULL);
+  assert(meta->devices != NULL);
   assert(kernel->data != NULL);
   assert(kernel->data[program_device_i] == NULL);
 
@@ -1115,7 +1118,7 @@ cl_int pocl_formosa_create_kernel(cl_device_id device, cl_program program,
 
   // device-specific kernel metadata
   formosa_kernel_data_t *kdata =
-      (formosa_kernel_data_t *)meta->data[program_device_i];
+      (formosa_kernel_data_t *)meta->devices[program_device_i].driver_data;
   if (kdata != NULL) {
     ++kdata->ref_count;
     return CL_SUCCESS;
@@ -1145,7 +1148,7 @@ cl_int pocl_formosa_create_kernel(cl_device_id device, cl_program program,
   kdata->kernel_id = i;
   ++kdata->ref_count;
 
-  meta->data[program_device_i] = kdata;
+  meta->devices[program_device_i].driver_data = kdata;
 
   return CL_SUCCESS;
 }
@@ -1153,18 +1156,18 @@ cl_int pocl_formosa_create_kernel(cl_device_id device, cl_program program,
 cl_int pocl_formosa_free_kernel(cl_device_id device, cl_program program,
                                 cl_kernel kernel, unsigned program_device_i) {
   pocl_kernel_metadata_t *meta = kernel->meta;
-  assert(meta->data != NULL);
+  assert(meta->devices != NULL);
 
   if (kernel->data != NULL) POCL_MEM_FREE(kernel->data[program_device_i]);
 
   formosa_kernel_data_t *kdata =
-      (formosa_kernel_data_t *)meta->data[program_device_i];
+      (formosa_kernel_data_t *)meta->devices[program_device_i].driver_data;
   if (kdata == NULL) return CL_SUCCESS;
 
   --kdata->ref_count;
   if (kdata->ref_count == 0) {
     POCL_MEM_FREE(kdata);
-    meta->data[program_device_i] = NULL;
+    meta->devices[program_device_i].driver_data = NULL;
   }
 
   return CL_SUCCESS;
@@ -1723,6 +1726,14 @@ static void *formosa_copy_completion_thread(void *arg) {
 void pocl_formosa_submit(_cl_command_node *node, cl_command_queue cq) {
   pocl_formosa_data_t *dd = node->device->data;
 
+  cl_event event = node->sync.event.event;
+  if (event->failed_dependency) {
+    node->state = POCL_COMMAND_FAILED;
+    POCL_UNLOCK_OBJ(event);
+    pocl_update_event_failed(CL_FAILED, NULL, 0, event, NULL);
+    return;
+  }
+
   node->state = POCL_COMMAND_READY;
   POCL_LOCK(dd->cq_lock);
   pocl_command_push(node, &dd->ready_list, &dd->command_list);
@@ -1764,11 +1775,17 @@ void pocl_formosa_notify(cl_device_id device, cl_event event,
   if (dd == NULL) return;
 
   _cl_command_node *volatile node = event->command;
-  if (node->state == POCL_COMMAND_FAILED) return;
 
-  if (finished->status < CL_COMPLETE) {
+  if (node->state != POCL_COMMAND_READY) {
+    POCL_MSG_PRINT_EVENTS(
+        "formosa: command related to the notified event %lu not ready\n",
+        event->id);
+    return;
+  }
+
+  if (finished->status < CL_COMPLETE || event->failed_dependency) {
     POCL_LOCK(dd->cq_lock);
-    if (node->state == POCL_COMMAND_READY) CDL_DELETE(dd->command_list, node);
+    CDL_DELETE(dd->command_list, node);
     node->state = POCL_COMMAND_FAILED;
     POCL_UNLOCK(dd->cq_lock);
     /* Unlock the finished event in order to prevent a lock order violation
@@ -1781,13 +1798,6 @@ void pocl_formosa_notify(cl_device_id device, cl_event event,
      * the finished/notifier and event/wait events.
      */
     pocl_lock_events_inorder(finished, event);
-    return;
-  }
-
-  if (node->state != POCL_COMMAND_READY) {
-    POCL_MSG_PRINT_EVENTS(
-        "formosa: command related to the notified event %lu not ready\n",
-        event->id);
     return;
   }
 
